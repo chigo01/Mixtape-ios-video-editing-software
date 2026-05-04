@@ -7,7 +7,7 @@ import SwiftUI
 struct MixtapeApp: App {
     var body: some Scene {
         WindowGroup {
-            ProjectListView()
+            MainTabView()
         }
     }
 }
