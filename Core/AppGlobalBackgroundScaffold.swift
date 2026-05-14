@@ -7,12 +7,27 @@
 
 import SwiftUI
 
-struct AppGlobalBackgroundScaffold: View {
+struct AppGlobalBackgroundScaffold<Content: View>: View {
+   
+    let content: () -> Content
+
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
     var body: some View {
-        Text(/*@START_MENU_TOKEN@*/"Hello, World!"/*@END_MENU_TOKEN@*/)
+        ZStack(alignment:.leading,  ) {
+            Color.appColors.backgroundColor.ignoresSafeArea()
+            content()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-#Preview {
-    AppGlobalBackgroundScaffold()
-}
+// Example preview:
+//#Preview {
+//    AppGlobalBackgroundScaffold {
+//        Text("Hello, World!")
+//            .padding()
+//    }
+//}

@@ -1,0 +1,23 @@
+{
+  "/Users/user/Documents/Mixtape-ios-video-editing-software/Features/Editor/Presentation/views/EditorPreviewPlayer.swift" : {
+    "const-values" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorPreviewPlayer.swiftconstvalues",
+    "dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorPreviewPlayer.d",
+    "diagnostics" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorPreviewPlayer.dia",
+    "object" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorPreviewPlayer.o",
+    "swift-dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorPreviewPlayer.swiftdeps"
+  },
+  "/Users/user/Documents/Mixtape-ios-video-editing-software/Features/Editor/Presentation/views/EditorTimeline.swift" : {
+    "const-values" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTimeline.swiftconstvalues",
+    "dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTimeline.d",
+    "diagnostics" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTimeline.dia",
+    "object" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTimeline.o",
+    "swift-dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTimeline.swiftdeps"
+  },
+  "/Users/user/Documents/Mixtape-ios-video-editing-software/Features/Editor/Presentation/views/EditorTopBar.swift" : {
+    "const-values" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTopBar.swiftconstvalues",
+    "dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTopBar.d",
+    "diagnostics" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTopBar.dia",
+    "object" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTopBar.o",
+    "swift-dependencies" : "/Users/user/Documents/Mixtape-ios-video-editing-software/build/DerivedData/Build/Intermediates.noindex/Mixtape.build/Debug-iphoneos/Mixtape.build/Objects-normal/arm64/EditorTopBar.swiftdeps"
+  }
+}

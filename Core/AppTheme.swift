@@ -5,60 +5,17 @@
 import SwiftUI
 
 extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (1, 1, 1, 0)
-        }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue:  Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
-}
-
-enum AppTheme {
-    static let primary = Color(hex: "#FF8C00")
-    static let secondary = Color(hex: "#0A0A0A")
-    static let tertiary = Color(hex: "#1A1A1A")
-    static let neutral = Color(hex: "#8E8E93")
+ 
     
-    enum Colors {
-        static let background = secondary
-        static let surfaceHigh = tertiary
-        static let surfaceLow = secondary
-        static let textPrimary = Color.white
-        static let textSecondary = neutral
-    }
-
-    enum Typography {
-        static let displayLarge = Font.custom("Inter-Bold", size: 32, relativeTo: .largeTitle)
-        static let headlineMedium = Font.custom("Inter-SemiBold", size: 24, relativeTo: .largeTitle)
-        static let bodyDefault = Font.custom("Inter-Regular", size: 16, relativeTo: .body)
-        static let labelCaps = Font.custom("Inter-Medium", size: 12, relativeTo: .caption).smallCaps()
-    }
+  static let appColors = AppColors()
 }
 
-// Preview color scheme testing stub
-#Preview {
-    VStack(spacing: 20) {
-        Text("Light Mode").environment(\.colorScheme, .light)
-        Text("Dark Mode").environment(\.colorScheme, .dark)
-    }
-    .font(AppTheme.Typography.headlineMedium)
-    .foregroundColor(AppTheme.primary)
+struct AppColors {
+     let primaryColor = Color("AccentColor")
+     let backgroundColor = Color("BackgroundColor")
+    let tertiaryColor = Color("TertiaryColor")
+    let darkPrimary = Color("DarkPrimary")
+    
 }
+
+

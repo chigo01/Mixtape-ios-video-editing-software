@@ -8,11 +8,11 @@
 import SwiftUI
 
 struct SizedBox: View {
+    var width : CGFloat?
+    var height : CGFloat?
     var body: some View {
-        Text(/*@START_MENU_TOKEN@*/"Hello, World!"/*@END_MENU_TOKEN@*/)
+        Spacer().frame(width: width, height: height)
     }
 }
 
-#Preview {
-    SizedBox()
-}
+
