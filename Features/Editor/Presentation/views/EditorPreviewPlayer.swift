@@ -29,7 +29,7 @@ struct EditorPreviewPlayer: View {
         ZStack {
             background
 
-            if let posterImage {
+            if let posterImage, !showingVideoLayer {
                 Image(uiImage: posterImage)
                     .resizable()
                     .scaledToFit()
@@ -38,6 +38,7 @@ struct EditorPreviewPlayer: View {
 
             if showingVideoLayer, let player = vm.player {
                 PlayerLayerView(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if shouldShowLoading {

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SelectionBottomBar: View {
     let vm: PhotoLibraryViewModel
+    var confirmTitle: String = "Next"
     var onNext: () -> Void
 
     var body: some View {
@@ -29,7 +30,7 @@ struct SelectionBottomBar: View {
 
             Button(action: onNext) {
                 HStack(spacing: 6) {
-                    Text("Next")
+                    Text(confirmTitle)
                         .font(.system(size: 14, weight: .semibold))
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .bold))

@@ -9,6 +9,7 @@ import SwiftUI
 import UIKit
 import Photos
 import AVKit
+import AVFoundation
 
 struct MediaPreviewView: View {
     let item: MediaItem
@@ -191,6 +192,7 @@ struct MediaPreviewView: View {
         ) { playerItem, _ in
             guard let playerItem else { return }
             Task { @MainActor in
+                AudioSessionConfigurator.configureForVideoPlayback()
                 let p = AVPlayer(playerItem: playerItem)
                 self.player = p
                 self.isLoading = false

@@ -12,6 +12,8 @@ import SwiftUI
 struct EditorScreen: View {
     @State private var vm: EditorViewModel
     @State private var isFullscreenPreview = false
+    @State private var isMediaPickerPresented = false
+    @State private var insertAfterClipIndex = 0
     @Environment(\.dismiss) private var dismiss
 
     /// Fraction of available screen height for the preview stage (~CapCut balance: preview ≈ lower editor stack).
@@ -34,9 +36,12 @@ struct EditorScreen: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 2)
 
-                    EditorTimeline(vm: vm)
-                        .padding(.top, 8)
-                        .frame(maxHeight: .infinity, alignment: .top)
+                    EditorTimeline(vm: vm) { clipIndex in
+                        insertAfterClipIndex = clipIndex
+                        isMediaPickerPresented = true
+                    }
+                    .padding(.top, 8)
+                    .frame(maxHeight: .infinity, alignment: .top)
 
                     EditorBottomToolbar(vm: vm)
                 }
@@ -46,6 +51,17 @@ struct EditorScreen: View {
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $isFullscreenPreview) {
             EditorFullscreenPreviewSheet(vm: vm, onClose: { isFullscreenPreview = false })
+        }
+        .fullScreenCover(isPresented: $isMediaPickerPresented) {
+            MediaLibraryPickerScreen(
+                title: "Add Media",
+                confirmButtonTitle: "Add",
+                onCancel: { isMediaPickerPresented = false },
+                onConfirm: { items in
+                    vm.insertClips(from: items, afterIndex: insertAfterClipIndex)
+                    isMediaPickerPresented = false
+                }
+            )
         }
         .task {
             await vm.setupPlayer()
@@ -83,7 +99,7 @@ private struct EditorFullscreenPreviewSheet: View {
             Color.black.ignoresSafeArea()
 
             Group {
-                if let posterImage {
+                if let posterImage, !showingVideoLayer {
                     Image(uiImage: posterImage)
                         .resizable()
                         .scaledToFit()
@@ -91,6 +107,7 @@ private struct EditorFullscreenPreviewSheet: View {
                 }
                 if showingVideoLayer, let player = vm.player {
                     PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .ignoresSafeArea()
                 }
             }

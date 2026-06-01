@@ -18,7 +18,7 @@ struct EditorBottomToolbar: View {
                     isSelected: vm.selectedTool == tool
                 ) {
                     withAnimation(.easeInOut(duration: 0.15)) {
-                        vm.selectTool(tool)
+                        vm.performToolAction(tool)
                     }
                 }
                 .frame(maxWidth: .infinity)

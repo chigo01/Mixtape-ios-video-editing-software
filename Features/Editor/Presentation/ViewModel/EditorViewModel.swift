@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import AVFoundation
 import Photos
 
@@ -31,13 +32,11 @@ final class EditorViewModel {
     private(set) var player: AVPlayer?
 
     @ObservationIgnored
-    private let phManager = PHCachingImageManager()
-    @ObservationIgnored
     private var endObserver: NSObjectProtocol?
     @ObservationIgnored
     private var tickTimer: Timer?
     @ObservationIgnored
-    private var videoClipIDAtLoad: UUID?
+    private var compositionFingerprint: String?
 
     // MARK: Init
 
@@ -124,6 +123,91 @@ final class EditorViewModel {
         selectedTool = (selectedTool == tool) ? nil : tool
     }
 
+    func performToolAction(_ tool: EditorTool) {
+        switch tool {
+        case .split:
+            splitAtPlayhead()
+            selectedTool = .split
+        default:
+            selectTool(tool)
+        }
+    }
+
+    // MARK: Clips
+
+    /// Updates trim points for a clip; values are clamped to valid source ranges.
+    func setTrim(clipID: UUID, trimStart: TimeInterval, trimEnd: TimeInterval) {
+        guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        var clip = clips[idx]
+        let minSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
+
+        let start = min(max(0, trimStart), clip.originalDuration - minSpan)
+        let end = max(min(clip.originalDuration, trimEnd), start + minSpan)
+
+        clip.trimStart = start
+        clip.trimEnd = end
+        clips[idx] = clip
+
+        timelinePosition = min(timelinePosition, totalDuration)
+        invalidateComposition()
+    }
+
+    func commitTrimEdit() {
+        invalidateComposition()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    /// Splits the clip under the playhead at the current timeline position.
+    func splitAtPlayhead() {
+        guard let info = clipAndLocalTime(at: timelinePosition) else { return }
+
+        let splitSource = info.clip.sourceTime(forExportedLocal: info.localTime)
+        guard let parts = info.clip.split(atSourceTime: splitSource) else { return }
+
+        if isPlaying {
+            stopPlaybackTicking()
+            player?.pause()
+            isPlaying = false
+        }
+
+        let index = info.index
+        clips.remove(at: index)
+        clips.insert(contentsOf: [parts.left, parts.right], at: index)
+
+        selectedClipID = parts.right.id
+        timelinePosition = timelineOffsetForClipIndex(index) + parts.left.duration
+        invalidateComposition()
+
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Insert
+
+    /// Inserts new clips immediately after the clip at `afterIndex` (append when `afterIndex` is the last clip).
+    func insertClips(from media: [MediaItem], afterIndex: Int) {
+        guard !media.isEmpty else { return }
+
+        if isPlaying {
+            stopPlaybackTicking()
+            player?.pause()
+            isPlaying = false
+        }
+
+        let newClips = media.map { EditorClip(asset: $0.asset) }
+        let insertAt = min(max(0, afterIndex + 1), clips.count)
+        clips.insert(contentsOf: newClips, at: insertAt)
+
+        if let first = newClips.first {
+            selectedClipID = first.id
+        }
+
+        timelinePosition = timelineOffsetForClipIndex(insertAt)
+        invalidateComposition()
+
+        Task { await alignPlaybackToTimeline() }
+    }
+
     // MARK: Playback
 
     func togglePlay() {
@@ -138,8 +222,7 @@ final class EditorViewModel {
             }
             isPlaying = true
             Task {
-                await alignPlaybackToTimeline()
-                resumePlaybackAfterAlign()
+                await ensureCompositionPlayer(resumePlaying: true)
                 startPlaybackTicking()
             }
         }
@@ -175,8 +258,69 @@ final class EditorViewModel {
         removeEndObserver()
         player?.pause()
         player = nil
-        videoClipIDAtLoad = nil
+        compositionFingerprint = nil
+        EditorCompositionBuilder.clearCaches()
         isPlaying = false
+    }
+
+    // MARK: - Composition playback (single continuous stream)
+
+    private func clipsFingerprint() -> String {
+        clips.map { clip in
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.duration)|\(clip.asset.localIdentifier)"
+        }.joined(separator: ";")
+    }
+
+    private func invalidateComposition() {
+        compositionFingerprint = nil
+    }
+
+    private func ensureCompositionPlayer(resumePlaying: Bool = false) async {
+        let fingerprint = clipsFingerprint()
+        let needsRebuild = fingerprint != compositionFingerprint || player?.currentItem == nil
+
+        if !needsRebuild {
+            await seekPlayerToTimeline(exact: !isPlaying)
+            if resumePlaying || isPlaying { player?.play() }
+            return
+        }
+
+        let savedTime = timelinePosition
+        let wasPlaying = isPlaying
+
+        guard let item = await EditorCompositionBuilder.makePlayerItem(from: clips) else { return }
+
+        if player == nil {
+            AudioSessionConfigurator.configureForVideoPlayback()
+            let newPlayer = AVPlayer(playerItem: item)
+            newPlayer.actionAtItemEnd = .pause
+            newPlayer.automaticallyWaitsToMinimizeStalling = true
+            player = newPlayer
+        } else {
+            player?.replaceCurrentItem(with: item)
+        }
+
+        attachCompositionEndObserver(for: item)
+        compositionFingerprint = fingerprint
+        timelinePosition = min(savedTime, totalDuration)
+        await seekPlayerToTimeline(exact: true)
+
+        if wasPlaying || resumePlaying {
+            player?.play()
+        }
+    }
+
+    private func seekPlayerToTimeline(exact: Bool) async {
+        let target = CMTime(seconds: timelinePosition, preferredTimescale: 600)
+        if exact {
+            await player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        } else {
+            await player?.seek(
+                to: target,
+                toleranceBefore: CMTime(seconds: 0.03, preferredTimescale: 600),
+                toleranceAfter: CMTime(seconds: 0.03, preferredTimescale: 600)
+            )
+        }
     }
 
     // MARK: - Tick (photos advance from clock; videos follow AVPlayer)
@@ -196,106 +340,40 @@ final class EditorViewModel {
     }
 
     private func playbackTick() {
-        guard isPlaying, totalDuration > 0 else { return }
+        guard isPlaying, totalDuration > 0, let player else { return }
 
-        guard let info = clipAndLocalTime(at: timelinePosition) else { return }
-
-        if info.clip.isVideo, player == nil || videoClipIDAtLoad != info.clip.id {
-            Task {
-                await alignPlaybackToTimeline()
-                resumePlaybackAfterAlign()
-            }
-            return
-        }
-
-        if info.clip.isVideo, let player {
-            let base = timelineOffsetForClipIndex(info.index)
-            let src = player.currentTime().seconds
-            let spd = TimeInterval(max(info.clip.speed, 0.001))
-            let local = min(
-                max(0, (src - info.clip.trimStart) / spd),
-                info.clip.duration
-            )
-            timelinePosition = min(base + local, totalDuration)
-        } else {
-            timelinePosition += 1.0 / 30.0
-            timelinePosition = min(timelinePosition, totalDuration)
-            let after = clipAndLocalTime(at: timelinePosition)
-            if after?.clip.id != info.clip.id {
-                Task { await alignPlaybackToTimeline() }
-            }
+        let current = player.currentTime().seconds
+        if current.isFinite, current >= 0 {
+            timelinePosition = min(current, totalDuration)
         }
 
         if timelinePosition >= totalDuration - 0.02 {
             timelinePosition = totalDuration
-            player?.pause()
+            player.pause()
             stopPlaybackTicking()
             isPlaying = false
         }
     }
 
     private func resumePlaybackAfterAlign() {
-        guard isPlaying, let info = playbackInfo else { return }
-        if info.clip.isVideo { player?.play() }
+        guard isPlaying else { return }
+        player?.play()
     }
-
-    // MARK: - Align preview + player to timelinePosition
 
     private func alignPlaybackToTimeline() async {
-        guard let info = clipAndLocalTime(at: timelinePosition) else { return }
-
-        if info.clip.isVideo {
-            if videoClipIDAtLoad != info.clip.id || player == nil {
-                await loadVideoPlayer(for: info.clip)
-                videoClipIDAtLoad = info.clip.id
-            }
-            let src = info.clip.sourceTime(forExportedLocal: info.localTime)
-            await player?.seek(
-                to: CMTime(seconds: src, preferredTimescale: 600),
-                toleranceBefore: .zero,
-                toleranceAfter: .zero
-            )
-        } else {
-            removeEndObserver()
-            player?.pause()
-            player = nil
-            videoClipIDAtLoad = nil
-        }
+        guard !clips.isEmpty else { return }
+        await ensureCompositionPlayer()
+        await seekPlayerToTimeline(exact: !isPlaying)
     }
 
-    private func loadVideoPlayer(for clip: EditorClip) async {
-        removeEndObserver()
-        player?.pause()
-        player = nil
-
-        let options = PHVideoRequestOptions()
-        options.deliveryMode = .automatic
-        options.isNetworkAccessAllowed = true
-
-        let item: AVPlayerItem? = await withCheckedContinuation { cont in
-            phManager.requestPlayerItem(forVideo: clip.asset, options: options) { result, _ in
-                cont.resume(returning: result)
-            }
-        }
-
-        guard let item else { return }
-
-        let newPlayer = AVPlayer(playerItem: item)
-        newPlayer.actionAtItemEnd = .pause
-        newPlayer.automaticallyWaitsToMinimizeStalling = true
-        player = newPlayer
-
-        attachEndObserver(for: item)
-    }
-
-    private func attachEndObserver(for item: AVPlayerItem) {
+    private func attachCompositionEndObserver(for item: AVPlayerItem) {
         removeEndObserver()
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.handleVideoItemEnded() }
+            Task { @MainActor in self?.handlePlaybackEnded() }
         }
     }
 
@@ -306,26 +384,10 @@ final class EditorViewModel {
         endObserver = nil
     }
 
-    private func handleVideoItemEnded() {
-        guard isPlaying else { return }
-        guard let id = videoClipIDAtLoad,
-              let idx = clips.firstIndex(where: { $0.id == id }) else { return }
-
-        let clip = clips[idx]
-        let end = timelineOffsetForClipIndex(idx) + clip.duration
-        timelinePosition = min(end, totalDuration)
-
-        if timelinePosition >= totalDuration - 0.03 {
-            timelinePosition = totalDuration
-            stopPlaybackTicking()
-            player?.pause()
-            isPlaying = false
-            return
-        }
-
-        Task {
-            await alignPlaybackToTimeline()
-            resumePlaybackAfterAlign()
-        }
+    private func handlePlaybackEnded() {
+        timelinePosition = totalDuration
+        player?.pause()
+        stopPlaybackTicking()
+        isPlaying = false
     }
 }

@@ -9,13 +9,6 @@
 /* Begin PBXBuildFile section */
 		07894D43A3CE2D26E7D5A681 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494AF242A7E19C2ED189AC1D /* AppTheme.swift */; };
 		912359B39005B15F533413E3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FD381624E89BEA467A3F6BF0 /* Assets.xcassets */; };
-		B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5180642B1AC3288A6921DE /* MixtapeApp.swift */; };
-		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
-		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
-		CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */; };
-		CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A02FAD0DD200531EBF /* SizedBox.swift */; };
-		CED677A42FAD2D2B00531EBF /* ProjectCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A32FAD2D2B00531EBF /* ProjectCardView.swift */; };
-		CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */; };
 		A0B0F00DDEAFB001CAFE0101 /* MediaItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */; };
 		A0B0F00DDEAFB001CAFE0102 /* MediaFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */; };
 		A0B0F00DDEAFB001CAFE0103 /* PhotoLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */; };
@@ -24,29 +17,31 @@
 		A0B0F00DDEAFB001CAFE0106 /* FilterChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0006 /* FilterChip.swift */; };
 		A0B0F00DDEAFB001CAFE0107 /* SelectionBottomBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0007 /* SelectionBottomBar.swift */; };
 		A0B0F00DDEAFB001CAFE0108 /* MediaPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0008 /* MediaPreviewView.swift */; };
+		B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5180642B1AC3288A6921DE /* MixtapeApp.swift */; };
 		BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */; };
 		BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */; };
 		BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */; };
 		BA0EDF00DEAFB001CAFE0104 /* EditorAudioTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0004 /* EditorAudioTrack.swift */; };
 		BA0EDF00DEAFB001CAFE0105 /* EditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */; };
+		BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */; };
 		BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */; };
 		BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */; };
 		BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */; };
 		BA0EDF00DEAFB001CAFE0109 /* EditorBottomToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */; };
 		BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */; };
+		BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */; };
+		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
+		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
+		CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */; };
+		CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A02FAD0DD200531EBF /* SizedBox.swift */; };
+		CED677A42FAD2D2B00531EBF /* ProjectCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A32FAD2D2B00531EBF /* ProjectCardView.swift */; };
+		CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */; };
+		CED677A82FADDF6E00531EBF /* MediaLibraryPickerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */; };
+		CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		494AF242A7E19C2ED189AC1D /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
-		B7FA166B3D2D812B47B67F76 /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		BF5180642B1AC3288A6921DE /* MixtapeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixtapeApp.swift; sourceTree = "<group>"; };
-		CED677962FACE5BD00531EBF /* ProjectListScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListScreen.swift; sourceTree = "<group>"; };
-		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
-		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
-		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
-		CED677A32FAD2D2B00531EBF /* ProjectCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCardView.swift; sourceTree = "<group>"; };
-		CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectScreen.swift; sourceTree = "<group>"; };
-		FD381624E89BEA467A3F6BF0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaItem.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaFilter.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryViewModel.swift; sourceTree = "<group>"; };
@@ -55,16 +50,30 @@
 		A0B0F00DDEAFB001CAFE0006 /* FilterChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChip.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0007 /* SelectionBottomBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionBottomBar.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0008 /* MediaPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewView.swift; sourceTree = "<group>"; };
+		B7FA166B3D2D812B47B67F76 /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTool.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClip.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlay.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0004 /* EditorAudioTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioTrack.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorViewModel.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCompositionBuilder.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTopBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPreviewPlayer.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimeline.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBottomToolbar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScreen.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipTrimHandleView.swift; sourceTree = "<group>"; };
+		BF5180642B1AC3288A6921DE /* MixtapeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixtapeApp.swift; sourceTree = "<group>"; };
+		CED677962FACE5BD00531EBF /* ProjectListScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListScreen.swift; sourceTree = "<group>"; };
+		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
+		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
+		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
+		CED677A32FAD2D2B00531EBF /* ProjectCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCardView.swift; sourceTree = "<group>"; };
+		CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectScreen.swift; sourceTree = "<group>"; };
+		CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryPickerScreen.swift; sourceTree = "<group>"; };
+		CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Mixtape-Info.plist"; sourceTree = "<group>"; };
+		CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionConfigurator.swift; sourceTree = "<group>"; };
+		FD381624E89BEA467A3F6BF0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,6 +99,7 @@
 			isa = PBXGroup;
 			children = (
 				CED6779F2FAD0DA700531EBF /* Components */,
+				CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */,
 				494AF242A7E19C2ED189AC1D /* AppTheme.swift */,
 				CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */,
 			);
@@ -99,6 +109,7 @@
 		5C999E731352905727541C3C = {
 			isa = PBXGroup;
 			children = (
+				CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */,
 				D4BAA6CF3F4204D0B19A1276,
 				6D159F361021D92BC3E10E55 /* Products */,
 			);
@@ -112,13 +123,12 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		CED677932FACE2B300531EBF /* Features */ = {
+		A0B0F00DDEAFB001CAFE0200 /* ViewModel */ = {
 			isa = PBXGroup;
 			children = (
-				CED677942FACE3AC00531EBF /* ProjectList */,
-				BA0EDF00DEAFB001CAFE0200 /* Editor */,
+				A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */,
 			);
-			path = Features;
+			path = ViewModel;
 			sourceTree = "<group>";
 		};
 		BA0EDF00DEAFB001CAFE0200 /* Editor */ = {
@@ -155,6 +165,7 @@
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */,
+				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 			);
 			path = ViewModel;
 			sourceTree = "<group>";
@@ -166,8 +177,18 @@
 				BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */,
 				BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */,
 				BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */,
+				BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */,
 			);
 			path = views;
+			sourceTree = "<group>";
+		};
+		CED677932FACE2B300531EBF /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				CED677942FACE3AC00531EBF /* ProjectList */,
+				BA0EDF00DEAFB001CAFE0200 /* Editor */,
+			);
+			path = Features;
 			sourceTree = "<group>";
 		};
 		CED677942FACE3AC00531EBF /* ProjectList */ = {
@@ -186,16 +207,9 @@
 				CED677A22FAD2D0D00531EBF /* views */,
 				CED677962FACE5BD00531EBF /* ProjectListScreen.swift */,
 				CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */,
+				CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */,
 			);
 			path = Presentation;
-			sourceTree = "<group>";
-		};
-		A0B0F00DDEAFB001CAFE0200 /* ViewModel */ = {
-			isa = PBXGroup;
-			children = (
-				A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */,
-			);
-			path = ViewModel;
 			sourceTree = "<group>";
 		};
 		CED6779A2FACEBF700531EBF /* model */ = {
@@ -311,9 +325,11 @@
 				07894D43A3CE2D26E7D5A681 /* AppTheme.swift in Sources */,
 				CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */,
 				CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */,
+				CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */,
 				CED677A42FAD2D2B00531EBF /* ProjectCardView.swift in Sources */,
 				CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */,
 				CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */,
+				CED677A82FADDF6E00531EBF /* MediaLibraryPickerScreen.swift in Sources */,
 				A0B0F00DDEAFB001CAFE0101 /* MediaItem.swift in Sources */,
 				A0B0F00DDEAFB001CAFE0102 /* MediaFilter.swift in Sources */,
 				A0B0F00DDEAFB001CAFE0103 /* PhotoLibraryViewModel.swift in Sources */,
@@ -327,10 +343,12 @@
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioTrack.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0105 /* EditorViewModel.swift in Sources */,
+				BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0109 /* EditorBottomToolbar.swift in Sources */,
+				BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -345,6 +363,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -391,6 +410,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -29,14 +29,59 @@ struct EditorClip: Identifiable, Hashable {
     var volume: Float
 
     init(asset: PHAsset) {
+        let raw = asset.mediaType == .video ? asset.duration : Self.photoDefaultDuration
+        self.init(
+            asset: asset,
+            originalDuration: raw,
+            trimStart: 0,
+            trimEnd: raw
+        )
+    }
+
+    init(
+        asset: PHAsset,
+        originalDuration: TimeInterval,
+        trimStart: TimeInterval,
+        trimEnd: TimeInterval,
+        speed: Float = 1.0,
+        volume: Float = 1.0
+    ) {
         self.id = UUID()
         self.asset = asset
-        let raw = asset.mediaType == .video ? asset.duration : Self.photoDefaultDuration
-        self.originalDuration = raw
-        self.trimStart = 0
-        self.trimEnd = raw
-        self.speed = 1.0
-        self.volume = 1.0
+        self.originalDuration = originalDuration
+        self.trimStart = trimStart
+        self.trimEnd = trimEnd
+        self.speed = speed
+        self.volume = volume
+    }
+
+    /// Minimum source span so a clip stays at least ~0.25s on the timeline.
+    static func minimumSourceSpan(speed: Float) -> TimeInterval {
+        max(0.25 * TimeInterval(max(speed, 0.001)), 0.05)
+    }
+
+    /// Splits this clip at `sourceTime` (asset seconds). Returns nil if too close to either edge.
+    func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorClip, right: EditorClip)? {
+        let minSpan = Self.minimumSourceSpan(speed: speed)
+        guard sourceTime >= trimStart + minSpan, sourceTime <= trimEnd - minSpan else { return nil }
+
+        let left = EditorClip(
+            asset: asset,
+            originalDuration: originalDuration,
+            trimStart: trimStart,
+            trimEnd: sourceTime,
+            speed: speed,
+            volume: volume
+        )
+        let right = EditorClip(
+            asset: asset,
+            originalDuration: originalDuration,
+            trimStart: sourceTime,
+            trimEnd: trimEnd,
+            speed: speed,
+            volume: volume
+        )
+        return (left, right)
     }
 
     var isVideo: Bool { asset.mediaType == .video }

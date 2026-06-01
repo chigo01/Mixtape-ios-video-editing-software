@@ -8,9 +8,11 @@
 import SwiftUI
 import UIKit
 import Photos
+import AVFoundation
 
 struct EditorTimeline: View {
     let vm: EditorViewModel
+    var onInsertAfterClip: (Int) -> Void = { _ in }
 
     private let pixelsPerSecond: CGFloat = 18
     private let rulerLabelHeight: CGFloat = 14
@@ -21,9 +23,11 @@ struct EditorTimeline: View {
     /// Require this much drag on filmstrips before scrubbing claims the gesture (keeps horizontal scroll natural).
     private let clipScrubMinimumDistance: CGFloat = 18
     private let audioScrubMinimumDistance: CGFloat = 18
+    /// Fixed column between clips so + never overlaps thumbnails.
+    private let insertSlotWidth: CGFloat = 28
 
     @State private var isScrubbing = false
-    @State private var playheadDragBaseline: TimeInterval?
+    @State private var playheadDragBaselineContentX: CGFloat?
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 24 }
     private var audioLaneResolvedHeight: CGFloat { vm.audioTrack == nil ? 0 : audioLaneHeight }
@@ -33,8 +37,17 @@ struct EditorTimeline: View {
             + 8 + audioLaneResolvedHeight
     }
 
+    private var layout: TimelineLayout {
+        TimelineLayout(
+            clips: vm.clips,
+            totalDuration: vm.totalDuration,
+            pixelsPerSecond: pixelsPerSecond,
+            insertSlotWidth: insertSlotWidth
+        )
+    }
+
     var body: some View {
-        let totalWidth = max(CGFloat(vm.totalDuration) * pixelsPerSecond, 1)
+        let totalWidth = layout.contentWidth
 
         GeometryReader { geo in
             /// Inset for `ZStack` vertical padding (4pt top + bottom).
@@ -43,18 +56,18 @@ struct EditorTimeline: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 8) {
-                        rulerAndScrubStrip(totalWidth: totalWidth)
+                        rulerAndScrubStrip(totalWidth: totalWidth, layout: layout)
                             .padding(.top, 4)
 
                         if !vm.textOverlays.isEmpty {
-                            textOverlayRow(totalWidth: totalWidth)
+                            textOverlayRow(totalWidth: totalWidth, layout: layout)
                                 .frame(height: 24, alignment: .leading)
                         }
 
-                        clipsRow
+                        clipsRow(layout: layout)
                             .frame(height: clipsLaneHeight, alignment: .leading)
 
-                        audioRow(totalWidth: totalWidth)
+                        audioRow(totalWidth: totalWidth, layout: layout)
                             .frame(height: audioLaneResolvedHeight, alignment: .leading)
 
                         // Fills space below tracks (and future overlay lanes) so horizontal pan works
@@ -64,8 +77,8 @@ struct EditorTimeline: View {
                     }
                     .frame(width: totalWidth, height: paddedMinHeight, alignment: .top)
 
-                    playheadLine()
-                    playheadKnob()
+                    playheadLine(layout: layout)
+                    playheadKnob(layout: layout)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
@@ -78,9 +91,9 @@ struct EditorTimeline: View {
 
     // MARK: Ruler + scrub
 
-    private func rulerAndScrubStrip(totalWidth: CGFloat) -> some View {
+    private func rulerAndScrubStrip(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ruler(totalWidth: totalWidth)
+            ruler(totalWidth: totalWidth, layout: layout)
             Color.clear
                 .frame(width: totalWidth, height: scrubRailHeight)
                 .contentShape(Rectangle())
@@ -92,8 +105,7 @@ struct EditorTimeline: View {
                 .onChanged { v in
                     isScrubbing = true
                     let x = max(0, min(v.location.x, totalWidth))
-                    let t = TimeInterval(x / pixelsPerSecond)
-                    vm.setTimelinePositionForScrub(t)
+                    vm.setTimelinePositionForScrub(layout.time(atContentX: x))
                 }
                 .onEnded { _ in
                     isScrubbing = false
@@ -102,14 +114,14 @@ struct EditorTimeline: View {
         )
     }
 
-    private func ruler(totalWidth: CGFloat) -> some View {
+    private func ruler(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         let everyFive = stride(from: 0, through: Int(vm.totalDuration), by: 5).map { $0 }
         return ZStack(alignment: .topLeading) {
             ForEach(everyFive, id: \.self) { sec in
                 Text(formatRuler(sec))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundColor(Color.white.opacity(0.55))
-                    .offset(x: CGFloat(sec) * pixelsPerSecond - 14, y: 0)
+                    .offset(x: layout.contentX(forTime: TimeInterval(sec)) - 14, y: 0)
             }
         }
         .frame(width: totalWidth, height: rulerLabelHeight, alignment: .leading)
@@ -121,7 +133,7 @@ struct EditorTimeline: View {
 
     // MARK: Text overlays
 
-    private func textOverlayRow(totalWidth: CGFloat) -> some View {
+    private func textOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(vm.textOverlays) { overlay in
                 HStack(spacing: 4) {
@@ -141,7 +153,7 @@ struct EditorTimeline: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(Color.white.opacity(0.18), lineWidth: 1)
                 )
-                .offset(x: CGFloat(overlay.startTime) * pixelsPerSecond, y: 0)
+                .offset(x: layout.contentX(forTime: overlay.startTime), y: 0)
             }
         }
         .frame(width: totalWidth, alignment: .leading)
@@ -153,12 +165,15 @@ struct EditorTimeline: View {
 
     // MARK: Clips
 
-    private var clipsRow: some View {
+    private func clipsRow(layout: TimelineLayout) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(vm.clips.enumerated()), id: \.element.id) { index, clip in
                 let start = vm.timelineOffsetForClipIndex(index)
+                let thumbWidth = layout.clipWidth(for: clip)
+
                 ClipThumb(
                     clip: clip,
+                    width: thumbWidth,
                     clipTimelineStart: start,
                     isSelected: vm.selectedClipID == clip.id,
                     pixelsPerSecond: pixelsPerSecond,
@@ -167,15 +182,24 @@ struct EditorTimeline: View {
                     onScrub: { t in vm.setTimelinePositionForScrub(t) },
                     onScrubCommit: { vm.commitTimelineAfterScrub() },
                     onScrubbingChanged: { isScrubbing = $0 },
-                    onSelectForEditing: { vm.selectClipForEditing(clip.id) }
+                    onSelectForEditing: { vm.selectClipForEditing(clip.id) },
+                    onTrimChanged: { start, end in
+                        vm.setTrim(clipID: clip.id, trimStart: start, trimEnd: end)
+                    },
+                    onTrimEnded: { vm.commitTrimEdit() }
                 )
+
+                ClipInsertSlot(width: insertSlotWidth, height: clipsLaneHeight) {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onInsertAfterClip(index)
+                }
             }
         }
     }
 
     // MARK: Audio
 
-    private func audioRow(totalWidth: CGFloat) -> some View {
+    private func audioRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         Group {
             if let audio = vm.audioTrack {
                 ZStack(alignment: .leading) {
@@ -208,21 +232,21 @@ struct EditorTimeline: View {
                 .contentShape(Rectangle())
                 .gesture(
                     audioScrubGesture(
-                        trackWidth: max(CGFloat(audio.duration) * pixelsPerSecond, totalWidth)
+                        trackWidth: max(CGFloat(audio.duration) * pixelsPerSecond, totalWidth),
+                        layout: layout
                     )
                 )
             }
         }
     }
 
-    private func audioScrubGesture(trackWidth: CGFloat) -> some Gesture {
+    private func audioScrubGesture(trackWidth: CGFloat, layout: TimelineLayout) -> some Gesture {
         DragGesture(minimumDistance: audioScrubMinimumDistance, coordinateSpace: .local)
             .onChanged { v in
                 isScrubbing = true
                 let w = max(1, trackWidth)
                 let x = max(0, min(v.location.x, w))
-                let t = TimeInterval(x / pixelsPerSecond)
-                vm.setTimelinePositionForScrub(t)
+                vm.setTimelinePositionForScrub(layout.time(atContentX: x))
             }
             .onEnded { _ in
                 isScrubbing = false
@@ -232,8 +256,8 @@ struct EditorTimeline: View {
 
     // MARK: Playhead (line is visual-only; only the knob captures drags so ScrollView can pan elsewhere.)
 
-    private func playheadLine() -> some View {
-        let x = CGFloat(vm.timelinePosition) * pixelsPerSecond
+    private func playheadLine(layout: TimelineLayout) -> some View {
+        let x = layout.contentX(forTime: vm.timelinePosition)
         return PlayheadShape()
             .stroke(Color.white.opacity(0.95), lineWidth: 1)
             .frame(width: 18, height: playheadStackHeight)
@@ -241,8 +265,8 @@ struct EditorTimeline: View {
             .allowsHitTesting(false)
     }
 
-    private func playheadKnob() -> some View {
-        let x = CGFloat(vm.timelinePosition) * pixelsPerSecond
+    private func playheadKnob(layout: TimelineLayout) -> some View {
+        let x = layout.contentX(forTime: vm.timelinePosition)
         let knobY = -playheadStackHeight / 2 + 4
         let knobSize: CGFloat = 44
 
@@ -258,25 +282,117 @@ struct EditorTimeline: View {
         }
         .frame(width: knobSize, height: knobSize)
         .offset(x: x - knobSize / 2, y: knobY)
-        .gesture(playheadDragGesture())
+        .gesture(playheadDragGesture(layout: layout))
     }
 
-    private func playheadDragGesture() -> some Gesture {
+    private func playheadDragGesture(layout: TimelineLayout) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
                 isScrubbing = true
-                if playheadDragBaseline == nil {
-                    playheadDragBaseline = vm.timelinePosition
+                if playheadDragBaselineContentX == nil {
+                    playheadDragBaselineContentX = layout.contentX(forTime: vm.timelinePosition)
                 }
-                let delta = TimeInterval(v.translation.width / pixelsPerSecond)
-                let t = (playheadDragBaseline ?? 0) + delta
-                vm.setTimelinePositionForScrub(t)
+                let x = (playheadDragBaselineContentX ?? 0) + v.translation.width
+                vm.setTimelinePositionForScrub(layout.time(atContentX: x))
             }
             .onEnded { _ in
-                playheadDragBaseline = nil
+                playheadDragBaselineContentX = nil
                 isScrubbing = false
                 vm.commitTimelineAfterScrub()
             }
+    }
+}
+
+// MARK: - Timeline layout (clip widths + insert gaps)
+
+private struct TimelineLayout {
+    let clips: [EditorClip]
+    let totalDuration: TimeInterval
+    let pixelsPerSecond: CGFloat
+    let insertSlotWidth: CGFloat
+
+    func clipWidth(for clip: EditorClip) -> CGFloat {
+        max(44, CGFloat(clip.duration) * pixelsPerSecond)
+    }
+
+    var contentWidth: CGFloat {
+        guard !clips.isEmpty else { return 1 }
+        let clipsW = clips.reduce(CGFloat(0)) { $0 + clipWidth(for: $1) }
+        return max(clipsW + CGFloat(clips.count) * insertSlotWidth, 1)
+    }
+
+    func contentX(forTime time: TimeInterval) -> CGFloat {
+        guard !clips.isEmpty else { return 0 }
+        let clamped = min(max(0, time), totalDuration)
+        var acc: TimeInterval = 0
+        var x: CGFloat = 0
+
+        for (index, clip) in clips.enumerated() {
+            let duration = clip.duration
+            if duration <= 0 { continue }
+
+            if clamped < acc + duration - 1e-9 || index == clips.count - 1 {
+                let local = min(max(0, clamped - acc), duration)
+                return x + CGFloat(local) * pixelsPerSecond
+            }
+
+            x += clipWidth(for: clip) + insertSlotWidth
+            acc += duration
+        }
+
+        return x
+    }
+
+    func time(atContentX rawX: CGFloat) -> TimeInterval {
+        guard !clips.isEmpty else { return 0 }
+        var x = max(0, rawX)
+        var acc: TimeInterval = 0
+
+        for clip in clips {
+            let cw = clipWidth(for: clip)
+            if x <= cw {
+                return acc + TimeInterval(x / pixelsPerSecond)
+            }
+            x -= cw
+
+            if x <= insertSlotWidth {
+                return x < insertSlotWidth / 2 ? acc : min(acc + clip.duration, totalDuration)
+            }
+            x -= insertSlotWidth
+            acc += clip.duration
+        }
+
+        return totalDuration
+    }
+}
+
+// MARK: - Insert slot (dedicated gap between clips)
+
+private struct ClipInsertSlot: View {
+    let width: CGFloat
+    let height: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Rectangle()
+                    .fill(Color.white.opacity(0.04))
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 1)
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.appColors.primaryColor))
+                    .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 1))
+            }
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add media after this clip")
     }
 }
 
@@ -284,6 +400,7 @@ struct EditorTimeline: View {
 
 private struct ClipThumb: View {
     let clip: EditorClip
+    let width: CGFloat
     let clipTimelineStart: TimeInterval
     let isSelected: Bool
     let pixelsPerSecond: CGFloat
@@ -293,22 +410,26 @@ private struct ClipThumb: View {
     let onScrubCommit: () -> Void
     let onScrubbingChanged: (Bool) -> Void
     let onSelectForEditing: () -> Void
+    let onTrimChanged: (TimeInterval, TimeInterval) -> Void
+    let onTrimEnded: () -> Void
 
     @State private var image: UIImage?
-
-    private var width: CGFloat {
-        max(44, CGFloat(clip.duration) * pixelsPerSecond)
-    }
+    @State private var isTrimming = false
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Color.white.opacity(0.06)
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: width, height: height)
+                        .clipped()
+                } else {
+                    Color.white.opacity(0.06)
+                }
             }
+            .frame(width: width, height: height)
 
             if clip.isVideo {
                 Text(format(duration: clip.duration))
@@ -321,25 +442,46 @@ private struct ClipThumb: View {
             }
         }
         .frame(width: width, height: height)
-        .clipped()
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(isSelected ? Color.appColors.primaryColor : Color.clear, lineWidth: 2)
         )
+        .overlay {
+            if isSelected {
+                ClipTrimHandleRepresentable(
+                    clipID: clip.id,
+                    trimStart: clip.trimStart,
+                    trimEnd: clip.trimEnd,
+                    originalDuration: clip.originalDuration,
+                    speed: clip.speed,
+                    pixelsPerSecond: pixelsPerSecond,
+                    onTrimChanged: { _, start, end in
+                        isTrimming = true
+                        onTrimChanged(start, end)
+                    },
+                    onTrimEnded: {
+                        isTrimming = false
+                        onTrimEnded()
+                    }
+                )
+                .allowsHitTesting(true)
+            }
+        }
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isTrimming else { return }
+            onSelectForEditing()
+        }
         .gesture(thumbScrubGesture())
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.45)
-                .onEnded { _ in onSelectForEditing() }
-        )
         .onAppear(perform: load)
     }
 
     private func thumbScrubGesture() -> some Gesture {
         DragGesture(minimumDistance: scrubMinimumDistance, coordinateSpace: .local)
             .onChanged { v in
+                guard !isTrimming else { return }
                 onScrubbingChanged(true)
                 let frac = width > 0 ? max(0, min(1, v.location.x / width)) : 0
                 let t = clipTimelineStart + frac * clip.duration
@@ -357,7 +499,10 @@ private struct ClipThumb: View {
     }
 
     private func load() {
-        guard image == nil else { return }
+        reloadThumbnailIfNeeded()
+    }
+
+    private func reloadThumbnailIfNeeded() {
         let manager = PHImageManager.default()
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
@@ -365,6 +510,27 @@ private struct ClipThumb: View {
         options.isNetworkAccessAllowed = true
         let scale = UIScreen.main.scale
         let target = CGSize(width: width * scale, height: height * scale)
+
+        if clip.isVideo {
+            let videoOptions = PHVideoRequestOptions()
+            videoOptions.deliveryMode = .fastFormat
+            videoOptions.isNetworkAccessAllowed = true
+            manager.requestAVAsset(forVideo: clip.asset, options: videoOptions) { asset, _, _ in
+                guard let asset else { return }
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = target
+                let time = CMTime(
+                    seconds: clip.trimStart,
+                    preferredTimescale: 600
+                )
+                guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return }
+                let uiImage = UIImage(cgImage: cgImage)
+                Task { @MainActor in self.image = uiImage }
+            }
+            return
+        }
+
         manager.requestImage(
             for: clip.asset,
             targetSize: target,
