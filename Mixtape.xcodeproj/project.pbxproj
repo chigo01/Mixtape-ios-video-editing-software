@@ -134,13 +134,23 @@
 		BA0EDF00DEAFB001CAFE0200 /* Editor */ = {
 			isa = PBXGroup;
 			children = (
-				BA0EDF00DEAFB001CAFE0201 /* model */,
-				BA0EDF00DEAFB001CAFE0202 /* Presentation */,
+				BA0EDF00DEAFB001CAFE0201 /* Model */,
+				BA0EDF00DEAFB001CAFE0203 /* ViewModel */,
+				BA0EDF00DEAFB001CAFE0205 /* Services */,
+				BA0EDF00DEAFB001CAFE0207 /* View */,
 			);
 			path = Editor;
 			sourceTree = "<group>";
 		};
-		BA0EDF00DEAFB001CAFE0201 /* model */ = {
+		BA0EDF00DEAFB001CAFE0205 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		BA0EDF00DEAFB001CAFE0201 /* Model */ = {
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */,
@@ -148,29 +158,27 @@
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioTrack.swift */,
 			);
-			path = model;
-			sourceTree = "<group>";
-		};
-		BA0EDF00DEAFB001CAFE0202 /* Presentation */ = {
-			isa = PBXGroup;
-			children = (
-				BA0EDF00DEAFB001CAFE0203 /* ViewModel */,
-				BA0EDF00DEAFB001CAFE0204 /* views */,
-				BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */,
-			);
-			path = Presentation;
+			path = Model;
 			sourceTree = "<group>";
 		};
 		BA0EDF00DEAFB001CAFE0203 /* ViewModel */ = {
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */,
-				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 			);
 			path = ViewModel;
 			sourceTree = "<group>";
 		};
-		BA0EDF00DEAFB001CAFE0204 /* views */ = {
+		BA0EDF00DEAFB001CAFE0207 /* View */ = {
+			isa = PBXGroup;
+			children = (
+				BA0EDF00DEAFB001CAFE0206 /* Screens */,
+				BA0EDF00DEAFB001CAFE0204 /* Components */,
+			);
+			path = View;
+			sourceTree = "<group>";
+		};
+		BA0EDF00DEAFB001CAFE0204 /* Components */ = {
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */,
@@ -179,7 +187,15 @@
 				BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */,
 				BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */,
 			);
-			path = views;
+			path = Components;
+			sourceTree = "<group>";
+		};
+		BA0EDF00DEAFB001CAFE0206 /* Screens */ = {
+			isa = PBXGroup;
+			children = (
+				BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */,
+			);
+			path = Screens;
 			sourceTree = "<group>";
 		};
 		CED677932FACE2B300531EBF /* Features */ = {
@@ -194,32 +210,40 @@
 		CED677942FACE3AC00531EBF /* ProjectList */ = {
 			isa = PBXGroup;
 			children = (
-				CED6779A2FACEBF700531EBF /* model */,
-				CED677952FACE40000531EBF /* Presentation */,
+				CED6779A2FACEBF700531EBF /* Model */,
+				A0B0F00DDEAFB001CAFE0200 /* ViewModel */,
+				CED677A92FADDF6E00531EBF1 /* View */,
 			);
 			path = ProjectList;
 			sourceTree = "<group>";
 		};
-		CED677952FACE40000531EBF /* Presentation */ = {
+		CED677A92FADDF6E00531EBF1 /* View */ = {
 			isa = PBXGroup;
 			children = (
-				A0B0F00DDEAFB001CAFE0200 /* ViewModel */,
-				CED677A22FAD2D0D00531EBF /* views */,
+				CED677A82FADDF6E00531EBF0 /* Screens */,
+				CED677A22FAD2D0D00531EBF /* Components */,
+			);
+			path = View;
+			sourceTree = "<group>";
+		};
+		CED677A82FADDF6E00531EBF0 /* Screens */ = {
+			isa = PBXGroup;
+			children = (
 				CED677962FACE5BD00531EBF /* ProjectListScreen.swift */,
 				CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */,
 				CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */,
 			);
-			path = Presentation;
+			path = Screens;
 			sourceTree = "<group>";
 		};
-		CED6779A2FACEBF700531EBF /* model */ = {
+		CED6779A2FACEBF700531EBF /* Model */ = {
 			isa = PBXGroup;
 			children = (
 				CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */,
 				A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */,
 				A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */,
 			);
-			path = model;
+			path = Model;
 			sourceTree = "<group>";
 		};
 		CED6779F2FAD0DA700531EBF /* Components */ = {
@@ -230,7 +254,7 @@
 			path = Components;
 			sourceTree = "<group>";
 		};
-		CED677A22FAD2D0D00531EBF /* views */ = {
+		CED677A22FAD2D0D00531EBF /* Components */ = {
 			isa = PBXGroup;
 			children = (
 				CED677A32FAD2D2B00531EBF /* ProjectCardView.swift */,
@@ -240,7 +264,7 @@
 				A0B0F00DDEAFB001CAFE0007 /* SelectionBottomBar.swift */,
 				A0B0F00DDEAFB001CAFE0008 /* MediaPreviewView.swift */,
 			);
-			path = views;
+			path = Components;
 			sourceTree = "<group>";
 		};
 		D4BAA6CF3F4204D0B19A1276 = {

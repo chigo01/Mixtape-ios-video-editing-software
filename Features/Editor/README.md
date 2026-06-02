@@ -11,15 +11,15 @@ The flow before **`EditorScreen`** is: **home list → New Project → pick phot
 ### 1.1 App entry and home screen
 
 - **`MixtapeApp`** (`App/MixtapeApp.swift`) hosts **`ProjectListScreen`** in a `WindowGroup`.
-- **`ProjectListScreen`** (`Features/ProjectList/Presentation/ProjectListScreen.swift`) uses a **`NavigationStack`**, title copy, and a **“New Project”** **`NavigationLink`** that pushes **`CreateProjectScreen`**.
+- **`ProjectListScreen`** (`Features/ProjectList/View/Screens/ProjectListScreen.swift`) uses a **`NavigationStack`**, title copy, and a **“New Project”** **`NavigationLink`** that pushes **`CreateProjectScreen`**.
 - The list of **`ProjectCardView`** rows is driven by **`projectMockModels`** today—placeholder “projects,” not wired to real persistence. The meaningful handoff into editing is **`CreateProjectScreen` → `EditorScreen(media:)`**.
 
 ### 1.2 New Project screen = library + selection
 
 - **`CreateProjectScreen`** is a thin wrapper around **`MediaLibraryPickerScreen`** (same grid UX, different title / confirm button).
-- **`MediaLibraryPickerScreen`** (`Features/ProjectList/Presentation/MediaLibraryPickerScreen.swift`) owns **`@State private var vm = PhotoLibraryViewModel()`** and is **reused inside the editor** when you tap **+** on the timeline to insert more clips.
+- **`MediaLibraryPickerScreen`** (`Features/ProjectList/View/Screens/MediaLibraryPickerScreen.swift`) owns **`@State private var vm = PhotoLibraryViewModel()`** and is **reused inside the editor** when you tap **+** on the timeline to insert more clips.
 - **`.onAppear { vm.requestAccessAndLoad() }`** starts the PhotoKit permission flow and, once **`.authorized`** or **`.limited`**, loads assets.
-- **`PhotoLibraryViewModel`** (`Features/ProjectList/Presentation/ViewModel/PhotoLibraryViewModel.swift`):
+- **`PhotoLibraryViewModel`** (`Features/ProjectList/ViewModel/PhotoLibraryViewModel.swift`):
   - Fetches **`PHAsset`**s with **`PHAsset.fetchAssets`** (sorted by **`creationDate`**, newest first) and wraps each as **`MediaItem`** (`id` = **`localIdentifier`**, plus **`asset`**).
   - **`selectedIDs: [String]`** stores **selection order**; that order is the order of clips in the editor.
   - **`toggleSelection`** appends or removes IDs; **`selectedItems`** maps IDs back to **`[MediaItem]`** for the editor.
@@ -36,22 +36,22 @@ The flow before **`EditorScreen`** is: **home list → New Project → pick phot
 
 ### 1.4 `MediaItem` → `EditorClip`
 
-- **`MediaItem`** (`Features/ProjectList/model/MediaItem.swift`) is the **picker** model ( **`PHAsset`** + helpers).
-- **`EditorViewModel(media: [MediaItem])`** maps each item to **`EditorClip(asset:)`** (`Features/Editor/model/EditorClip.swift`). After this point, the editor only needs **`EditorClip`**, **`timelinePosition`**, and the player — the picker's job is done.
+- **`MediaItem`** (`Features/ProjectList/Model/MediaItem.swift`) is the **picker** model ( **`PHAsset`** + helpers).
+- **`EditorViewModel(media: [MediaItem])`** maps each item to **`EditorClip(asset:)`** (`Features/Editor/Model/EditorClip.swift`). After this point, the editor only needs **`EditorClip`**, **`timelinePosition`**, and the player — the picker's job is done.
 
 ### 1.5 Pre-editor file map
 
 | Path | Role |
 |------|------|
 | `App/MixtapeApp.swift` | Root scene → `ProjectListScreen`. |
-| `ProjectList/Presentation/ProjectListScreen.swift` | Home; `NavigationLink` to create flow. |
-| `ProjectList/Presentation/CreateProjectScreen.swift` | Thin wrapper → `MediaLibraryPickerScreen`, then `EditorScreen`. |
-| `ProjectList/Presentation/MediaLibraryPickerScreen.swift` | Shared photo grid (new project + add clips in editor). |
-| `ProjectList/Presentation/ViewModel/PhotoLibraryViewModel.swift` | Auth, fetch, filter, search, selection order. |
-| `ProjectList/model/MediaItem.swift` | Row model wrapping `PHAsset`. |
-| `ProjectList/model/MediaFilter.swift` | Filter chip enum. |
-| `ProjectList/Presentation/views/SelectionBottomBar.swift` | Count, duration summary, **Next**. |
-| `ProjectList/Presentation/views/MediaGridItemView.swift` | Thumbnail cell (with caching manager). |
+| `ProjectList/View/Screens/ProjectListScreen.swift` | Home; `NavigationLink` to create flow. |
+| `ProjectList/View/Screens/CreateProjectScreen.swift` | Thin wrapper → `MediaLibraryPickerScreen`, then `EditorScreen`. |
+| `ProjectList/View/Screens/MediaLibraryPickerScreen.swift` | Shared photo grid (new project + add clips in editor). |
+| `ProjectList/ViewModel/PhotoLibraryViewModel.swift` | Auth, fetch, filter, search, selection order. |
+| `ProjectList/Model/MediaItem.swift` | Row model wrapping `PHAsset`. |
+| `ProjectList/Model/MediaFilter.swift` | Filter chip enum. |
+| `ProjectList/View/Components/SelectionBottomBar.swift` | Count, duration summary, **Next**. |
+| `ProjectList/View/Components/MediaGridItemView.swift` | Thumbnail cell (with caching manager). |
 
 ### 1.6 References (PhotoKit, privacy, navigation)
 
@@ -75,9 +75,9 @@ In code we represent that with:
 
 So: **scrubbing the ruler** or **moving the playhead** updates `timelinePosition` only. The preview then asks: “At this global time, which clip is playing, and where inside that clip?”
 
-**Key file:** `Presentation/ViewModel/EditorViewModel.swift` — see `timelinePosition`, `clipAndLocalTime(at:)`, `timelineOffsetForClipIndex(_:)`.
+**Key file:** `ViewModel/EditorViewModel.swift` — see `timelinePosition`, `clipAndLocalTime(at:)`, `timelineOffsetForClipIndex(_:)`.
 
-**Clip duration on the timeline:** `Features/Editor/model/EditorClip.swift` — `duration` and `sourceTime(forExportedLocal:)` connect **exported timeline seconds** to **source asset time** (trim + speed).
+**Clip duration on the timeline:** `Features/Editor/Model/EditorClip.swift` — `duration` and `sourceTime(forExportedLocal:)` connect **exported timeline seconds** to **source asset time** (trim + speed).
 
 ---
 
@@ -94,10 +94,10 @@ EditorScreen
 ```
 
 - **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, a **single** `AVPlayer?` backed by an **`AVMutableComposition`**, scrub/seek helpers, playback tick timer, and clip-editing APIs (trim, split, insert).
-- **`EditorCompositionBuilder`**: builds the continuous preview stream from all clips (see **§4**).
-- **Views** are mostly passive: they call `vm.setTimelinePositionForScrub`, `commitTimelineAfterScrub`, `togglePlay()`, etc.
+- **`EditorCompositionBuilder`** (`Services/`): builds the continuous preview stream from all clips (see **§4**).
+- **Views** (`View/Components`, `View/Screens`) are mostly passive: they call `vm.setTimelinePositionForScrub`, `commitTimelineAfterScrub`, `togglePlay()`, etc.
 
-This follows **unidirectional data flow**: the view model is the source of truth; SwiftUI observes it and redraws.
+This follows **MVVM + unidirectional data flow**: the view model is the source of truth; SwiftUI observes it and redraws.
 
 **Observation:**
 
@@ -112,7 +112,7 @@ This follows **unidirectional data flow**: the view model is the source of truth
 
 ### 4.1 How it works today
 
-1. **`EditorCompositionBuilder.makePlayerItem(from:)`** (`Presentation/ViewModel/EditorCompositionBuilder.swift`):
+1. **`EditorCompositionBuilder.makePlayerItem(from:)`** (`Services/EditorCompositionBuilder.swift`):
    - Creates **`AVMutableComposition`**.
    - For each **`EditorClip`**, inserts the trimmed source range (`trimStart` … `trimEnd`) at the correct **composition time** (sequential cursor).
    - **Videos:** `PHImageManager.requestAVAsset(forVideo:)` → insert video + audio tracks.
@@ -269,16 +269,16 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 | Path | Role |
 |------|------|
-| `Presentation/EditorScreen.swift` | Layout, fullscreen presentation wiring. |
-| `Presentation/ViewModel/EditorViewModel.swift` | Timeline math, composition player, trim/split/insert, seek, tick. |
-| `Presentation/ViewModel/EditorCompositionBuilder.swift` | Builds `AVMutableComposition` + `AVVideoComposition` for preview. |
-| `Presentation/views/EditorTimeline.swift` | Ruler, scrub, clips, + insert slots, playhead, `TimelineLayout`. |
-| `Presentation/views/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`). |
-| `Presentation/views/EditorPreviewPlayer.swift` | Inline preview, HUD, `PlayerLayerView`. |
-| `Presentation/views/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Chrome and tools (split, speed, …). |
-| `model/EditorClip.swift` | Clip model, trim/speed/split, preview aspect. |
+| `View/Screens/EditorScreen.swift` | Layout, fullscreen presentation wiring. |
+| `ViewModel/EditorViewModel.swift` | Timeline math, composition player, trim/split/insert, seek, tick. |
+| `Services/EditorCompositionBuilder.swift` | Builds `AVMutableComposition` + `AVVideoComposition` for preview. |
+| `View/Components/EditorTimeline.swift` | Ruler, scrub, clips, + insert slots, playhead, `TimelineLayout`. |
+| `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`). |
+| `View/Components/EditorPreviewPlayer.swift` | Inline preview, HUD, `PlayerLayerView`. |
+| `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Chrome and tools (split, speed, …). |
+| `Model/EditorClip.swift` | Clip model, trim/speed/split, preview aspect. |
 | `Core/AudioSessionConfigurator.swift` | Speaker / headphone routing for preview audio. |
-| `model/EditorTextOverlay.swift` / `EditorAudioTrack.swift` / `EditorTool.swift` | Other timeline / tool types. |
+| `Model/EditorTextOverlay.swift` / `EditorAudioTrack.swift` / `EditorTool.swift` | Other timeline / tool types. |
 
 ---
 
