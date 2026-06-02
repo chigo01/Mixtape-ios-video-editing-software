@@ -16,7 +16,8 @@ The flow before **`EditorScreen`** is: **home list → New Project → pick phot
 
 ### 1.2 New Project screen = library + selection
 
-- **`CreateProjectScreen`** (`Features/ProjectList/Presentation/CreateProjectScreen.swift`) owns **`@State private var vm = PhotoLibraryViewModel()`**.
+- **`CreateProjectScreen`** is a thin wrapper around **`MediaLibraryPickerScreen`** (same grid UX, different title / confirm button).
+- **`MediaLibraryPickerScreen`** (`Features/ProjectList/Presentation/MediaLibraryPickerScreen.swift`) owns **`@State private var vm = PhotoLibraryViewModel()`** and is **reused inside the editor** when you tap **+** on the timeline to insert more clips.
 - **`.onAppear { vm.requestAccessAndLoad() }`** starts the PhotoKit permission flow and, once **`.authorized`** or **`.limited`**, loads assets.
 - **`PhotoLibraryViewModel`** (`Features/ProjectList/Presentation/ViewModel/PhotoLibraryViewModel.swift`):
   - Fetches **`PHAsset`**s with **`PHAsset.fetchAssets`** (sorted by **`creationDate`**, newest first) and wraps each as **`MediaItem`** (`id` = **`localIdentifier`**, plus **`asset`**).
@@ -44,7 +45,8 @@ The flow before **`EditorScreen`** is: **home list → New Project → pick phot
 |------|------|
 | `App/MixtapeApp.swift` | Root scene → `ProjectListScreen`. |
 | `ProjectList/Presentation/ProjectListScreen.swift` | Home; `NavigationLink` to create flow. |
-| `ProjectList/Presentation/CreateProjectScreen.swift` | Grid, filters, selection, `EditorScreen` destination. |
+| `ProjectList/Presentation/CreateProjectScreen.swift` | Thin wrapper → `MediaLibraryPickerScreen`, then `EditorScreen`. |
+| `ProjectList/Presentation/MediaLibraryPickerScreen.swift` | Shared photo grid (new project + add clips in editor). |
 | `ProjectList/Presentation/ViewModel/PhotoLibraryViewModel.swift` | Auth, fetch, filter, search, selection order. |
 | `ProjectList/model/MediaItem.swift` | Row model wrapping `PHAsset`. |
 | `ProjectList/model/MediaFilter.swift` | Filter chip enum. |
@@ -91,7 +93,8 @@ EditorScreen
 └── EditorBottomToolbar     ← tools (split, speed, …)
 ```
 
-- **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, `AVPlayer?`, scrub/seek helpers, playback tick timer, and `alignPlaybackToTimeline()` so the **video** player shows the frame that matches `timelinePosition`.
+- **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, a **single** `AVPlayer?` backed by an **`AVMutableComposition`**, scrub/seek helpers, playback tick timer, and clip-editing APIs (trim, split, insert).
+- **`EditorCompositionBuilder`**: builds the continuous preview stream from all clips (see **§4**).
 - **Views** are mostly passive: they call `vm.setTimelinePositionForScrub`, `commitTimelineAfterScrub`, `togglePlay()`, etc.
 
 This follows **unidirectional data flow**: the view model is the source of truth; SwiftUI observes it and redraws.
@@ -103,23 +106,52 @@ This follows **unidirectional data flow**: the view model is the source of truth
   
 ---
 
-## 4. Playback: video vs photo
+## 4. Playback: one composition, one player (CapCut-style)
 
-- **Video:** `AVPlayer` + `AVPlayerItem` from the photo library (`PHCachingImageManager.requestPlayerItem`). The layer is embedded via `PlayerLayerView` (`UIViewRepresentable` wrapping `AVPlayerLayer`).
-- **Photo:** No persistent player for the still; the preview uses a **thumbnail/poster** from `PHImageManager` while the playhead advances on a **timer** (`playbackTick`) when `isPlaying` is true.
+**What we learned the hard way:** swapping a **new `AVPlayer` per clip** causes visible **jump cuts** at every boundary — even when two clips are splits of the **same** video. CapCut feels like “one video” because it plays a **single stitched timeline**.
 
-**Aligning the player after a seek:** `alignPlaybackToTimeline()`:
+### 4.1 How it works today
 
-1. Resolves `playbackInfo` from `timelinePosition`.
-2. If it’s video and the clip changed (or there is no player), loads the right item and seeks.
-3. If it’s photo, tears down the player and shows the still.
+1. **`EditorCompositionBuilder.makePlayerItem(from:)`** (`Presentation/ViewModel/EditorCompositionBuilder.swift`):
+   - Creates **`AVMutableComposition`**.
+   - For each **`EditorClip`**, inserts the trimmed source range (`trimStart` … `trimEnd`) at the correct **composition time** (sequential cursor).
+   - **Videos:** `PHImageManager.requestAVAsset(forVideo:)` → insert video + audio tracks.
+   - **Photos:** converts still → short silent video segment (via **`AVAssetWriter`**) so photos sit in the same composition.
+2. **`AVMutableVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview.
+3. **`EditorViewModel`** keeps **one** `AVPlayer` whose item is that composition.
+4. **`playbackTick`** reads **`player.currentTime()`** → updates **`timelinePosition`**. No manual “advance to next clip” hop.
+5. When clips change (trim commit, split, insert), **`invalidateComposition()`** forces a rebuild on next align/play.
 
-**Seeking is async:** `player?.seek(to:toleranceBefore:toleranceAfter:)` is `async` in modern SDKs — the view model uses `await` so the playhead and frame stay in sync.
+**Seeking after scrub:** `alignPlaybackToTimeline()` → `ensureCompositionPlayer()` → `seekPlayerToTimeline()`.
 
-**Useful reading:**
+**Poster vs video layer:** `EditorPreviewPlayer` hides the still poster while the video layer is active so you don’t see double images.
 
-- [AVFoundation — Playback](https://developer.apple.com/documentation/avfoundation/media_playback)
-- [PHCachingImageManager](https://developer.apple.com/documentation/photokit/phcachingimagemanager) and [requestPlayerItem(forVideo:options:)](https://developer.apple.com/documentation/photokit/phimagemanager/1616953-requestplayeritem)
+### 4.2 Audio on device speaker
+
+**`AudioSessionConfigurator`** (`Core/AudioSessionConfigurator.swift`) sets **`AVAudioSession`** category **`.playback`** at app launch. Without this, preview audio often only plays on AirPods (default **`.soloAmbient`** respects the silent switch and routing quirks).
+
+Configured in **`MixtapeApp.init()`** and before playback starts.
+
+### 4.3 Mental model
+
+| Layer | Responsibility |
+|-------|----------------|
+| **`EditorClip[]`** | Edit model: trim, speed, asset ref |
+| **`EditorCompositionBuilder`** | Preview/export-shaped **render** of all clips |
+| **`AVPlayer`** | Plays global time `0 … totalDuration` |
+| **`timelinePosition`** | Same global time; drives ruler + playhead UI |
+| **`clipAndLocalTime(at:)`** | Maps global time → which clip is “under” the playhead (for selection, split, HUD) |
+
+The **+ insert slots** on the timeline are **UI-only gaps** (`TimelineLayout.insertSlotWidth`). They affect **pixel layout** of the filmstrip, **not** playback seconds.
+
+### 4.4 Useful reading
+
+- [AVMutableComposition](https://developer.apple.com/documentation/avfoundation/avmutablecomposition) — stitching clips.
+- [AVMutableVideoComposition](https://developer.apple.com/documentation/avfoundation/avmutablevideocomposition) — orientation, transforms, render size.
+- [AVAssetTrack.preferredTransform](https://developer.apple.com/documentation/avfoundation/avassettrack/1386708-preferredtransform) — why portrait video looks wrong without a video composition.
+- [AVAudioSession](https://developer.apple.com/documentation/avfaudio/avaudiosession) — categories, routing, silent switch behavior.
+- [AVFoundation Programming Guide (archive)](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html) — **Editing Assets** chapter; still the best conceptual intro to compositions.
+- WWDC: search [developer.apple.com/videos](https://developer.apple.com/videos/) for **“Edit and play back HDR video”**, **“Discover advancements in AVFoundation”** — composition + video composition patterns.
 
 ---
 
@@ -149,6 +181,13 @@ This follows **unidirectional data flow**: the view model is the source of truth
 
 `EditorTimeline` maps **time → horizontal position** with `pixelsPerSecond`. Clip width on screen ≈ `duration * pixelsPerSecond`. The ruler labels are placed the same way so ticks line up with the filmstrip.
 
+**Insert slots (+ buttons):** between each clip thumbnail there is a fixed-width column (`insertSlotWidth`, 28pt). Private struct **`TimelineLayout`** converts between:
+
+- **Global time** (playback seconds, no gaps), and
+- **Content X** (filmstrip pixels, includes insert columns),
+
+so the playhead stays aligned with clips even though the UI has visual gaps. Tapping **+** opens **`MediaLibraryPickerScreen`** as a **`fullScreenCover`**; **`EditorViewModel.insertClips(from:afterIndex:)`** splices new **`EditorClip`**s after the tapped clip.
+
 ### 6.2 Horizontal scrolling vs scrubbing
 
 `ScrollView(.horizontal)` pans the **whole** timeline content. That conflicts with **drag-to-scrub** if every drag immediately claims the gesture and sets `scrollDisabled(true)`.
@@ -175,9 +214,41 @@ To match a **single continuous** timeline:
 
 - **`setTimelinePositionForScrub`** only updates `timelinePosition` (and pauses). It does **not** change `selectedClipID`.
 - **`selectClipForEditing`** sets which clip **split/speed/…** should target, without moving the playhead.
-- **Long-press** on a thumbnail (in `ClipThumb`) triggers `selectClipForEditing`.
+- **Tap** on a thumbnail (in `ClipThumb`) selects it for editing.
 
-So: **orange border** ≈ edit target; **preview** ≈ `playbackInfo` at `timelinePosition`.
+So: **orange border** ≈ edit target; **preview** ≈ composition time at `timelinePosition`.
+
+### 6.4 Trim handles (front + back)
+
+When a clip is selected, **`ClipTrimHandleRepresentable`** overlays UIKit trim bars on the thumbnail.
+
+| Piece | Role |
+|-------|------|
+| **`ClipTrimHandleView.swift`** | `UIViewRepresentable` + `UIPanGestureRecognizer` on left/right handles |
+| **`setTrim(clipID:trimStart:trimEnd:)`** | Clamps to valid source range (`EditorClip.minimumSourceSpan`) |
+| **`commitTrimEdit()`** | Rebuilds composition + re-seeks preview |
+
+**Why UIKit for handles?** Precise drag clamping and hit-testing are easier with **`hitTest(_:with:)`** so only the handle bars capture touches — the clip body still receives **tap-to-select**.
+
+**Front vs back trim:** `trimStart` / `trimEnd` live on **`EditorClip`**. Timeline thumbnails use **aspect-fill** in the **cell size** (not stretched across a fake “filmstrip width”) so narrow clips don’t look vertically squashed.
+
+**Learn:**
+
+- [UIViewRepresentable](https://developer.apple.com/documentation/swiftui/uiviewrepresentable)
+- [UIPanGestureRecognizer](https://developer.apple.com/documentation/uikit/uipangesturerecognizer)
+- [Hit-testing](https://developer.apple.com/documentation/uikit/uiview/1622469-hittest) — passing touches through to SwiftUI below.
+
+### 6.5 Split at playhead
+
+**SPLIT** in **`EditorBottomToolbar`** calls **`performToolAction(.split)`** → **`splitAtPlayhead()`**:
+
+1. **`clipAndLocalTime(at: timelinePosition)`** finds the clip under the playhead.
+2. **`EditorClip.split(atSourceTime:)`** returns left/right clips with updated trim ranges (same **`PHAsset`**, different **`trimStart`/`trimEnd`**).
+3. Replaces one clip with two in **`clips`**, invalidates composition, re-aligns player.
+
+Split is rejected if the playhead is too close to either edge (~0.25s minimum span).
+
+**Learn:** same composition concepts as §4 — after split, both segments are adjacent ranges in one **`AVMutableComposition`**, so playback stays continuous.
 
 ---
 
@@ -185,10 +256,10 @@ So: **orange border** ≈ edit target; **preview** ≈ `playbackInfo` at `timeli
 
 In `EditorScreen`:
 
-- `.task { await vm.setupPlayer() }` runs initial `alignPlaybackToTimeline()`.
-- `.onDisappear { vm.teardownPlayer() }` invalidates timers, removes KVO/observers, clears the player.
+- `.task { await vm.setupPlayer() }` builds the first composition and seeks to the start.
+- `.onDisappear { vm.teardownPlayer() }` invalidates timers, removes observers, clears the player and composition caches.
 
-When leaving the editor, always tear down expensive resources so you don’t leak `AVPlayer` or timers.
+When leaving the editor, always tear down expensive resources so you don’t leak `AVPlayer`, timers, or temp photo-video files.
 
 ---
 
@@ -199,11 +270,14 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | Path | Role |
 |------|------|
 | `Presentation/EditorScreen.swift` | Layout, fullscreen presentation wiring. |
-| `Presentation/ViewModel/EditorViewModel.swift` | Timeline math, player, seek, tick, selection API. |
-| `Presentation/views/EditorTimeline.swift` | Ruler, scrub, clips, audio lane, playhead, scroll content height. |
+| `Presentation/ViewModel/EditorViewModel.swift` | Timeline math, composition player, trim/split/insert, seek, tick. |
+| `Presentation/ViewModel/EditorCompositionBuilder.swift` | Builds `AVMutableComposition` + `AVVideoComposition` for preview. |
+| `Presentation/views/EditorTimeline.swift` | Ruler, scrub, clips, + insert slots, playhead, `TimelineLayout`. |
+| `Presentation/views/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`). |
 | `Presentation/views/EditorPreviewPlayer.swift` | Inline preview, HUD, `PlayerLayerView`. |
-| `Presentation/views/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Chrome and tools. |
-| `model/EditorClip.swift` | Clip model, trim/speed, preview aspect. |
+| `Presentation/views/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Chrome and tools (split, speed, …). |
+| `model/EditorClip.swift` | Clip model, trim/speed/split, preview aspect. |
+| `Core/AudioSessionConfigurator.swift` | Speaker / headphone routing for preview audio. |
 | `model/EditorTextOverlay.swift` / `EditorAudioTrack.swift` / `EditorTool.swift` | Other timeline / tool types. |
 
 ---
@@ -222,18 +296,59 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 - [PhotoKit overview](https://developer.apple.com/documentation/photokit) — permissions, `PHAsset`, image vs video requests.
 
-**Future: professional-style timelines**
+**Composition + export (you are here for preview; export is next)**
 
-- Many apps eventually build a **composition** (`AVMutableComposition`, `AVMutableVideoComposition`) for export. Apple’s [AVFoundation Programming Guide](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/00_Introduction.html) is the classic entry (archive but still useful conceptually).
+- Preview already uses **`AVMutableComposition`**. Export will likely **reuse** `EditorCompositionBuilder` (or a sibling) with **`AVAssetExportSession`**. See [Exporting a single asset](https://developer.apple.com/documentation/avfoundation/avassetexportsession) and the archive guide [Editing](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html).
+
+**SwiftUI + UIKit together**
+
+- [Integrating UIKit with SwiftUI](https://developer.apple.com/documentation/swiftui/uikit_integration) — trim handles pattern.
+
+**Cursor + Xcode on the same repo**
+
+- Edit Swift in **Cursor**; create/move files and targets in **Xcode** when possible so `project.pbxproj` stays consistent.
+- After moving files in Finder/Cursor, expect red missing references in Xcode until you fix groups or re-add files.
+- Ignore **`xcuserdata`**, **`.DS_Store`**, **`build/`** in git.
 
 ---
 
 ## 10. Suggested learning order
 
-1. Trace **home → `CreateProjectScreen` → `PhotoLibraryViewModel.selectedIDs` → `EditorScreen(media:)`** so you see how **order** becomes **timeline order**.
-2. Read **`EditorClip.duration`** and **`clipAndLocalTime(at:)`** until you can predict the preview for any **`timelinePosition`**.
-3. Trace **`setTimelinePositionForScrub` → `commitTimelineAfterScrub` → `alignPlaybackToTimeline`** in the view model.
-4. In **`EditorTimeline`**, follow one horizontal pan from **`ScrollView`** through to content layout (`GeometryReader` + `Spacer`).
-5. In the simulator: scrub ruler vs drag filmstrip vs drag empty area below clips — match each to the gesture code paths above.
+1. Trace **home → `CreateProjectScreen` → `MediaLibraryPickerScreen` → `EditorScreen(media:)`** so you see how **selection order** becomes **timeline order**.
+2. Read **`EditorClip.duration`**, **`trimStart`/`trimEnd`**, and **`clipAndLocalTime(at:)`** until you can predict which clip owns any **`timelinePosition`**.
+3. Read **`EditorCompositionBuilder.makePlayerItem`** top to bottom — that is the core of “one continuous preview.”
+4. Trace **`togglePlay` → `ensureCompositionPlayer` → `playbackTick`** and watch **`timelinePosition`** track **`player.currentTime()`**.
+5. Trace **`setTimelinePositionForScrub` → `commitTimelineAfterScrub` → `alignPlaybackToTimeline` → `seekPlayerToTimeline`**.
+6. In **`EditorTimeline`**, follow **`TimelineLayout.contentX(forTime:)`** and the **+ insert slot** column — confirm playback time does **not** include gap seconds.
+7. Select a clip → drag trim handles → **`commitTrimEdit`** → watch composition rebuild.
+8. Park playhead mid-clip → **SPLIT** → play through the cut and notice **no player swap** (same composition, two source ranges).
+9. In the simulator: scrub ruler vs drag filmstrip vs tap-to-select vs trim handle drag — map each to the gesture / hit-test code.
 
-If you outgrow this README, the next documentation to write is usually **“export pipeline”** or **“undo/history”** once those features exist.
+---
+
+## 11. Changelog (recent editor work)
+
+Use this as a map of **what we built** and **why**, in learning order:
+
+| Feature | What it does | Key files | Concept to study |
+|---------|----------------|-----------|------------------|
+| **Shared media picker** | Same grid for new project + add clips | `MediaLibraryPickerScreen`, `CreateProjectScreen` | SwiftUI composition, `fullScreenCover` |
+| **Insert clip (+)** | Add media after any clip on timeline | `EditorTimeline`, `EditorViewModel.insertClips` | Ordered array editing, composition invalidation |
+| **Insert slot layout** | + lives in gap columns; playhead still accurate | `TimelineLayout` in `EditorTimeline.swift` | UI layout ≠ playback time |
+| **Audio on speaker** | Preview heard without AirPods only | `AudioSessionConfigurator`, `MixtapeApp` | `AVAudioSession` categories |
+| **Trim handles** | Drag start/end of clip source range | `ClipTrimHandleView`, `setTrim` | UIKit gestures in SwiftUI, clamping |
+| **Split** | Cut clip at playhead into two | `splitAtPlayhead`, `EditorClip.split` | Non-destructive trim ranges on same asset |
+| **Composition playback** | Smooth play through all clips | `EditorCompositionBuilder`, `EditorViewModel` | `AVMutableComposition` |
+| **Orientation fix** | Portrait video not rotated in preview | `AVMutableVideoComposition`, `preferredTransform` | Video composition transforms |
+
+---
+
+## 12. What to build next (good learning projects)
+
+1. **Export** — pipe `EditorCompositionBuilder` output to **`AVAssetExportSession`** and save to Photos.
+2. **Undo** — snapshot `clips` + `timelinePosition` on each edit; learn command pattern.
+3. **Speed tool** — `scaleTimeRange` on composition segments or adjust `EditorClip.speed` + rebuild.
+4. **Thumbnail filmstrip** — multiple **`AVAssetImageGenerator`** frames per clip (performance challenge).
+5. **Persist projects** — Codable project file storing clip IDs + trim, not raw video.
+
+If you outgrow this README, write a short **`EXPORT.md`** next once export ships — mirror the structure of §4.

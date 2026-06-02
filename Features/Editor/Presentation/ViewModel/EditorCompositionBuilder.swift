@@ -59,18 +59,18 @@ enum EditorCompositionBuilder {
                 )
                 let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
 
-                if let sourceVideo = avAsset.tracks(withMediaType: .video).first {
+                if let sourceVideo = try? await avAsset.loadTracks(withMediaType: .video).first {
                     try? compositionVideoTrack.insertTimeRange(
                         sourceRange,
                         of: sourceVideo,
                         at: cursor
                     )
-                    let transform = aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
                     videoSegments.append(VideoSegment(timeRange: segmentRange, transform: transform))
                 }
 
                 if let compositionAudioTrack,
-                   let sourceAudio = avAsset.tracks(withMediaType: .audio).first {
+                   let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first {
                     try? compositionAudioTrack.insertTimeRange(
                         sourceRange,
                         of: sourceAudio,
@@ -79,10 +79,10 @@ enum EditorCompositionBuilder {
                 }
             } else if let photoURL = await photoVideoURL(for: clip.asset, duration: clip.duration) {
                 let photoAsset = AVURLAsset(url: photoURL)
-                if let sourceVideo = photoAsset.tracks(withMediaType: .video).first {
+                if let sourceVideo = try? await photoAsset.loadTracks(withMediaType: .video).first {
                     let fullRange = CMTimeRange(start: .zero, duration: segmentDuration)
                     try? compositionVideoTrack.insertTimeRange(fullRange, of: sourceVideo, at: cursor)
-                    let transform = aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
                     videoSegments.append(VideoSegment(timeRange: segmentRange, transform: transform))
                 }
             }
@@ -92,14 +92,22 @@ enum EditorCompositionBuilder {
 
         guard cursor.seconds > 0 else { return nil }
 
-        let item = AVPlayerItem(asset: composition)
-        item.audioTimePitchAlgorithm = .spectral
+        let item = await AVPlayerItem(asset: composition)
 
-        if !videoSegments.isEmpty {
-            item.videoComposition = makeVideoComposition(
+        // Build the video composition off-main and avoid capturing non-Sendable tracks in a @Sendable closure.
+        let segmentsSnapshot = videoSegments
+        let videoComposition: AVMutableVideoComposition? = {
+            guard !segmentsSnapshot.isEmpty else { return nil }
+            // Using the same compositionVideoTrack directly here is fine because we’re not inside a @Sendable closure.
+            return makeVideoComposition(
                 compositionTrack: compositionVideoTrack,
-                segments: videoSegments
+                segments: segmentsSnapshot
             )
+        }()
+
+        await MainActor.run {
+            item.audioTimePitchAlgorithm = .spectral
+            item.videoComposition = videoComposition
         }
 
         return item
@@ -130,9 +138,9 @@ enum EditorCompositionBuilder {
     }
 
     /// Applies `preferredTransform` and scales the track into `renderSize` without stretching.
-    private static func aspectFitTransform(for track: AVAssetTrack, renderSize: CGSize) -> CGAffineTransform {
-        let naturalSize = track.naturalSize
-        let preferred = track.preferredTransform
+    private static func aspectFitTransform(for track: AVAssetTrack, renderSize: CGSize) async -> CGAffineTransform {
+        let naturalSize = (try? await track.load(.naturalSize)) ?? .zero
+        let preferred = (try? await track.load(.preferredTransform)) ?? .identity
 
         let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
         let videoWidth = abs(orientedRect.width)
@@ -231,10 +239,19 @@ enum EditorCompositionBuilder {
         input.markAsFinished()
         writer.endSession(atSourceTime: frameDuration)
 
-        return await withCheckedContinuation { cont in
+        let didAppend = ok
+        let outputURL = url
+
+        return await withCheckedContinuation { continuation in
             writer.finishWriting {
-                let success = ok && writer.status == .completed
-                cont.resume(returning: success ? url : nil)
+                // Avoid capturing `writer` here — its completion handler is @Sendable.
+                // File size is enough to confirm a successful write for this temp clip.
+                var isValid = false
+                if didAppend,
+                   let size = try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                    isValid = size > 0
+                }
+                continuation.resume(returning: isValid ? outputURL : nil)
             }
         }
     }
