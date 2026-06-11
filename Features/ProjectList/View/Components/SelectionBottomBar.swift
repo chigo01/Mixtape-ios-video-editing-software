@@ -10,6 +10,7 @@ import SwiftUI
 struct SelectionBottomBar: View {
     let vm: PhotoLibraryViewModel
     var confirmTitle: String = "Next"
+    var isLoading: Bool = false
     var onNext: () -> Void
 
     var body: some View {
@@ -29,11 +30,19 @@ struct SelectionBottomBar: View {
             Spacer(minLength: 8)
 
             Button(action: onNext) {
-                HStack(spacing: 6) {
-                    Text(confirmTitle)
+                HStack(spacing: 8) {
+                    if isLoading {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.black)
+                            .scaleEffect(0.85)
+                    }
+                    Text(isLoading ? "Preparing…" : confirmTitle)
                         .font(.system(size: 14, weight: .semibold))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
+                    if !isLoading {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .bold))
+                    }
                 }
                 .foregroundColor(.black)
                 .padding(.horizontal, 22)
@@ -41,6 +50,7 @@ struct SelectionBottomBar: View {
                 .background(Capsule().fill(Color.appColors.primaryColor))
             }
             .buttonStyle(.plain)
+            .disabled(isLoading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

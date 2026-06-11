@@ -18,8 +18,8 @@ struct EditorTimeline: View {
     private let rulerLabelHeight: CGFloat = 14
     /// Drag here (or on the ruler labels) to scrub; pinch-scroll is disabled while dragging.
     private let scrubRailHeight: CGFloat = 24
-    private let clipsLaneHeight: CGFloat = 72
-    private let audioLaneHeight: CGFloat = 36
+    private let clipsLaneHeight: CGFloat = 52
+    private let audioLaneHeight: CGFloat = 28
     /// Require this much drag on filmstrips before scrubbing claims the gesture (keeps horizontal scroll natural).
     private let clipScrubMinimumDistance: CGFloat = 18
     private let audioScrubMinimumDistance: CGFloat = 18
@@ -29,7 +29,7 @@ struct EditorTimeline: View {
     @State private var isScrubbing = false
     @State private var playheadDragBaselineContentX: CGFloat?
 
-    private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 24 }
+    private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 20 }
     private var audioLaneResolvedHeight: CGFloat { vm.audioTrack == nil ? 0 : audioLaneHeight }
 
     private var playheadStackHeight: CGFloat {
@@ -61,7 +61,7 @@ struct EditorTimeline: View {
 
                         if !vm.textOverlays.isEmpty {
                             textOverlayRow(totalWidth: totalWidth, layout: layout)
-                                .frame(height: 24, alignment: .leading)
+                                .frame(height: textOverlayLaneHeight, alignment: .leading)
                         }
 
                         clipsRow(layout: layout)
@@ -413,33 +413,31 @@ private struct ClipThumb: View {
     let onTrimChanged: (TimeInterval, TimeInterval) -> Void
     let onTrimEnded: () -> Void
 
-    @State private var image: UIImage?
     @State private var isTrimming = false
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Group {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: width, height: height)
-                        .clipped()
-                } else {
-                    Color.white.opacity(0.06)
+            ClipFilmstripView(clip: clip, width: width, height: height)
+
+            HStack(spacing: 4) {
+                if clip.isVideo {
+                    Text(format(duration: clip.duration))
+                        .font(.system(size: 8, weight: .semibold).monospacedDigit())
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                }
+                if abs(clip.speed - 1.0) > 0.02 {
+                    Text(String(format: "%.2g×", clip.speed))
+                        .font(.system(size: 8, weight: .bold).monospacedDigit())
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.appColors.primaryColor.opacity(0.85)))
                 }
             }
-            .frame(width: width, height: height)
-
-            if clip.isVideo {
-                Text(format(duration: clip.duration))
-                    .font(.system(size: 8, weight: .semibold).monospacedDigit())
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.black.opacity(0.55)))
-                    .padding(4)
-            }
+            .padding(4)
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -475,7 +473,6 @@ private struct ClipThumb: View {
             onSelectForEditing()
         }
         .gesture(thumbScrubGesture())
-        .onAppear(perform: load)
     }
 
     private func thumbScrubGesture() -> some Gesture {
@@ -498,49 +495,6 @@ private struct ClipThumb: View {
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 
-    private func load() {
-        reloadThumbnailIfNeeded()
-    }
-
-    private func reloadThumbnailIfNeeded() {
-        let manager = PHImageManager.default()
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
-        let scale = UIScreen.main.scale
-        let target = CGSize(width: width * scale, height: height * scale)
-
-        if clip.isVideo {
-            let videoOptions = PHVideoRequestOptions()
-            videoOptions.deliveryMode = .fastFormat
-            videoOptions.isNetworkAccessAllowed = true
-            manager.requestAVAsset(forVideo: clip.asset, options: videoOptions) { asset, _, _ in
-                guard let asset else { return }
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = target
-                let time = CMTime(
-                    seconds: clip.trimStart,
-                    preferredTimescale: 600
-                )
-                guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return }
-                let uiImage = UIImage(cgImage: cgImage)
-                Task { @MainActor in self.image = uiImage }
-            }
-            return
-        }
-
-        manager.requestImage(
-            for: clip.asset,
-            targetSize: target,
-            contentMode: .aspectFill,
-            options: options
-        ) { result, _ in
-            guard let result else { return }
-            Task { @MainActor in self.image = result }
-        }
-    }
 }
 
 // MARK: - Shapes

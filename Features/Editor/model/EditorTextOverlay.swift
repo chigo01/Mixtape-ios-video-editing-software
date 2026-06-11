@@ -13,8 +13,8 @@ struct EditorTextOverlay: Identifiable, Hashable {
     var startTime: TimeInterval
     var endTime: TimeInterval
 
-    init(text: String, startTime: TimeInterval, endTime: TimeInterval) {
-        self.id = UUID()
+    init(id: UUID = UUID(), text: String, startTime: TimeInterval, endTime: TimeInterval) {
+        self.id = id
         self.text = text
         self.startTime = startTime
         self.endTime = endTime

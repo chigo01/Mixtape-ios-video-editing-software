@@ -39,6 +39,7 @@ struct EditorClip: Identifiable, Hashable {
     }
 
     init(
+        id: UUID = UUID(),
         asset: PHAsset,
         originalDuration: TimeInterval,
         trimStart: TimeInterval,
@@ -46,7 +47,7 @@ struct EditorClip: Identifiable, Hashable {
         speed: Float = 1.0,
         volume: Float = 1.0
     ) {
-        self.id = UUID()
+        self.id = id
         self.asset = asset
         self.originalDuration = originalDuration
         self.trimStart = trimStart
@@ -100,6 +101,14 @@ struct EditorClip: Identifiable, Hashable {
         )
     }
 
-    static func == (lhs: EditorClip, rhs: EditorClip) -> Bool { lhs.id == rhs.id }
+    static func == (lhs: EditorClip, rhs: EditorClip) -> Bool {
+        lhs.id == rhs.id
+            && lhs.asset.localIdentifier == rhs.asset.localIdentifier
+            && lhs.trimStart == rhs.trimStart
+            && lhs.trimEnd == rhs.trimEnd
+            && lhs.speed == rhs.speed
+            && lhs.volume == rhs.volume
+    }
+
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }

@@ -38,6 +38,18 @@
 		CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */; };
 		CED677A82FADDF6E00531EBF /* MediaLibraryPickerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */; };
 		CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */; };
+		CEEAAC5E2FB87D8900EF5188 /* SwipeBackEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */; };
+		BA0EDF00DEAFB001CAFE0110 /* EditorTimelineSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */; };
+		BA0EDF00DEAFB001CAFE0111 /* EditorUndoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */; };
+		BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */; };
+		BA0EDF00DEAFB001CAFE0113 /* ClipThumbnailService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */; };
+		BA0EDF00DEAFB001CAFE0114 /* SpeedToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0014 /* SpeedToolPanel.swift */; };
+		BA0EDF00DEAFB001CAFE0115 /* ClipFilmstripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0015 /* ClipFilmstripView.swift */; };
+		CED677A02FADDF701531EBF /* EditorProject.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A02FADDF700531EBF /* EditorProject.swift */; };
+		CED677A12FADDF711531EBF /* ProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A12FADDF700531EBF /* ProjectStore.swift */; };
+		CED677A22FADDF721531EBF /* ProjectListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A22FADDF700531EBF /* ProjectListViewModel.swift */; };
+		BA0EDF00DEAFB001CAFE0116 /* EditorExportSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */; };
+		BA0EDF00DEAFB001CAFE0117 /* EditorExportScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -73,6 +85,18 @@
 		CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryPickerScreen.swift; sourceTree = "<group>"; };
 		CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Mixtape-Info.plist"; sourceTree = "<group>"; };
 		CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionConfigurator.swift; sourceTree = "<group>"; };
+		CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeBackEnabler.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimelineSnapshot.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorUndoManager.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportService.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipThumbnailService.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0014 /* SpeedToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeedToolPanel.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0015 /* ClipFilmstripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipFilmstripView.swift; sourceTree = "<group>"; };
+		CED677A02FADDF700531EBF /* EditorProject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProject.swift; sourceTree = "<group>"; };
+		CED677A12FADDF700531EBF /* ProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStore.swift; sourceTree = "<group>"; };
+		CED677A22FADDF700531EBF /* ProjectListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListViewModel.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportSettings.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportScreen.swift; sourceTree = "<group>"; };
 		FD381624E89BEA467A3F6BF0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -100,6 +124,7 @@
 			children = (
 				CED6779F2FAD0DA700531EBF /* Components */,
 				CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */,
+				CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */,
 				494AF242A7E19C2ED189AC1D /* AppTheme.swift */,
 				CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */,
 			);
@@ -127,6 +152,7 @@
 			isa = PBXGroup;
 			children = (
 				A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */,
+				CED677A22FADDF700531EBF /* ProjectListViewModel.swift */,
 			);
 			path = ViewModel;
 			sourceTree = "<group>";
@@ -146,6 +172,9 @@
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
+				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
+				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
+				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -157,6 +186,8 @@
 				BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioTrack.swift */,
+				BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */,
+				BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -186,6 +217,8 @@
 				BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */,
 				BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */,
 				BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */,
+				BA0EDF00DEAFB001CAFE0014 /* SpeedToolPanel.swift */,
+				BA0EDF00DEAFB001CAFE0015 /* ClipFilmstripView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -194,6 +227,7 @@
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */,
+				BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */,
 			);
 			path = Screens;
 			sourceTree = "<group>";
@@ -212,9 +246,18 @@
 			children = (
 				CED6779A2FACEBF700531EBF /* Model */,
 				A0B0F00DDEAFB001CAFE0200 /* ViewModel */,
+				CED677B02FADDF700531EBF /* Services */,
 				CED677A92FADDF6E00531EBF1 /* View */,
 			);
 			path = ProjectList;
+			sourceTree = "<group>";
+		};
+		CED677B02FADDF700531EBF /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				CED677A12FADDF700531EBF /* ProjectStore.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		CED677A92FADDF6E00531EBF1 /* View */ = {
@@ -240,6 +283,7 @@
 			isa = PBXGroup;
 			children = (
 				CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */,
+				CED677A02FADDF700531EBF /* EditorProject.swift */,
 				A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */,
 				A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */,
 			);
@@ -350,6 +394,7 @@
 				CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */,
 				CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */,
 				CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */,
+				CEEAAC5E2FB87D8900EF5188 /* SwipeBackEnabler.swift in Sources */,
 				CED677A42FAD2D2B00531EBF /* ProjectCardView.swift in Sources */,
 				CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */,
 				CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */,
@@ -374,6 +419,17 @@
 				BA0EDF00DEAFB001CAFE0109 /* EditorBottomToolbar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0110 /* EditorTimelineSnapshot.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0111 /* EditorUndoManager.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0113 /* ClipThumbnailService.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0114 /* SpeedToolPanel.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0115 /* ClipFilmstripView.swift in Sources */,
+				CED677A02FADDF701531EBF /* EditorProject.swift in Sources */,
+				CED677A12FADDF711531EBF /* ProjectStore.swift in Sources */,
+				CED677A22FADDF721531EBF /* ProjectListViewModel.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0116 /* EditorExportSettings.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0117 /* EditorExportScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -388,6 +444,7 @@
 				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -435,6 +492,7 @@
 				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

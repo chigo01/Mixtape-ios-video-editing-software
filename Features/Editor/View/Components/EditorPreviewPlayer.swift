@@ -12,6 +12,8 @@ import Photos
 
 struct EditorPreviewPlayer: View {
     let vm: EditorViewModel
+    /// When true, the preview stretches to fill a non–9:16 parent frame (fullscreen sheet only).
+    var fillsBounds: Bool = false
     var onFullscreen: () -> Void = {}
 
     @State private var posterImage: UIImage?
@@ -26,19 +28,42 @@ struct EditorPreviewPlayer: View {
     }
 
     var body: some View {
+        Group {
+            if fillsBounds {
+                previewSurface
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            } else {
+                previewSurface
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(EditorPreviewLayout.aspectWidthOverHeight, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+        .task { loadPoster() }
+        .onChange(of: vm.playbackClipID) { _, _ in loadPoster() }
+        .onChange(of: vm.selectedClipID) { _, _ in
+            if vm.playbackInfo == nil { loadPoster() }
+        }
+    }
+
+    private var previewSurface: some View {
         ZStack {
             background
 
             if let posterImage, !showingVideoLayer {
                 Image(uiImage: posterImage)
                     .resizable()
-                    .scaledToFit()
+                    .modifier(PreviewMediaScaling(fillsBounds: fillsBounds))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if showingVideoLayer, let player = vm.player {
-                PlayerLayerView(player: player)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PlayerLayerView(
+                    player: player,
+                    videoGravity: fillsBounds ? .resizeAspectFill : .resizeAspect
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if shouldShowLoading {
@@ -52,15 +77,6 @@ struct EditorPreviewPlayer: View {
                 controlsHUD
                     .padding(.bottom, 14)
             }
-        }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(EditorPreviewLayout.aspectWidthOverHeight, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .padding(.horizontal, 0)
-        .onAppear { loadPoster() }
-        .onChange(of: vm.playbackClipID) { _, _ in loadPoster() }
-        .onChange(of: vm.selectedClipID) { _, _ in
-            if vm.playbackInfo == nil { loadPoster() }
         }
     }
 
@@ -121,6 +137,18 @@ struct EditorPreviewPlayer: View {
         ) { image, _ in
             guard let image else { return }
             Task { @MainActor in self.posterImage = image }
+        }
+    }
+}
+
+private struct PreviewMediaScaling: ViewModifier {
+    let fillsBounds: Bool
+
+    func body(content: Content) -> some View {
+        if fillsBounds {
+            content.scaledToFill()
+        } else {
+            content.scaledToFit()
         }
     }
 }

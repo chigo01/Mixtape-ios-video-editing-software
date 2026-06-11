@@ -27,6 +27,27 @@ final class EditorViewModel {
     var isPlaying: Bool = false
     var selectedTool: EditorTool?
 
+    // MARK: Project persistence
+
+    private(set) var projectID: UUID
+    private let projectCreatedAt: Date
+    var projectTitle: String
+
+    // MARK: Export
+
+    var isExporting: Bool = false
+    var exportProgress: Double = 0
+    var exportMessage: String?
+    private(set) var exportedFileURL: URL?
+
+    @ObservationIgnored
+    private var exportTask: Task<Void, Never>?
+
+    // MARK: Undo
+
+    private(set) var canUndo: Bool = false
+    private(set) var canRedo: Bool = false
+
     // MARK: Player
 
     private(set) var player: AVPlayer?
@@ -37,14 +58,26 @@ final class EditorViewModel {
     private var tickTimer: Timer?
     @ObservationIgnored
     private var compositionFingerprint: String?
+    @ObservationIgnored
+    private let undoManager = EditorUndoManager()
+    @ObservationIgnored
+    private var trimUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var speedUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var saveTask: Task<Void, Never>?
 
     // MARK: Init
 
-    init(media: [MediaItem]) {
-        let clips = media.map { EditorClip(asset: $0.asset) }
+    init(project: EditorProject) {
+        self.projectID = project.id
+        self.projectCreatedAt = project.createdAt
+        self.projectTitle = project.title
+        let clips = EditorProjectResolver.clips(from: project.clips)
         self.clips = clips
-        self.selectedClipID = clips.first?.id
-        self.textOverlays = []
+        self.selectedClipID = project.selectedClipID ?? clips.first?.id
+        self.timelinePosition = project.timelinePosition
+        self.textOverlays = project.textOverlays.map { $0.toOverlay() }
         self.audioTrack = nil
     }
 
@@ -102,14 +135,12 @@ final class EditorViewModel {
         return (last, clips.count - 1, last.duration)
     }
 
-// MARK: Selection
+    // MARK: Selection
 
-    /// Clip targeted by editing tools. Does **not** move the playhead—timeline seeks are one continuous sequence.
     func selectClipForEditing(_ id: UUID) {
         selectedClipID = id
     }
 
-    /// Jump playhead to the start of a clip (e.g. future “go to clip” affordance).
     func jumpToClipStart(_ id: UUID) {
         guard let idx = clips.firstIndex(where: { $0.id == id }) else { return }
         timelinePosition = timelineOffsetForClipIndex(idx)
@@ -120,7 +151,20 @@ final class EditorViewModel {
     }
 
     func selectTool(_ tool: EditorTool) {
-        selectedTool = (selectedTool == tool) ? nil : tool
+        if selectedTool == .speed, tool != .speed {
+            finalizeSpeedEditUndo()
+        }
+
+        if selectedTool == tool {
+            if tool == .speed { finalizeSpeedEditUndo() }
+            selectedTool = nil
+            return
+        }
+
+        selectedTool = tool
+        if tool == .speed {
+            speedUndoSnapshot = currentSnapshot()
+        }
     }
 
     func performToolAction(_ tool: EditorTool) {
@@ -133,10 +177,41 @@ final class EditorViewModel {
         }
     }
 
+    private func finalizeSpeedEditUndo() {
+        guard let before = speedUndoSnapshot else { return }
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        speedUndoSnapshot = nil
+    }
+
+    // MARK: Speed
+
+    func setSpeed(clipID: UUID, speed: Float) {
+        guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        var clip = clips[idx]
+        clip.speed = min(max(speed, 0.25), 3.0)
+        clips[idx] = clip
+        timelinePosition = min(timelinePosition, totalDuration)
+        invalidateComposition()
+    }
+
+    func commitSpeed(clipID: UUID, speed: Float) {
+        setSpeed(clipID: clipID, speed: speed)
+        finalizeSpeedEditUndo()
+        speedUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
     // MARK: Clips
 
-    /// Updates trim points for a clip; values are clamped to valid source ranges.
     func setTrim(clipID: UUID, trimStart: TimeInterval, trimEnd: TimeInterval) {
+        if trimUndoSnapshot == nil {
+            trimUndoSnapshot = currentSnapshot()
+        }
+
         guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
         var clip = clips[idx]
         let minSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
@@ -153,16 +228,23 @@ final class EditorViewModel {
     }
 
     func commitTrimEdit() {
+        if let before = trimUndoSnapshot {
+            undoManager.pushUndoState(before)
+            trimUndoSnapshot = nil
+            refreshUndoState()
+            scheduleSave()
+        }
         invalidateComposition()
         Task { await alignPlaybackToTimeline() }
     }
 
-    /// Splits the clip under the playhead at the current timeline position.
     func splitAtPlayhead() {
         guard let info = clipAndLocalTime(at: timelinePosition) else { return }
 
         let splitSource = info.clip.sourceTime(forExportedLocal: info.localTime)
         guard let parts = info.clip.split(atSourceTime: splitSource) else { return }
+
+        registerUndoIfNeeded()
 
         if isPlaying {
             stopPlaybackTicking()
@@ -177,16 +259,15 @@ final class EditorViewModel {
         selectedClipID = parts.right.id
         timelinePosition = timelineOffsetForClipIndex(index) + parts.left.duration
         invalidateComposition()
+        scheduleSave()
 
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         Task { await alignPlaybackToTimeline() }
     }
 
-    // MARK: Insert
-
-    /// Inserts new clips immediately after the clip at `afterIndex` (append when `afterIndex` is the last clip).
     func insertClips(from media: [MediaItem], afterIndex: Int) {
         guard !media.isEmpty else { return }
+        registerUndoIfNeeded()
 
         if isPlaying {
             stopPlaybackTicking()
@@ -204,8 +285,91 @@ final class EditorViewModel {
 
         timelinePosition = timelineOffsetForClipIndex(insertAt)
         invalidateComposition()
+        scheduleSave()
 
         Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Undo / Redo
+
+    func undo() {
+        guard let restored = undoManager.undo(replacing: currentSnapshot()) else { return }
+        applySnapshot(restored)
+        refreshUndoState()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func redo() {
+        guard let restored = undoManager.redo(replacing: currentSnapshot()) else { return }
+        applySnapshot(restored)
+        refreshUndoState()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Export
+
+    func formatDuration(_ duration: TimeInterval) -> String {
+        let total = Int(duration.rounded())
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    func startExport(settings: EditorExportSettings) {
+        guard !clips.isEmpty, !isExporting else { return }
+        exportTask?.cancel()
+        exportedFileURL = nil
+        exportMessage = nil
+
+        exportTask = Task {
+            isExporting = true
+            exportProgress = 0
+            exportMessage = "Rendering clips…"
+
+            do {
+                let clipsSnapshot = clips
+                let url = try await EditorExportService.export(clips: clipsSnapshot, settings: settings) { progress in
+                    Task { @MainActor in
+                        self.exportProgress = progress
+                    }
+                }
+
+                guard !Task.isCancelled else { return }
+
+                exportMessage = "Saving to Photos…"
+                try await EditorExportService.saveVideoToPhotoLibrary(url: url)
+                exportedFileURL = url
+                exportMessage = "Saved to Photos"
+                exportProgress = 1
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
+                exportMessage = nil
+            } catch EditorExportError.exportCancelled {
+                exportMessage = nil
+            } catch {
+                exportMessage = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+
+            isExporting = false
+        }
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+        EditorExportService.cancelCurrentExport()
+        isExporting = false
+        exportProgress = 0
+        exportMessage = nil
+    }
+
+    func clearExportState() {
+        if let url = exportedFileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        exportedFileURL = nil
+        exportMessage = nil
+        exportProgress = 0
     }
 
     // MARK: Playback
@@ -233,7 +397,6 @@ final class EditorViewModel {
         commitTimelineAfterScrub()
     }
 
-    /// Lightweight scrubbing: updates global playhead only; pauses playback. Does not retarget the editing selection.
     func setTimelinePositionForScrub(_ time: TimeInterval) {
         if isPlaying {
             stopPlaybackTicking()
@@ -245,6 +408,7 @@ final class EditorViewModel {
 
     func commitTimelineAfterScrub() {
         Task { await alignPlaybackToTimeline() }
+        scheduleSave()
     }
 
     // MARK: Lifecycle
@@ -259,15 +423,73 @@ final class EditorViewModel {
         player?.pause()
         player = nil
         compositionFingerprint = nil
+        saveTask?.cancel()
+        exportTask?.cancel()
+        EditorExportService.cancelCurrentExport()
         EditorCompositionBuilder.clearCaches()
         isPlaying = false
     }
 
-    // MARK: - Composition playback (single continuous stream)
+    func saveNow() {
+        saveTask?.cancel()
+        try? ProjectStore.shared.save(makeProject())
+    }
+
+    // MARK: - Private helpers
+
+    private func currentSnapshot() -> EditorTimelineSnapshot {
+        EditorTimelineSnapshot(
+            clips: clips,
+            timelinePosition: timelinePosition,
+            selectedClipID: selectedClipID,
+            textOverlays: textOverlays
+        )
+    }
+
+    private func applySnapshot(_ snapshot: EditorTimelineSnapshot) {
+        clips = snapshot.clips
+        timelinePosition = min(snapshot.timelinePosition, totalDuration)
+        selectedClipID = snapshot.selectedClipID
+        textOverlays = snapshot.textOverlays
+        invalidateComposition()
+    }
+
+    private func registerUndoIfNeeded() {
+        undoManager.pushUndoState(currentSnapshot())
+        refreshUndoState()
+    }
+
+    private func refreshUndoState() {
+        canUndo = undoManager.canUndo
+        canRedo = undoManager.canRedo
+    }
+
+    private func makeProject() -> EditorProject {
+        EditorProject(
+            id: projectID,
+            title: projectTitle,
+            createdAt: projectCreatedAt,
+            modifiedAt: Date(),
+            clips: clips.map { SavedEditorClip(from: $0) },
+            textOverlays: textOverlays.map { SavedTextOverlay(from: $0) },
+            audioTrack: audioTrack.map { SavedAudioTrack(from: $0) },
+            timelinePosition: timelinePosition,
+            selectedClipID: selectedClipID
+        )
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            try? ProjectStore.shared.save(makeProject())
+        }
+    }
 
     private func clipsFingerprint() -> String {
         clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
     }
 
@@ -287,8 +509,18 @@ final class EditorViewModel {
 
         let savedTime = timelinePosition
         let wasPlaying = isPlaying
+        let clipsSnapshot = clips
 
-        guard let item = await EditorCompositionBuilder.makePlayerItem(from: clips) else { return }
+        let item: AVPlayerItem?
+        if let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
+            item = warmed
+        } else {
+            item = await Task.detached(priority: .userInitiated) {
+                await EditorCompositionBuilder.makePlayerItem(from: clipsSnapshot)
+            }.value
+        }
+
+        guard let item else { return }
 
         if player == nil {
             AudioSessionConfigurator.configureForVideoPlayback()
@@ -322,8 +554,6 @@ final class EditorViewModel {
             )
         }
     }
-
-    // MARK: - Tick (photos advance from clock; videos follow AVPlayer)
 
     private func startPlaybackTicking() {
         stopPlaybackTicking()

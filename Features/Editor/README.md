@@ -6,13 +6,16 @@ This document explains **what the Mixtape editing flow does today** — from **N
 
 ## 1. From the home screen to the editor (project + media pick)
 
-The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos from the library → Next → editor**. There is no separate “save project” step yet; the **ordered selection** becomes the timeline.
+The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, and playhead — not raw video files.
 
 ### 1.1 App entry and home screen
 
 - **`MixtapeApp`** (`App/MixtapeApp.swift`) hosts **`ProjectListScreen`** in a `WindowGroup`.
-- **`ProjectListScreen`** (`Features/ProjectList/View/Screens/ProjectListScreen.swift`) uses a **`NavigationStack`**, title copy, and a **“New Project”** **`NavigationLink`** that pushes **`CreateProjectScreen`**.
-- The list of **`ProjectCardView`** rows is driven by **`projectMockModels`** today—placeholder “projects,” not wired to real persistence. The meaningful handoff into editing is **`CreateProjectScreen` → `EditorScreen(media:)`**.
+- **`ProjectListScreen`** (`Features/ProjectList/View/Screens/ProjectListScreen.swift`) owns a **value-based `NavigationStack(path:)`** driven by a **`ProjectListRoute`** enum (`.createProject` / `.editor(EditorProject)`). All pushes go through **`NavigationLink(value:)`** + a single **`navigationDestination(for: ProjectListRoute.self)`** — destinations are built **lazily** when pushed.
+  - **Why value-based?** The old eager `NavigationLink(destination:)` rows built an `EditorScreen` (and its `EditorViewModel` + PHAsset resolution) for **every** row on every render, and combined with `@State(initialValue:)` could push a **stale view model** — tapping the first card opened the *previously*-first project's clips after the list re-sorted by `modifiedAt`.
+- **`ProjectListScreen`** lists saved **`EditorProject`** files from **`ProjectStore`**. The list **reloads whenever the path empties** (`onChange(of: path)`), so new projects and edits appear immediately on return — no app restart.
+- **Project cards** are fully tappable (explicit **`contentShape`** — clipped `scaledToFill` images don't hit-test across their whole frame otherwise). **Long-press → Delete Project** shows a confirmation dialog, then `ProjectListViewModel.deleteProject` removes the JSON file via `ProjectStore`.
+- Each pushed editor gets **`.id(project.id)`** so view-model state can never leak between projects.
 
 ### 1.2 New Project screen = library + selection
 
@@ -29,35 +32,49 @@ The flow before **`EditorScreen`** is: **home list → New Project → pick phot
 - **Limited photo access:** header **+** calls **`presentLimitedLibraryPicker`** so users can expand which assets are visible.
 - **Denied / restricted:** UI prompts **Open Settings** (`openSettings()`).
 
-### 1.3 Next → editor
+### 1.3 Next → editor (with preload)
 
-- When **`selectedIDs`** is not empty, **`SelectionBottomBar`** appears in **`safeAreaInset(edge: .bottom)`**; **Next** sets **`goToEditor = true`**.
-- **`navigationDestination(isPresented: $goToEditor)`** presents **`EditorScreen(media: vm.selectedItems)`** — same navigation stack, passing the **ordered** **`[MediaItem]`**.
+- When **`selectedIDs`** is not empty, **`SelectionBottomBar`** appears in **`safeAreaInset(edge: .bottom)`**.
+- **Next** shows **“Preparing…”** while **`EditorCompositionBuilder.warmUp(from:)`** builds the preview composition in the background.
+- After preload finishes: **`EditorProject.new(from:)`** is saved via **`ProjectStore`**, then **`CreateProjectScreen`** hands the project back through its **`onProjectCreated`** closure. The home screen **replaces** the create route with the editor route (`path = [.editor(project)]`) — so **back from the editor lands on home**, not on the media picker.
+- Clip order in the saved project matches picker **selection order**.
 
 ### 1.4 `MediaItem` → `EditorClip`
 
-- **`MediaItem`** (`Features/ProjectList/Model/MediaItem.swift`) is the **picker** model ( **`PHAsset`** + helpers).
-- **`EditorViewModel(media: [MediaItem])`** maps each item to **`EditorClip(asset:)`** (`Features/Editor/Model/EditorClip.swift`). After this point, the editor only needs **`EditorClip`**, **`timelinePosition`**, and the player — the picker's job is done.
+- **`MediaItem`** (`Features/ProjectList/Model/MediaItem.swift`) is the **picker** model (`PHAsset` + helpers).
+- **`EditorProjectResolver.clips(from:)`** rehydrates **`EditorClip`** from **`SavedEditorClip`** (`assetLocalIdentifier` + trim/speed) via PhotoKit.
+- **`EditorViewModel(project:)`** loads resolved clips. After this point, the editor only needs **`EditorClip`**, **`timelinePosition`**, and the player.
 
 ### 1.5 Pre-editor file map
 
 | Path | Role |
 |------|------|
 | `App/MixtapeApp.swift` | Root scene → `ProjectListScreen`. |
-| `ProjectList/View/Screens/ProjectListScreen.swift` | Home; `NavigationLink` to create flow. |
-| `ProjectList/View/Screens/CreateProjectScreen.swift` | Thin wrapper → `MediaLibraryPickerScreen`, then `EditorScreen`. |
+| `ProjectList/View/Screens/ProjectListScreen.swift` | Home; owns `NavigationStack(path:)` + `ProjectListRoute`; delete with confirmation. |
+| `ProjectList/View/Screens/CreateProjectScreen.swift` | Picker → preload → save `EditorProject` → `onProjectCreated` (home swaps in the editor route). |
 | `ProjectList/View/Screens/MediaLibraryPickerScreen.swift` | Shared photo grid (new project + add clips in editor). |
 | `ProjectList/ViewModel/PhotoLibraryViewModel.swift` | Auth, fetch, filter, search, selection order. |
+| `ProjectList/ViewModel/ProjectListViewModel.swift` | Loads / deletes saved projects via `ProjectStore`. |
+| `ProjectList/Model/EditorProject.swift` | Codable project document (`SavedEditorClip`, etc.). |
+| `ProjectList/Services/ProjectStore.swift` | JSON read/write in Application Support. |
 | `ProjectList/Model/MediaItem.swift` | Row model wrapping `PHAsset`. |
 | `ProjectList/Model/MediaFilter.swift` | Filter chip enum. |
-| `ProjectList/View/Components/SelectionBottomBar.swift` | Count, duration summary, **Next**. |
+| `ProjectList/View/Components/SelectionBottomBar.swift` | Count, duration, **Next** with loading state. |
+| `ProjectList/View/Components/ProjectCardView.swift` | Home project card; whole card tappable (`contentShape`), text shadows for readability. |
 | `ProjectList/View/Components/MediaGridItemView.swift` | Thumbnail cell (with caching manager). |
+| `Core/SwipeBackEnabler.swift` | Restores edge-swipe back on screens with hidden nav bars. |
 
 ### 1.6 References (PhotoKit, privacy, navigation)
 
 - [PhotoKit](https://developer.apple.com/documentation/photokit) — **`PHAsset`**, **`PHFetchOptions`**, **`PHPhotoLibrary`**, **`PHAuthorizationStatus`** (including **`.limited`**).
 - [Delivering an enhanced privacy experience](https://developer.apple.com/documentation/photokit/delivering_an_enhanced_privacy_experience_in_your_photos_app) — limited library, picker.
-- [SwiftUI `NavigationStack`](https://developer.apple.com/documentation/swiftui/navigationstack), [`navigationDestination(isPresented:destination:)`](https://developer.apple.com/documentation/swiftui/view/navigationdestination(ispresented:destination:)).
+- [SwiftUI `NavigationStack`](https://developer.apple.com/documentation/swiftui/navigationstack), [`navigationDestination(for:destination:)`](https://developer.apple.com/documentation/swiftui/view/navigationdestination(for:destination:)) — value-based navigation; prefer this over eager `NavigationLink(destination:)` in lists (lazy destinations, no stale state, path can be rewritten programmatically).
+
+### 1.7 Swipe-back with custom top bars
+
+Every pushed screen hides the system chrome (`.toolbar(.hidden, for: .navigationBar)` + `.navigationBarBackButtonHidden(true)`) and draws its own top bar. UIKit then disables `interactivePopGestureRecognizer` — the edge-swipe back gesture — because its default delegate refuses to begin without a visible back button.
+
+**`Core/SwipeBackEnabler.swift`** restores it globally: a `UINavigationController` extension overrides `viewDidLoad` to make every navigation controller (including the one backing `NavigationStack`) its own gesture delegate, allowing the swipe whenever `viewControllers.count > 1` and nothing is presented. The count guard prevents swiping on the root, which would freeze UIKit navigation. Caveat: relies on SwiftUI being UIKit-backed (true through iOS 26).
 
 ---
 
@@ -83,14 +100,21 @@ So: **scrubbing the ruler** or **moving the playhead** updates `timelinePosition
 
 ## 3. Architecture overview
 
-**Navigation flow:** `ProjectListScreen` → **`CreateProjectScreen`** (picker) → **`EditorScreen`** (this subtree).
+**Navigation flow:** `ProjectListScreen` → **`CreateProjectScreen`** (picker) → **`EditorScreen`** (this subtree). The home screen owns the `NavigationStack` path; after project creation the picker route is **replaced** by the editor route, so back always returns home (see **§1.1 / §1.3**).
 
 ```
 EditorScreen
-├── EditorTopBar
-├── EditorPreviewPlayer      ← poster / AVPlayerLayer, HUD, fullscreen entry
-├── EditorTimeline          ← ruler, overlays, clips, playhead, horizontal scroll
-└── EditorBottomToolbar     ← tools (split, speed, …)
+├── EditorTopBar             ← back, undo/redo, Export → EditorExportScreen
+├── EditorPreviewPlayer      ← 9:16 card, AVPlayerLayer, HUD, fullscreen
+├── SpeedToolPanel           ← when SPEED tool active
+├── EditorTimeline           ← ruler, filmstrip clips, playhead, + insert
+└── EditorBottomToolbar      ← split, speed, volume, filter, text
+
+EditorExportScreen (pushed from Export)
+├── Preview + duration badge
+├── Resolution / frame rate / format settings
+├── File size estimate
+└── Export panel             ← progress, Cancel, Share on complete
 ```
 
 - **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, a **single** `AVPlayer?` backed by an **`AVMutableComposition`**, scrub/seek helpers, playback tick timer, and clip-editing APIs (trim, split, insert).
@@ -117,7 +141,7 @@ This follows **MVVM + unidirectional data flow**: the view model is the source o
    - For each **`EditorClip`**, inserts the trimmed source range (`trimStart` … `trimEnd`) at the correct **composition time** (sequential cursor).
    - **Videos:** `PHImageManager.requestAVAsset(forVideo:)` → insert video + audio tracks.
    - **Photos:** converts still → short silent video segment (via **`AVAssetWriter`**) so photos sit in the same composition.
-2. **`AVMutableVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview.
+2. An **`AVVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview. On **iOS 26+** it is built with the new **`AVVideoComposition.Configuration`** value type (plus `AVVideoCompositionInstruction.Configuration` / `AVVideoCompositionLayerInstruction.Configuration`); on older OS versions we fall back to the deprecated **`AVMutableVideoComposition`** subclasses, which Apple deprecated in iOS 26.
 3. **`EditorViewModel`** keeps **one** `AVPlayer` whose item is that composition.
 4. **`playbackTick`** reads **`player.currentTime()`** → updates **`timelinePosition`**. No manual “advance to next clip” hop.
 5. When clips change (trim commit, split, insert), **`invalidateComposition()`** forces a rebuild on next align/play.
@@ -147,7 +171,7 @@ The **+ insert slots** on the timeline are **UI-only gaps** (`TimelineLayout.ins
 ### 4.4 Useful reading
 
 - [AVMutableComposition](https://developer.apple.com/documentation/avfoundation/avmutablecomposition) — stitching clips.
-- [AVMutableVideoComposition](https://developer.apple.com/documentation/avfoundation/avmutablevideocomposition) — orientation, transforms, render size.
+- [AVVideoComposition.Configuration](https://developer.apple.com/documentation/avfoundation/avvideocomposition/configuration) — orientation, transforms, render size (iOS 26+ replacement for the deprecated [AVMutableVideoComposition](https://developer.apple.com/documentation/avfoundation/avmutablevideocomposition)). 
 - [AVAssetTrack.preferredTransform](https://developer.apple.com/documentation/avfoundation/avassettrack/1386708-preferredtransform) — why portrait video looks wrong without a video composition.
 - [AVAudioSession](https://developer.apple.com/documentation/avfaudio/avaudiosession) — categories, routing, silent switch behavior.
 - [AVFoundation Programming Guide (archive)](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html) — **Editing Assets** chapter; still the best conceptual intro to compositions.
@@ -157,9 +181,9 @@ The **+ insert slots** on the timeline are **UI-only gaps** (`TimelineLayout.ins
 
 ## 5. Preview layout and fullscreen
 
-- **Stage aspect ratio:** `EditorPreviewLayout.aspectWidthOverHeight` in `EditorClip.swift` (e.g. 9∶16) so every asset is shown in the same **editor canvas**.
-- **Inline preview:** `EditorPreviewPlayer` uses `.aspectRatio(..., contentMode: .fit)` so the stage fits inside the max height set by `EditorScreen` (a fraction of screen height).
-- **Wider stage:** smaller horizontal padding on `EditorScreen` lets the preview use more width before letterboxing.
+- **Stage aspect ratio:** `EditorPreviewLayout.aspectWidthOverHeight` in `EditorClip.swift` (9∶16) — fixed editor canvas for every asset.
+- **CapCut-style inline card:** `EditorScreen` constrains the preview with `maxWidth` (screen − 32pt inset) and `maxHeight` (~54% of screen). `EditorPreviewPlayer` uses `.aspectRatio(9:16, .fit)` so the card sizes itself with natural side margins — not edge-to-edge stretch.
+- **Video gravity:** inline uses `.resizeAspect` (letterbox inside the 9:16 frame); fullscreen sheet uses `.resizeAspectFill`.
 
 **Fullscreen:** Tapping the expand control calls `onFullscreen`, which presents a `fullScreenCover` with `EditorFullscreenPreviewSheet`. The **same** `EditorViewModel` (and thus the same `AVPlayer` when applicable) is used so playback state continues.
 
@@ -230,7 +254,7 @@ When a clip is selected, **`ClipTrimHandleRepresentable`** overlays UIKit trim b
 
 **Why UIKit for handles?** Precise drag clamping and hit-testing are easier with **`hitTest(_:with:)`** so only the handle bars capture touches — the clip body still receives **tap-to-select**.
 
-**Front vs back trim:** `trimStart` / `trimEnd` live on **`EditorClip`**. Timeline thumbnails use **aspect-fill** in the **cell size** (not stretched across a fake “filmstrip width”) so narrow clips don’t look vertically squashed.
+**Front vs back trim:** `trimStart` / `trimEnd` live on **`EditorClip`**. Timeline cells render a **`ClipFilmstripView`** — multiple `AVAssetImageGenerator` frames tiled across the clip width (see **§12.4**). Clip lane height is **52pt** (compact, room for overlay rows later).
 
 **Learn:**
 
@@ -256,10 +280,10 @@ Split is rejected if the playhead is too close to either edge (~0.25s minimum sp
 
 In `EditorScreen`:
 
-- `.task { await vm.setupPlayer() }` builds the first composition and seeks to the start.
-- `.onDisappear { vm.teardownPlayer() }` invalidates timers, removes observers, clears the player and composition caches.
+- `.task { await vm.setupPlayer() }` attaches the player (reuses warmed composition when available).
+- `.onDisappear { vm.saveNow(); vm.teardownPlayer() }` persists the project, then tears down timers, observers, and composition caches.
 
-When leaving the editor, always tear down expensive resources so you don’t leak `AVPlayer`, timers, or temp photo-video files.
+When leaving the editor, always save and tear down so you don’t leak `AVPlayer`, timers, or temp photo-video files.
 
 ---
 
@@ -269,15 +293,26 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 | Path | Role |
 |------|------|
-| `View/Screens/EditorScreen.swift` | Layout, fullscreen presentation wiring. |
-| `ViewModel/EditorViewModel.swift` | Timeline math, composition player, trim/split/insert, seek, tick. |
-| `Services/EditorCompositionBuilder.swift` | Builds `AVMutableComposition` + `AVVideoComposition` for preview. |
-| `View/Components/EditorTimeline.swift` | Ruler, scrub, clips, + insert slots, playhead, `TimelineLayout`. |
+| `View/Screens/EditorScreen.swift` | Editor layout, speed panel, navigates to export screen. |
+| `View/Screens/EditorExportScreen.swift` | Dedicated export UI: settings, progress, share. |
+| `ViewModel/EditorViewModel.swift` | Timeline, playback, undo, export orchestration, auto-save. |
+| `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
+| `Services/EditorCompositionBuilder.swift` | Shared `build(from:frameRate:)` for preview + export; speed via `scaleTimeRange`. |
+| `Services/EditorExportService.swift` | `AVAssetExportSession` with settings; save to Photos; cancel. |
+| `Services/EditorUndoManager.swift` | Snapshot undo/redo stack. |
+| `Services/ClipThumbnailService.swift` | Cached multi-frame filmstrip generation. |
+| `View/Components/EditorTimeline.swift` | Ruler, scrub, filmstrip clips, playhead, `TimelineLayout`. |
+| `View/Components/ClipFilmstripView.swift` | Tiled thumbnail row per clip. |
+| `View/Components/SpeedToolPanel.swift` | Speed presets + slider when SPEED tool is active. |
 | `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`). |
 | `View/Components/EditorPreviewPlayer.swift` | Inline preview, HUD, `PlayerLayerView`. |
-| `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Chrome and tools (split, speed, …). |
+| `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + editing tools. |
 | `Model/EditorClip.swift` | Clip model, trim/speed/split, preview aspect. |
+| `Model/EditorTimelineSnapshot.swift` | Undo snapshot (`clips`, playhead, selection). |
+| `ProjectList/Model/EditorProject.swift` | Codable project document (`SavedEditorClip`, etc.). |
+| `ProjectList/Services/ProjectStore.swift` | JSON persistence in Application Support. |
 | `Core/AudioSessionConfigurator.swift` | Speaker / headphone routing for preview audio. |
+| `Core/SwipeBackEnabler.swift` | Edge-swipe back despite hidden nav bars (see **§1.7**). |
 | `Model/EditorTextOverlay.swift` / `EditorAudioTrack.swift` / `EditorTool.swift` | Other timeline / tool types. |
 
 ---
@@ -296,9 +331,9 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 - [PhotoKit overview](https://developer.apple.com/documentation/photokit) — permissions, `PHAsset`, image vs video requests.
 
-**Composition + export (you are here for preview; export is next)**
+**Composition + export**
 
-- Preview already uses **`AVMutableComposition`**. Export will likely **reuse** `EditorCompositionBuilder` (or a sibling) with **`AVAssetExportSession`**. See [Exporting a single asset](https://developer.apple.com/documentation/avfoundation/avassetexportsession) and the archive guide [Editing](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html).
+- Preview and export both call **`EditorCompositionBuilder.build(from:frameRate:)`** — one pipeline, same 1080×1920 canvas and transforms. Export passes the user’s frame-rate setting in (the resulting `AVVideoComposition` is immutable, so `frameDuration` is set at build time, not patched afterwards). Export uses **`AVAssetExportSession.export(to:as:)`** via `EditorExportService`. See [AVAssetExportSession](https://developer.apple.com/documentation/avfoundation/avassetexportsession).
 
 **SwiftUI + UIKit together**
 
@@ -314,7 +349,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 ## 10. Suggested learning order
 
-1. Trace **home → `CreateProjectScreen` → `MediaLibraryPickerScreen` → `EditorScreen(media:)`** so you see how **selection order** becomes **timeline order**.
+1. Trace **home → `CreateProjectScreen` → `MediaLibraryPickerScreen` → `EditorScreen(project:)`** so you see how **selection order** becomes a saved **`EditorProject`** and timeline order.
 2. Read **`EditorClip.duration`**, **`trimStart`/`trimEnd`**, and **`clipAndLocalTime(at:)`** until you can predict which clip owns any **`timelinePosition`**.
 3. Read **`EditorCompositionBuilder.makePlayerItem`** top to bottom — that is the core of “one continuous preview.”
 4. Trace **`togglePlay` → `ensureCompositionPlayer` → `playbackTick`** and watch **`timelinePosition`** track **`player.currentTime()`**.
@@ -323,6 +358,8 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 7. Select a clip → drag trim handles → **`commitTrimEdit`** → watch composition rebuild.
 8. Park playhead mid-clip → **SPLIT** → play through the cut and notice **no player swap** (same composition, two source ranges).
 9. In the simulator: scrub ruler vs drag filmstrip vs tap-to-select vs trim handle drag — map each to the gesture / hit-test code.
+10. Tap **Export** → configure settings on **`EditorExportScreen`** → watch `EditorExportService` progress → confirm Photos + Share.
+11. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip.
 
 ---
 
@@ -339,16 +376,79 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Trim handles** | Drag start/end of clip source range | `ClipTrimHandleView`, `setTrim` | UIKit gestures in SwiftUI, clamping |
 | **Split** | Cut clip at playhead into two | `splitAtPlayhead`, `EditorClip.split` | Non-destructive trim ranges on same asset |
 | **Composition playback** | Smooth play through all clips | `EditorCompositionBuilder`, `EditorViewModel` | `AVMutableComposition` |
-| **Orientation fix** | Portrait video not rotated in preview | `AVMutableVideoComposition`, `preferredTransform` | Video composition transforms |
+| **Orientation fix** | Portrait video not rotated in preview | `AVVideoComposition.Configuration`, `preferredTransform` | Video composition transforms |
+| **Export** | Render timeline → MP4 → Photos | `EditorExportService`, `EditorTopBar` Export | `AVAssetExportSession` |
+| **Undo / Redo** | Snapshot restore after edits | `EditorUndoManager`, `EditorTimelineSnapshot` | Command / memento pattern |
+| **Speed tool** | 0.25×–3× per clip; composition `scaleTimeRange` | `SpeedToolPanel`, `EditorCompositionBuilder.applySpeed` | Timeline vs source time |
+| **Filmstrip thumbnails** | Multiple frames tiled per clip cell | `ClipFilmstripView`, `ClipThumbnailService` | `AVAssetImageGenerator` batching |
+| **Project persistence** | JSON project files; home list opens saved edits | `EditorProject`, `ProjectStore`, `ProjectListViewModel` | Codable + PhotoKit rehydration |
+| **Picker preload** | “Preparing…” on Next warms composition before editor | `EditorCompositionBuilder.warmUp`, `CreateProjectScreen` | Perceived performance |
+| **Dedicated export screen** | Resolution / FPS / format settings + progress panel | `EditorExportScreen`, `EditorExportSettings` | `AVAssetExportSession` presets |
+| **Smooth editor entry** | Composition build off main actor; deferred thumbnail load | `EditorViewModel`, `EditorScreen.task` | Main-thread responsiveness |
+| **iOS 26 video composition** | `AVVideoComposition.Configuration` with pre-26 fallback | `EditorCompositionBuilder.makeVideoComposition` | Deprecated-API migration, `#available` |
+| **Value-based home navigation** | Fixes “tap project A, open project B”; lazy destinations | `ProjectListRoute`, `ProjectListScreen` | `NavigationStack(path:)`, view identity |
+| **Create flow back-stack** | Back from editor skips picker; list refreshes on return | `CreateProjectScreen.onProjectCreated`, `onChange(of: path)` | Programmatic path rewriting |
+| **Project delete** | Long-press card → confirm → remove JSON | `ProjectListScreen`, `ProjectListViewModel.deleteProject` | `contextMenu`, `confirmationDialog` |
+| **Card polish** | Whole card tappable; scrim overlay removed | `ProjectCardView` (`contentShape`) | Hit-testing clipped images |
+| **Swipe-back restore** | Edge swipe pops despite hidden nav bars | `Core/SwipeBackEnabler.swift` | `interactivePopGestureRecognizer` delegate |
 
 ---
 
-## 12. What to build next (good learning projects)
+## 12. Feature guide (export, undo, speed, filmstrip, persist)
 
-1. **Export** — pipe `EditorCompositionBuilder` output to **`AVAssetExportSession`** and save to Photos.
-2. **Undo** — snapshot `clips` + `timelinePosition` on each edit; learn command pattern.
-3. **Speed tool** — `scaleTimeRange` on composition segments or adjust `EditorClip.speed` + rebuild.
-4. **Thumbnail filmstrip** — multiple **`AVAssetImageGenerator`** frames per clip (performance challenge).
-5. **Persist projects** — Codable project file storing clip IDs + trim, not raw video.
+### 12.1 Export
 
-If you outgrow this README, write a short **`EXPORT.md`** next once export ships — mirror the structure of §4.
+- Tap **Export** in `EditorTopBar` → navigates to **`EditorExportScreen`**.
+- Configure **resolution** (720p / 1080p / 4K), **frame rate** (24–120), and **format** (MP4 / MOV).
+- **File size** shows a rough estimate from duration + resolution.
+- Tap **EXPORT PROJECT** → `EditorViewModel.startExport(settings:)` runs `EditorExportService.export(clips:settings:)` using the same **`EditorCompositionBuilder.build(from:frameRate:)`** pipeline as preview.
+- Bottom **progress panel**: percentage, linear bar, **Cancel** while rendering.
+- On success: saved to Photos + **Share** sheet (system `UIActivityViewController`) and **Done**.
+- Requires **Photo Library Add** permission (`NSPhotoLibraryAddUsageDescription`).
+
+### 12.2 Undo / Redo
+
+- **Undo** / **Redo** buttons live in `EditorTopBar` (next to back).
+- `EditorUndoManager` stores **`EditorTimelineSnapshot`** (`clips`, `timelinePosition`, `selectedClipID`, `textOverlays`).
+- Registered automatically on: **split**, **insert**, **trim commit**, **speed change** (when SPEED panel closes).
+- After restore: `invalidateComposition()` + `alignPlaybackToTimeline()`.
+
+### 12.3 Speed tool
+
+- Tap **SPEED** in the bottom toolbar → `SpeedToolPanel` appears above the timeline.
+- Select a clip first. Use presets (0.5×–2×) or the slider (0.25×–3×).
+- `EditorClip.speed` drives timeline width (`duration`) and `sourceTime(forExportedLocal:)`.
+- `EditorCompositionBuilder` applies **`scaleTimeRange`** on inserted video/audio segments so playback matches the ruler.
+
+### 12.4 Thumbnail filmstrip
+
+- Each `ClipThumb` renders a **`ClipFilmstripView`** instead of a single poster frame.
+- `ClipThumbnailService` samples multiple times across `trimStart…trimEnd` with `AVAssetImageGenerator`.
+- Frame count scales with clip width (~1 frame per 26pt). Results are cached per clip/trim/speed.
+
+### 12.5 Persist projects
+
+- Projects are **`EditorProject`** JSON files in **Application Support / MixtapeProjects**.
+- Stores **`SavedEditorClip`** (`assetLocalIdentifier`, trim, speed, volume) — not raw video bytes.
+- **New project:** `CreateProjectScreen` saves on Next, then opens `EditorScreen(project:)`.
+- **Resume:** `ProjectListScreen` lists saved projects via **`ProjectListViewModel`**; tap anywhere on a **`ProjectCardView`** to reopen. The list re-sorts by `modifiedAt` and reloads each time the navigation path empties.
+- **Delete:** long-press a card → **Delete Project** → confirmation dialog → `ProjectStore.delete(id:)` removes the JSON file.
+- **Home card UI:** cover thumbnail from first clip; title and clip count use **text shadows** for readability (the old gradient scrim overlay was removed).
+- **Auto-save:** `EditorViewModel.scheduleSave()` debounces (~700ms) after edits; `saveNow()` on leave.
+
+### 12.6 PhotoKit thumbnail loading (home + export)
+
+- **`ProjectCardView.loadCover()`** must **not** use `withCheckedContinuation` with `.opportunistic` delivery — PhotoKit may call the handler **twice** (degraded preview, then final). Assign `coverImage` directly in the callback instead.
+- Same pattern as **`MediaThumbnailView`**: callback → `@MainActor` state update, no single-resume continuation.
+
+---
+
+## 13. What to build next
+
+1. **Volume tool** — per-clip `volume` + `AVAudioMix` in composition/export.
+2. **Text overlays** — add/edit/delete `textOverlays` + burn-in on export.
+3. **Background music** — wire `audioTrack` into composition (separate lane already stubbed in UI).
+4. **Filter tool** — `CIFilter` via `AVVideoComposition` or custom compositor.
+5. **Clip reorder / delete** — drag-and-drop timeline + undo integration.
+6. **Export preview playback** — tap play on `EditorExportScreen` preview header.
+7. **Project rename** — edit title on home (delete already ships via long-press + confirmation).

@@ -7,6 +7,12 @@ import AVFoundation
 import Photos
 import UIKit
 
+struct EditorCompositionBuildResult {
+    let composition: AVMutableComposition
+    let videoComposition: AVVideoComposition?
+    let duration: CMTime
+}
+
 enum EditorCompositionBuilder {
 
     private static let timescale: CMTimeScale = 600
@@ -14,14 +20,45 @@ enum EditorCompositionBuilder {
     private static let renderSize = CGSize(width: 1080, height: 1920)
     private static var assetCache: [String: AVAsset] = [:]
     private static var photoVideoCache: [String: URL] = [:]
+    private static var warmedPlayerItem: AVPlayerItem?
+    private static var warmedFingerprint: String?
+
+    /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
+    static func timelineFingerprint(for clips: [EditorClip]) -> String {
+        clips.map { clip in
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.duration)"
+        }.joined(separator: ";")
+    }
+
+    /// Pre-build the preview composition while the user is still on the media picker.
+    static func warmUp(from media: [MediaItem]) async {
+        let clips = media.map { EditorClip(asset: $0.asset) }
+        let fingerprint = timelineFingerprint(for: clips)
+        guard warmedFingerprint != fingerprint || warmedPlayerItem == nil else { return }
+
+        warmedPlayerItem = await Task.detached(priority: .userInitiated) {
+            await makePlayerItem(from: clips)
+        }.value
+        warmedFingerprint = fingerprint
+    }
+
+    /// Returns a pre-built item when the editor opens with the same media the picker warmed.
+    static func consumeWarmedPlayerItem(matching clips: [EditorClip]) -> AVPlayerItem? {
+        let fingerprint = timelineFingerprint(for: clips)
+        guard warmedFingerprint == fingerprint, let item = warmedPlayerItem else { return nil }
+        warmedPlayerItem = nil
+        warmedFingerprint = nil
+        return item
+    }
 
     private struct VideoSegment {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
     }
 
-    /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
-    static func makePlayerItem(from clips: [EditorClip]) async -> AVPlayerItem? {
+    /// Shared composition pipeline for preview and export.
+    /// `frameRate` drives the video composition's `frameDuration` (export passes the user's setting).
+    static func build(from clips: [EditorClip], frameRate: Int32 = 30) async -> EditorCompositionBuildResult? {
         guard !clips.isEmpty else { return nil }
 
         let composition = AVMutableComposition()
@@ -65,6 +102,13 @@ enum EditorCompositionBuilder {
                         of: sourceVideo,
                         at: cursor
                     )
+                    applySpeed(
+                        clip.speed,
+                        sourceDuration: sourceDuration,
+                        timelineDuration: segmentDuration,
+                        on: compositionVideoTrack,
+                        at: cursor
+                    )
                     let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
                     videoSegments.append(VideoSegment(timeRange: segmentRange, transform: transform))
                 }
@@ -74,6 +118,13 @@ enum EditorCompositionBuilder {
                     try? compositionAudioTrack.insertTimeRange(
                         sourceRange,
                         of: sourceAudio,
+                        at: cursor
+                    )
+                    applySpeed(
+                        clip.speed,
+                        sourceDuration: sourceDuration,
+                        timelineDuration: segmentDuration,
+                        on: compositionAudioTrack,
                         at: cursor
                     )
                 }
@@ -92,49 +143,100 @@ enum EditorCompositionBuilder {
 
         guard cursor.seconds > 0 else { return nil }
 
-        let item = await AVPlayerItem(asset: composition)
-
-        // Build the video composition off-main and avoid capturing non-Sendable tracks in a @Sendable closure.
         let segmentsSnapshot = videoSegments
-        let videoComposition: AVMutableVideoComposition? = {
+        let videoComposition: AVVideoComposition? = {
             guard !segmentsSnapshot.isEmpty else { return nil }
-            // Using the same compositionVideoTrack directly here is fine because we’re not inside a @Sendable closure.
             return makeVideoComposition(
                 compositionTrack: compositionVideoTrack,
-                segments: segmentsSnapshot
+                segments: segmentsSnapshot,
+                frameRate: frameRate
             )
         }()
 
+        return EditorCompositionBuildResult(
+            composition: composition,
+            videoComposition: videoComposition,
+            duration: cursor
+        )
+    }
+
+    /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
+    static func makePlayerItem(from clips: [EditorClip]) async -> AVPlayerItem? {
+        guard let built = await build(from: clips) else { return nil }
+
+        let item = await AVPlayerItem(asset: built.composition)
         await MainActor.run {
             item.audioTimePitchAlgorithm = .spectral
-            item.videoComposition = videoComposition
+            item.videoComposition = built.videoComposition
         }
-
         return item
+    }
+
+    private static func applySpeed(
+        _ speed: Float,
+        sourceDuration: CMTime,
+        timelineDuration: CMTime,
+        on track: AVMutableCompositionTrack,
+        at cursor: CMTime
+    ) {
+        guard abs(speed - 1.0) > 0.001, sourceDuration.seconds > 0 else { return }
+        let insertedRange = CMTimeRange(start: cursor, duration: sourceDuration)
+        track.scaleTimeRange(insertedRange, toDuration: timelineDuration)
     }
 
     // MARK: - Video composition (orientation + aspect fit)
 
     private static func makeVideoComposition(
         compositionTrack: AVMutableCompositionTrack,
-        segments: [VideoSegment]
-    ) -> AVMutableVideoComposition {
-        let composition = AVMutableVideoComposition()
-        composition.renderSize = renderSize
-        composition.frameDuration = CMTime(value: 1, timescale: 30)
+        segments: [VideoSegment],
+        frameRate: Int32
+    ) -> AVVideoComposition {
+        let frameDuration = CMTime(value: 1, timescale: frameRate)
 
-        composition.instructions = segments.map { segment in
-            let instruction = AVMutableVideoCompositionInstruction()
-            instruction.timeRange = segment.timeRange
+        if #available(iOS 26.0, *) {
+            let instructions: [AVVideoCompositionInstruction] = segments.map { segment in
+                var layerConfiguration = AVVideoCompositionLayerInstruction.Configuration(
+                    assetTrack: compositionTrack
+                )
+                layerConfiguration.setTransform(segment.transform, at: segment.timeRange.start)
 
-            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
-            layer.setTransform(segment.transform, at: segment.timeRange.start)
+                let instructionConfiguration = AVVideoCompositionInstruction.Configuration(
+                    backgroundColor: nil,
+                    enablePostProcessing: true,
+                    layerInstructions: [
+                        AVVideoCompositionLayerInstruction(configuration: layerConfiguration)
+                    ],
+                    requiredSourceSampleDataTrackIDs: [],
+                    timeRange: segment.timeRange
+                )
+                return AVVideoCompositionInstruction(configuration: instructionConfiguration)
+            }
 
-            instruction.layerInstructions = [layer]
-            return instruction
+            var configuration = AVVideoComposition.Configuration()
+            configuration.renderSize = renderSize
+            configuration.frameDuration = frameDuration
+            configuration.instructions = instructions
+            return AVVideoComposition(configuration: configuration)
+        } else {
+            // Pre-iOS 26 fallback: AVVideoComposition.Configuration is unavailable,
+            // so use the (now deprecated) mutable subclasses.
+            let composition = AVMutableVideoComposition()
+            composition.renderSize = renderSize
+            composition.frameDuration = frameDuration
+
+            composition.instructions = segments.map { segment in
+                let instruction = AVMutableVideoCompositionInstruction()
+                instruction.timeRange = segment.timeRange
+
+                let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
+                layer.setTransform(segment.transform, at: segment.timeRange.start)
+
+                instruction.layerInstructions = [layer]
+                return instruction
+            }
+
+            return composition
         }
-
-        return composition
     }
 
     /// Applies `preferredTransform` and scales the track into `renderSize` without stretching.
@@ -314,5 +416,7 @@ enum EditorCompositionBuilder {
     static func clearCaches() {
         assetCache.removeAll()
         photoVideoCache.removeAll()
+        warmedPlayerItem = nil
+        warmedFingerprint = nil
     }
 }

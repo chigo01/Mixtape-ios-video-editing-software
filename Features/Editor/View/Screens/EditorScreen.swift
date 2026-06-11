@@ -13,28 +13,43 @@ struct EditorScreen: View {
     @State private var vm: EditorViewModel
     @State private var isFullscreenPreview = false
     @State private var isMediaPickerPresented = false
+    @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @Environment(\.dismiss) private var dismiss
 
-    /// Fraction of available screen height for the preview stage (~CapCut balance: preview ≈ lower editor stack).
-    private let previewMaxHeightFraction: CGFloat = 0.45
+    private let editorChromeMinHeight: CGFloat = 228
+    private let previewHorizontalInset: CGFloat = 16
 
-    init(media: [MediaItem]) {
-        _vm = State(initialValue: EditorViewModel(media: media))
+    init(project: EditorProject) {
+        _vm = State(initialValue: EditorViewModel(project: project))
     }
 
     var body: some View {
         AppGlobalBackgroundScaffold {
             GeometryReader { geo in
                 VStack(spacing: 0) {
-                    EditorTopBar(onBack: { close() })
+                    EditorTopBar(
+                        onBack: { close() },
+                        onUndo: { vm.undo() },
+                        onRedo: { vm.redo() },
+                        onExport: { showExportScreen = true },
+                        canUndo: vm.canUndo,
+                        canRedo: vm.canRedo
+                    )
 
                     EditorPreviewPlayer(vm: vm) {
                         isFullscreenPreview = true
                     }
-                    .frame(maxWidth: .infinity, maxHeight: geo.size.height * previewMaxHeightFraction)
-                    .padding(.horizontal, 4)
+                    .frame(maxWidth: geo.size.width - (previewHorizontalInset * 2))
+                    .frame(maxHeight: inlinePreviewHeight(in: geo))
+                    .frame(maxWidth: .infinity)
                     .padding(.top, 2)
+
+                    if vm.selectedTool == .speed {
+                        SpeedToolPanel(vm: vm)
+                            .padding(.top, 8)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
 
                     EditorTimeline(vm: vm) { clipIndex in
                         insertAfterClipIndex = clipIndex
@@ -46,9 +61,14 @@ struct EditorScreen: View {
                     EditorBottomToolbar(vm: vm)
                 }
             }
+
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(isPresented: $showExportScreen) {
+            EditorExportScreen(vm: vm)
+        }
+        .animation(.easeInOut(duration: 0.2), value: vm.selectedTool)
         .fullScreenCover(isPresented: $isFullscreenPreview) {
             EditorFullscreenPreviewSheet(vm: vm, onClose: { isFullscreenPreview = false })
         }
@@ -64,16 +84,26 @@ struct EditorScreen: View {
             )
         }
         .task {
+            await Task.yield()
+            guard !Task.isCancelled else { return }
             await vm.setupPlayer()
         }
         .onDisappear {
+            vm.saveNow()
             vm.teardownPlayer()
         }
     }
 
     private func close() {
+        vm.saveNow()
         vm.teardownPlayer()
         dismiss()
+    }
+
+    private func inlinePreviewHeight(in geo: GeometryProxy) -> CGFloat {
+        let maxByChrome = geo.size.height - editorChromeMinHeight
+        let maxByFraction = geo.size.height * 0.54
+        return max(220, min(maxByChrome, maxByFraction))
     }
 }
 

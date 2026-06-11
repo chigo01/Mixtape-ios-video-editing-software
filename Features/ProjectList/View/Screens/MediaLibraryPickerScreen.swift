@@ -11,6 +11,7 @@ import Photos
 struct MediaLibraryPickerScreen: View {
     let title: String
     let confirmButtonTitle: String
+    var isConfirmLoading: Bool = false
     var onCancel: () -> Void
     var onConfirm: ([MediaItem]) -> Void
 
@@ -40,6 +41,7 @@ struct MediaLibraryPickerScreen: View {
                     SelectionBottomBar(
                         vm: vm,
                         confirmTitle: confirmButtonTitle,
+                        isLoading: isConfirmLoading,
                         onNext: confirmSelection
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -57,7 +59,7 @@ struct MediaLibraryPickerScreen: View {
 
     private func confirmSelection() {
         let picked = vm.selectedItems
-        guard !picked.isEmpty else { return }
+        guard !picked.isEmpty, !isConfirmLoading else { return }
         onConfirm(picked)
     }
 
