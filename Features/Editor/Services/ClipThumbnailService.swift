@@ -39,13 +39,16 @@ actor ClipThumbnailService {
         let span = max(0, clip.trimEnd - clip.trimStart)
         guard span > 0 else { return [] }
 
-        return (0..<count).compactMap { index in
+        var frames: [UIImage] = []
+        frames.reserveCapacity(count)
+        for index in 0..<count {
             let fraction = count == 1 ? 0.0 : Double(index) / Double(count - 1)
             let seconds = clip.trimStart + span * fraction
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
-            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { return nil }
-            return UIImage(cgImage: cgImage)
+            guard let cgImage = try? await generator.image(at: time).image else { continue }
+            frames.append(UIImage(cgImage: cgImage))
         }
+        return frames
     }
 
     private func photoFrames(for clip: EditorClip, count: Int, height: CGFloat) async -> [UIImage] {
