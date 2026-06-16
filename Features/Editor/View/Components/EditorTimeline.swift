@@ -28,6 +28,7 @@ struct EditorTimeline: View {
 
     @State private var isScrubbing = false
     @State private var playheadDragBaselineContentX: CGFloat?
+    @State private var reorderState = ClipReorderState()
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 20 }
     private var audioLaneResolvedHeight: CGFloat { vm.audioTrack == nil ? 0 : audioLaneHeight }
@@ -77,14 +78,20 @@ struct EditorTimeline: View {
                     }
                     .frame(width: totalWidth, height: paddedMinHeight, alignment: .top)
 
-                    playheadLine(layout: layout)
-                    playheadKnob(layout: layout)
+                    TimelinePlayheadLine(vm: vm, layout: layout, stackHeight: playheadStackHeight)
+                    TimelinePlayheadKnob(
+                        vm: vm,
+                        layout: layout,
+                        stackHeight: playheadStackHeight,
+                        isScrubbing: $isScrubbing,
+                        baselineContentX: $playheadDragBaselineContentX
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
                 .frame(height: paddedMinHeight)
             }
-            .scrollDisabled(isScrubbing)
+            .scrollDisabled(isScrubbing || reorderState.isDragging)
             .frame(width: geo.size.width, height: geo.size.height)
         }
     }
@@ -166,19 +173,58 @@ struct EditorTimeline: View {
     // MARK: Clips
 
     private func clipsRow(layout: TimelineLayout) -> some View {
-        HStack(spacing: 0) {
+        let metrics = TimelineClipMetrics(
+            clipWidths: vm.clips.map { layout.clipWidth(for: $0) },
+            insertSlotWidth: insertSlotWidth
+        )
+        let isDragging = reorderState.isDragging
+        let dragSource = reorderState.draggingSourceIndex
+        let dragDest = reorderState.proposedDestinationIndex
+        let dragTx = reorderState.dragTranslationX
+
+        return HStack(spacing: 0) {
             ForEach(Array(vm.clips.enumerated()), id: \.element.id) { index, clip in
                 let start = vm.timelineOffsetForClipIndex(index)
                 let thumbWidth = layout.clipWidth(for: clip)
+                let isSelected = vm.selectedClipID == clip.id
+                let isBeingDragged = isDragging && dragSource == index
+
+                // Calculate the shift for non-dragged clips to make room.
+                let shiftOffset: CGFloat = {
+                    guard isDragging,
+                          let source = dragSource,
+                          let dest = dragDest,
+                          source != dest,
+                          index != source else { return 0 }
+
+                    let sourceWidth = metrics.clipWidths[source] + insertSlotWidth
+
+                    if source < dest {
+                        // Dragged right: clips between (source, dest] shift left.
+                        if index > source && index <= dest {
+                            return -sourceWidth
+                        }
+                    } else {
+                        // Dragged left: clips between [dest, source) shift right.
+                        if index >= dest && index < source {
+                            return sourceWidth
+                        }
+                    }
+                    return 0
+                }()
 
                 ClipThumb(
                     clip: clip,
                     width: thumbWidth,
                     clipTimelineStart: start,
-                    isSelected: vm.selectedClipID == clip.id,
+                    isSelected: isSelected,
                     pixelsPerSecond: pixelsPerSecond,
                     scrubMinimumDistance: clipScrubMinimumDistance,
                     height: clipsLaneHeight,
+                    clipIndex: index,
+                    reorderMetrics: metrics,
+                    reorderState: reorderState,
+                    canReorder: isSelected && vm.clips.count > 1,
                     onScrub: { t in vm.setTimelinePositionForScrub(t) },
                     onScrubCommit: { vm.commitTimelineAfterScrub() },
                     onScrubbingChanged: { isScrubbing = $0 },
@@ -186,13 +232,30 @@ struct EditorTimeline: View {
                     onTrimChanged: { start, end in
                         vm.setTrim(clipID: clip.id, trimStart: start, trimEnd: end)
                     },
-                    onTrimEnded: { vm.commitTrimEdit() }
+                    onTrimEnded: { vm.commitTrimEdit() },
+                    onMoveClip: { from, to in vm.moveClip(from: from, to: to) }
                 )
+                .offset(x: isBeingDragged ? dragTx : shiftOffset)
+                .scaleEffect(isBeingDragged ? 1.06 : 1.0)
+                .shadow(
+                    color: isBeingDragged ? Color.black.opacity(0.45) : Color.clear,
+                    radius: isBeingDragged ? 8 : 0,
+                    y: isBeingDragged ? 4 : 0
+                )
+                .opacity(isBeingDragged ? 0.92 : 1.0)
+                .zIndex(isBeingDragged ? 100 : 0)
+                .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.78), value: shiftOffset)
+                .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.72), value: isBeingDragged)
 
                 ClipInsertSlot(width: insertSlotWidth, height: clipsLaneHeight) {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     onInsertAfterClip(index)
                 }
+                .opacity(isDragging ? 0.15 : 1.0)
+                .offset(x: isDragging ? shiftOffset : 0)
+                .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.78), value: shiftOffset)
+                .animation(.easeInOut(duration: 0.15), value: isDragging)
+                .allowsHitTesting(!isDragging)
             }
         }
     }
@@ -253,54 +316,6 @@ struct EditorTimeline: View {
                 vm.commitTimelineAfterScrub()
             }
     }
-
-    // MARK: Playhead (line is visual-only; only the knob captures drags so ScrollView can pan elsewhere.)
-
-    private func playheadLine(layout: TimelineLayout) -> some View {
-        let x = layout.contentX(forTime: vm.timelinePosition)
-        return PlayheadShape()
-            .stroke(Color.white.opacity(0.95), lineWidth: 1)
-            .frame(width: 18, height: playheadStackHeight)
-            .offset(x: x - 9, y: 0)
-            .allowsHitTesting(false)
-    }
-
-    private func playheadKnob(layout: TimelineLayout) -> some View {
-        let x = layout.contentX(forTime: vm.timelinePosition)
-        let knobY = -playheadStackHeight / 2 + 4
-        let knobSize: CGFloat = 44
-
-        return ZStack {
-            Circle()
-                .fill(Color.white.opacity(0.001))
-                .frame(width: knobSize, height: knobSize)
-                .contentShape(Circle())
-            Circle()
-                .fill(Color.white)
-                .frame(width: 10, height: 10)
-                .allowsHitTesting(false)
-        }
-        .frame(width: knobSize, height: knobSize)
-        .offset(x: x - knobSize / 2, y: knobY)
-        .gesture(playheadDragGesture(layout: layout))
-    }
-
-    private func playheadDragGesture(layout: TimelineLayout) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onChanged { v in
-                isScrubbing = true
-                if playheadDragBaselineContentX == nil {
-                    playheadDragBaselineContentX = layout.contentX(forTime: vm.timelinePosition)
-                }
-                let x = (playheadDragBaselineContentX ?? 0) + v.translation.width
-                vm.setTimelinePositionForScrub(layout.time(atContentX: x))
-            }
-            .onEnded { _ in
-                playheadDragBaselineContentX = nil
-                isScrubbing = false
-                vm.commitTimelineAfterScrub()
-            }
-    }
 }
 
 // MARK: - Timeline layout (clip widths + insert gaps)
@@ -313,6 +328,15 @@ private struct TimelineLayout {
 
     func clipWidth(for clip: EditorClip) -> CGFloat {
         max(44, CGFloat(clip.duration) * pixelsPerSecond)
+    }
+
+    func clipStartContentX(forIndex index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        var x: CGFloat = 0
+        for i in 0..<index {
+            x += clipWidth(for: clips[i]) + insertSlotWidth
+        }
+        return x
     }
 
     var contentWidth: CGFloat {
@@ -406,12 +430,17 @@ private struct ClipThumb: View {
     let pixelsPerSecond: CGFloat
     let scrubMinimumDistance: CGFloat
     let height: CGFloat
+    let clipIndex: Int
+    let reorderMetrics: TimelineClipMetrics
+    let reorderState: ClipReorderState
+    let canReorder: Bool
     let onScrub: (TimeInterval) -> Void
     let onScrubCommit: () -> Void
     let onScrubbingChanged: (Bool) -> Void
     let onSelectForEditing: () -> Void
     let onTrimChanged: (TimeInterval, TimeInterval) -> Void
     let onTrimEnded: () -> Void
+    let onMoveClip: (Int, Int) -> Void
 
     @State private var isTrimming = false
 
@@ -446,6 +475,16 @@ private struct ClipThumb: View {
                 .stroke(isSelected ? Color.appColors.primaryColor : Color.clear, lineWidth: 2)
         )
         .overlay {
+            if canReorder {
+                ClipReorderGestureRepresentable(
+                    clipIndex: clipIndex,
+                    metrics: reorderMetrics,
+                    reorderState: reorderState,
+                    onMove: onMoveClip
+                )
+            }
+        }
+        .overlay {
             if isSelected {
                 ClipTrimHandleRepresentable(
                     clipID: clip.id,
@@ -466,7 +505,6 @@ private struct ClipThumb: View {
                 .allowsHitTesting(true)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isSelected)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isTrimming else { return }
@@ -495,6 +533,66 @@ private struct ClipThumb: View {
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 
+}
+
+// MARK: - Playhead (isolated — only these views observe `timelinePosition` during playback)
+
+private struct TimelinePlayheadLine: View {
+    let vm: EditorViewModel
+    let layout: TimelineLayout
+    let stackHeight: CGFloat
+
+    var body: some View {
+        let x = layout.contentX(forTime: vm.timelinePosition)
+        PlayheadShape()
+            .stroke(Color.white.opacity(0.95), lineWidth: 1)
+            .frame(width: 18, height: stackHeight)
+            .offset(x: x - 9, y: 0)
+            .allowsHitTesting(false)
+    }
+}
+
+private struct TimelinePlayheadKnob: View {
+    let vm: EditorViewModel
+    let layout: TimelineLayout
+    let stackHeight: CGFloat
+    @Binding var isScrubbing: Bool
+    @Binding var baselineContentX: CGFloat?
+
+    var body: some View {
+        let x = layout.contentX(forTime: vm.timelinePosition)
+        let knobY = -stackHeight / 2 + 4
+        let knobSize: CGFloat = 44
+
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.001))
+                .frame(width: knobSize, height: knobSize)
+                .contentShape(Circle())
+            Circle()
+                .fill(Color.white)
+                .frame(width: 10, height: 10)
+                .allowsHitTesting(false)
+        }
+        .frame(width: knobSize, height: knobSize)
+        .offset(x: x - knobSize / 2, y: knobY)
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { v in
+                    isScrubbing = true
+                    if baselineContentX == nil {
+                        baselineContentX = layout.contentX(forTime: vm.timelinePosition)
+                    }
+                    let contentX = (baselineContentX ?? 0) + v.translation.width
+                    vm.setTimelinePositionForScrub(layout.time(atContentX: contentX))
+                }
+                .onEnded { _ in
+                    baselineContentX = nil
+                    isScrubbing = false
+                    vm.commitTimelineAfterScrub()
+                }
+        )
+    }
 }
 
 // MARK: - Shapes

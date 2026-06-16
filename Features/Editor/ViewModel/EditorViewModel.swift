@@ -92,6 +92,10 @@ final class EditorViewModel {
         return clips.first { $0.id == id }
     }
 
+    var canDeleteSelectedClip: Bool {
+        selectedClipID != nil && clips.count > 1
+    }
+
     /// Clip currently under the global playhead (what the preview should show).
     var playbackInfo: (clip: EditorClip, index: Int, localTime: TimeInterval)? {
         clipAndLocalTime(at: timelinePosition)
@@ -139,6 +143,32 @@ final class EditorViewModel {
 
     func selectClipForEditing(_ id: UUID) {
         selectedClipID = id
+    }
+
+    func deselectClip() {
+        if selectedTool == .speed {
+            finalizeSpeedEditUndo()
+        }
+        selectedTool = nil
+        selectedClipID = nil
+    }
+
+    func performClipAction(_ action: EditorClipAction) {
+        switch action {
+        case .delete:
+            deleteSelectedClip()
+        case .split:
+            splitAtPlayhead()
+            selectedTool = .split
+        case .speed:
+            performToolAction(.speed)
+        case .volume:
+            performToolAction(.volume)
+        case .filter:
+            performToolAction(.filter)
+        case .text:
+            performToolAction(.text)
+        }
     }
 
     func jumpToClipStart(_ id: UUID) {
@@ -246,11 +276,7 @@ final class EditorViewModel {
 
         registerUndoIfNeeded()
 
-        if isPlaying {
-            stopPlaybackTicking()
-            player?.pause()
-            isPlaying = false
-        }
+        pausePlaybackForEdit()
 
         let index = info.index
         clips.remove(at: index)
@@ -265,15 +291,63 @@ final class EditorViewModel {
         Task { await alignPlaybackToTimeline() }
     }
 
+    func deleteSelectedClip() {
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips.count > 1 else { return }
+
+        registerUndoIfNeeded()
+        pausePlaybackForEdit()
+
+        let clipStart = timelineOffsetForClipIndex(index)
+        let removedDuration = clips[index].duration
+        let clipEnd = clipStart + removedDuration
+
+        clips.remove(at: index)
+
+        if timelinePosition >= clipEnd {
+            timelinePosition -= removedDuration
+        } else if timelinePosition > clipStart {
+            timelinePosition = clipStart
+        }
+        timelinePosition = min(max(0, timelinePosition), totalDuration)
+
+        if index < clips.count {
+            selectedClipID = clips[index].id
+        } else {
+            selectedClipID = clips.last?.id
+        }
+
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func moveClip(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex != destinationIndex,
+              clips.indices.contains(sourceIndex),
+              clips.indices.contains(destinationIndex) else { return }
+
+        registerUndoIfNeeded()
+        pausePlaybackForEdit()
+
+        let moved = clips.remove(at: sourceIndex)
+        clips.insert(moved, at: destinationIndex)
+        selectedClipID = moved.id
+        timelinePosition = min(timelinePosition, totalDuration)
+
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
     func insertClips(from media: [MediaItem], afterIndex: Int) {
         guard !media.isEmpty else { return }
         registerUndoIfNeeded()
 
-        if isPlaying {
-            stopPlaybackTicking()
-            player?.pause()
-            isPlaying = false
-        }
+        pausePlaybackForEdit()
 
         let newClips = media.map { EditorClip(asset: $0.asset) }
         let insertAt = min(max(0, afterIndex + 1), clips.count)
@@ -495,6 +569,14 @@ final class EditorViewModel {
 
     private func invalidateComposition() {
         compositionFingerprint = nil
+    }
+
+    private func pausePlaybackForEdit() {
+        if isPlaying {
+            stopPlaybackTicking()
+            player?.pause()
+            isPlaying = false
+        }
     }
 
     private func ensureCompositionPlayer(resumePlaying: Bool = false) async {

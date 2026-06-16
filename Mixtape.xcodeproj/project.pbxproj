@@ -50,6 +50,8 @@
 		CED677A22FADDF721531EBF /* ProjectListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A22FADDF700531EBF /* ProjectListViewModel.swift */; };
 		BA0EDF00DEAFB001CAFE0116 /* EditorExportSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */; };
 		BA0EDF00DEAFB001CAFE0117 /* EditorExportScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */; };
+		BA0EDF00DEAFB001CAFE0118 /* EditorClipActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0018 /* EditorClipActionBar.swift */; };
+		BA0EDF00DEAFB001CAFE0119 /* ClipReorderGestureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0019 /* ClipReorderGestureView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -97,6 +99,8 @@
 		CED677A22FADDF700531EBF /* ProjectListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListViewModel.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportSettings.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportScreen.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0018 /* EditorClipActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClipActionBar.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE0019 /* ClipReorderGestureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipReorderGestureView.swift; sourceTree = "<group>"; };
 		FD381624E89BEA467A3F6BF0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -216,6 +220,8 @@
 				BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */,
 				BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */,
 				BA0EDF00DEAFB001CAFE0009 /* EditorBottomToolbar.swift */,
+				BA0EDF00DEAFB001CAFE0018 /* EditorClipActionBar.swift */,
+				BA0EDF00DEAFB001CAFE0019 /* ClipReorderGestureView.swift */,
 				BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */,
 				BA0EDF00DEAFB001CAFE0014 /* SpeedToolPanel.swift */,
 				BA0EDF00DEAFB001CAFE0015 /* ClipFilmstripView.swift */,
@@ -430,6 +436,8 @@
 				CED677A22FADDF721531EBF /* ProjectListViewModel.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0116 /* EditorExportSettings.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0117 /* EditorExportScreen.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0118 /* EditorClipActionBar.swift in Sources */,
+				BA0EDF00DEAFB001CAFE0119 /* ClipReorderGestureView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

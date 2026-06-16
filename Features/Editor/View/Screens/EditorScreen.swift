@@ -58,7 +58,14 @@ struct EditorScreen: View {
                     .padding(.top, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
 
-                    EditorBottomToolbar(vm: vm)
+                    Group {
+                        if vm.selectedClipID != nil {
+                            EditorClipActionBar(vm: vm)
+                        } else {
+                            EditorBottomToolbar(vm: vm)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: vm.selectedClipID != nil)
                 }
             }
 

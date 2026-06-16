@@ -274,6 +274,53 @@ Split is rejected if the playhead is too close to either edge (~0.25s minimum sp
 
 **Learn:** same composition concepts as §4 — after split, both segments are adjacent ranges in one **`AVMutableComposition`**, so playback stays continuous.
 
+### 6.6 Clip reordering (long-press drag)
+
+Selected clips can be **reordered** by long-pressing and dragging left or right on the timeline. The system is split between **UIKit** (gesture recognition) and **SwiftUI** (visual feedback).
+
+**Gesture layer** (`ClipReorderGestureView.swift`):
+
+- A single **`UILongPressGestureRecognizer`** handles the **entire** drag lifecycle: `.began` → `.changed` → `.ended`. Using one continuous recognizer avoids the "pan can't pick up existing touches" problem that occurs when enabling a separate `UIPanGestureRecognizer` mid-touch.
+- On `.began`: records `dragOrigin` (initial touch position), fires a **medium haptic**, and sets `ClipReorderState.isDragging = true`.
+- On `.changed`: computes `tx = currentLocation.x - dragOrigin.x` and calls `TimelineClipMetrics.targetIndex(forSource:dragTranslation:)` — which finds where the dragged clip's center would fall among the other clips' centers. A **light haptic** fires each time the proposed destination changes.
+- On `.ended` / `.cancelled`: commits the move via `onMove(source, dest)` if the destination differs, then resets all state.
+
+**Shared state** (`ClipReorderState`):
+
+- An `@Observable` class (`@MainActor`) that bridges UIKit → SwiftUI:
+  - `draggingSourceIndex` — which clip is being dragged.
+  - `proposedDestinationIndex` — where it would land if released.
+  - `dragTranslationX` — raw horizontal offset for the dragged clip.
+  - `isDragging` — active flag.
+- One instance lives as `@State` on `EditorTimeline` and is passed to every `ClipThumb`.
+
+**Visual feedback** (in `clipsRow` within `EditorTimeline.swift`):
+
+| Element | During drag |
+|---------|-------------|
+| **Dragged clip** | Follows the finger (`.offset(x: dragTx)`), scales up 1.06×, gains drop shadow, slight opacity reduction, `zIndex(100)` to render above everything. |
+| **Neighboring clips** in the swap range | Shift left or right by the dragged clip's width using `interactiveSpring` animation, visually opening a gap at the proposed destination. |
+| **Insert slots (+)** | Fade to 15% opacity and shift with their neighbor; hit-testing disabled during drag. |
+| **Horizontal scroll** | Disabled (`scrollDisabled`) while dragging so the `ScrollView` doesn't compete with the gesture. |
+
+**Metrics** (`TimelineClipMetrics`):
+
+- `leadingEdge(ofClipAt:)` / `centerX(ofClipAt:)` — precise position math for each clip within the HStack.
+- `targetIndex(forSource:dragTranslation:)` — walks clip centers to find which slot the dragged clip's center has crossed.
+
+**ViewModel** (`EditorViewModel.moveClip(from:to:)`):
+
+- Removes the clip from `sourceIndex`, inserts at `destinationIndex`.
+- Registers undo, pauses playback, invalidates composition, auto-saves.
+
+**Why UIKit for the gesture?** SwiftUI's `LongPressGesture` + `DragGesture` sequencing doesn't support continuous tracking after the hold triggers — UIKit's `UILongPressGestureRecognizer` fires `.changed` on every movement, giving frame-by-frame drag updates.
+
+**Learn:**
+
+- [UILongPressGestureRecognizer](https://developer.apple.com/documentation/uikit/uilongpressgesturerecognizer) — continuous recognizer; `.changed` fires on movement after `.began`.
+- [UIViewRepresentable](https://developer.apple.com/documentation/swiftui/uiviewrepresentable) — bridging UIKit gesture views into SwiftUI.
+- [interactiveSpring](https://developer.apple.com/documentation/swiftui/animation/interactivespring(response:dampingfraction:blenduration:)) — spring animation tuned for gesture-driven interactions.
+
 ---
 
 ## 7. Lifecycle tied to the screen
@@ -304,6 +351,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/EditorTimeline.swift` | Ruler, scrub, filmstrip clips, playhead, `TimelineLayout`. |
 | `View/Components/ClipFilmstripView.swift` | Tiled thumbnail row per clip. |
 | `View/Components/SpeedToolPanel.swift` | Speed presets + slider when SPEED tool is active. |
+| `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
 | `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`). |
 | `View/Components/EditorPreviewPlayer.swift` | Inline preview, HUD, `PlayerLayerView`. |
 | `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + editing tools. |
@@ -391,6 +439,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Project delete** | Long-press card → confirm → remove JSON | `ProjectListScreen`, `ProjectListViewModel.deleteProject` | `contextMenu`, `confirmationDialog` |
 | **Card polish** | Whole card tappable; scrim overlay removed | `ProjectCardView` (`contentShape`) | Hit-testing clipped images |
 | **Swipe-back restore** | Edge swipe pops despite hidden nav bars | `Core/SwipeBackEnabler.swift` | `interactivePopGestureRecognizer` delegate |
+| **Clip reorder** | Long-press + drag to move clips forward/backward on timeline | `ClipReorderGestureView`, `EditorTimeline.clipsRow`, `EditorViewModel.moveClip` | `UILongPressGestureRecognizer` as continuous gesture, `@Observable` UIKit→SwiftUI bridge, `interactiveSpring` |
 
 ---
 
@@ -449,6 +498,5 @@ Use this as a map of **what we built** and **why**, in learning order:
 2. **Text overlays** — add/edit/delete `textOverlays` + burn-in on export.
 3. **Background music** — wire `audioTrack` into composition (separate lane already stubbed in UI).
 4. **Filter tool** — `CIFilter` via `AVVideoComposition` or custom compositor.
-5. **Clip reorder / delete** — drag-and-drop timeline + undo integration.
-6. **Export preview playback** — tap play on `EditorExportScreen` preview header.
-7. **Project rename** — edit title on home (delete already ships via long-press + confirmation).
+5. **Export preview playback** — tap play on `EditorExportScreen` preview header.
+6. **Project rename** — edit title on home (delete already ships via long-press + confirmation).

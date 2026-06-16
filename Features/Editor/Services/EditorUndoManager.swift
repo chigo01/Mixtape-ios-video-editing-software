@@ -5,7 +5,7 @@
 
 import Foundation
 
-/// Snapshot-based undo/redo for timeline edits (trim, split, insert, speed).
+/// Snapshot-based undo/redo for timeline edits (trim, split, insert, speed, delete, reorder).
 @MainActor
 final class EditorUndoManager {
     private var undoStack: [EditorTimelineSnapshot] = []
