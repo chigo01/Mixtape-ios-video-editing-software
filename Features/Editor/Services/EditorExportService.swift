@@ -36,11 +36,13 @@ enum EditorExportService {
     /// Renders the current timeline to a temporary file using the chosen export settings.
     static func export(
         clips: [EditorClip],
+        textOverlays: [EditorTextOverlay] = [],
         settings: EditorExportSettings,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         guard let built = await EditorCompositionBuilder.build(
             from: clips,
+            textOverlays: textOverlays,
             frameRate: Int32(settings.frameRate.rawValue)
         ) else {
             throw EditorExportError.compositionFailed

@@ -143,24 +143,57 @@ struct EditorTimeline: View {
     private func textOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(vm.textOverlays) { overlay in
+                let startX = layout.contentX(forTime: overlay.startTime)
+                let endX = layout.contentX(forTime: overlay.endTime)
+                let barWidth = max(44, endX - startX)
+                let isSelected = vm.selectedTextOverlayID == overlay.id
+
                 HStack(spacing: 4) {
                     Image(systemName: "textformat")
                         .font(.system(size: 9, weight: .bold))
                     Text(truncated(overlay.text))
                         .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
                 }
                 .foregroundColor(.white)
+                .frame(width: barWidth, alignment: .leading)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .frame(height: 32)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.black.opacity(0.55))
+                        .fill(Color.appColors.primaryColor.opacity(isSelected ? 0.35 : 0.2))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        .stroke(
+                            isSelected ? Color.appColors.primaryColor : Color.appColors.primaryColor.opacity(0.45),
+                            lineWidth: isSelected ? 2 : 1
+                        )
                 )
-                .offset(x: layout.contentX(forTime: overlay.startTime), y: 0)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    vm.selectTextOverlay(overlay.id)
+                }
+                .overlay {
+                    if isSelected {
+                        ClipTrimHandleRepresentable(
+                            clipID: overlay.id,
+                            trimStart: overlay.startTime,
+                            trimEnd: overlay.endTime,
+                            originalDuration: vm.totalDuration > 0 ? vm.totalDuration : 3600,
+                            speed: 1.0,
+                            pixelsPerSecond: layout.pixelsPerSecond,
+                            onTrimChanged: { _, start, end in
+                                vm.updateTextOverlayTimeRange(id: overlay.id, start: start, end: end)
+                            },
+                            onTrimEnded: {
+                                vm.commitTextOverlayTimeRange()
+                            }
+                        )
+                        .allowsHitTesting(true)
+                    }
+                }
+                .offset(x: startX, y: 0)
             }
         }
         .frame(width: totalWidth, alignment: .leading)

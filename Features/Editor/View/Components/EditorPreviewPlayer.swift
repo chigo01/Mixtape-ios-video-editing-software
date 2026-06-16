@@ -66,6 +66,9 @@ struct EditorPreviewPlayer: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
+            // Text overlays rendered on top of video/poster
+            textOverlayLayer
+
             if shouldShowLoading {
                 ProgressView()
                     .progressViewStyle(.circular)
@@ -73,11 +76,15 @@ struct EditorPreviewPlayer: View {
             }
 
             VStack {
-                Spacer()
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
                 controlsHUD
-                    .padding(.bottom, 14)
             }
         }
+    }
+
+    private var textOverlayLayer: some View {
+        EditorTextOverlayLayerView(vm: vm)
     }
 
     private var shouldShowLoading: Bool {
@@ -119,6 +126,7 @@ struct EditorPreviewPlayer: View {
         .padding(.vertical, 9)
         .background(Capsule().fill(Color.black.opacity(0.55)))
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .padding(.bottom, 14)
     }
 
     private func loadPoster() {

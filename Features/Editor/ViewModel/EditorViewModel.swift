@@ -27,6 +27,11 @@ final class EditorViewModel {
     var isPlaying: Bool = false
     var selectedTool: EditorTool?
 
+    // MARK: Text overlay editing
+
+    var selectedTextOverlayID: UUID?
+    var isTextEditorPresented: Bool = false
+
     // MARK: Project persistence
 
     private(set) var projectID: UUID
@@ -65,6 +70,12 @@ final class EditorViewModel {
     @ObservationIgnored
     private var speedUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var textEditUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var textEditDragOrigin: (x: CGFloat, y: CGFloat)?
+    @ObservationIgnored
+    private var textTimeRangeUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
     private var saveTask: Task<Void, Never>?
 
     // MARK: Init
@@ -94,6 +105,11 @@ final class EditorViewModel {
 
     var canDeleteSelectedClip: Bool {
         selectedClipID != nil && clips.count > 1
+    }
+
+    var selectedTextOverlay: EditorTextOverlay? {
+        guard let id = selectedTextOverlayID else { return nil }
+        return textOverlays.first { $0.id == id }
     }
 
     /// Clip currently under the global playhead (what the preview should show).
@@ -143,6 +159,8 @@ final class EditorViewModel {
 
     func selectClipForEditing(_ id: UUID) {
         selectedClipID = id
+        selectedTextOverlayID = nil
+        isTextEditorPresented = false
     }
 
     func deselectClip() {
@@ -202,6 +220,12 @@ final class EditorViewModel {
         case .split:
             splitAtPlayhead()
             selectedTool = .split
+        case .text:
+            if selectedTextOverlayID != nil {
+                isTextEditorPresented = true
+            } else {
+                addTextOverlay()
+            }
         default:
             selectTool(tool)
         }
@@ -233,6 +257,133 @@ final class EditorViewModel {
         finalizeSpeedEditUndo()
         speedUndoSnapshot = currentSnapshot()
         Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Text Overlays
+
+    func addTextOverlay() {
+        registerUndoIfNeeded()
+
+        let defaultDuration: TimeInterval = 3.0
+        let start = timelinePosition
+        let end = min(start + defaultDuration, totalDuration)
+
+        guard end > start + 0.1 else { return } // not enough room
+
+        let overlay = EditorTextOverlay(
+            text: "Text",
+            startTime: start,
+            endTime: end
+        )
+        textOverlays.append(overlay)
+        selectedTextOverlayID = overlay.id
+        isTextEditorPresented = true
+        scheduleSave()
+
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    func updateTextOverlay(_ overlay: EditorTextOverlay) {
+        guard let idx = textOverlays.firstIndex(where: { $0.id == overlay.id }) else { return }
+        textOverlays[idx] = overlay
+        scheduleSave()
+    }
+
+    func beginTextOverlayEdit() {
+        if textEditUndoSnapshot == nil {
+            textEditUndoSnapshot = currentSnapshot()
+        }
+    }
+
+    func finalizeTextOverlayEdit() {
+        guard let before = textEditUndoSnapshot else { return }
+        textEditUndoSnapshot = nil
+        textEditDragOrigin = nil
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+    }
+
+    func beginTextOverlayPositionDrag(id: UUID) {
+        beginTextOverlayEdit()
+        guard textEditDragOrigin == nil,
+              let overlay = textOverlays.first(where: { $0.id == id }) else { return }
+        textEditDragOrigin = (overlay.xOffset, overlay.yOffset)
+    }
+
+    func updateTextOverlayPositionDrag(id: UUID, translation: CGSize) {
+        guard let origin = textEditDragOrigin,
+              let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
+        textOverlays[idx].xOffset = origin.x + translation.width
+        textOverlays[idx].yOffset = origin.y + translation.height
+    }
+
+    func commitTextOverlayPositionDrag() {
+        textEditDragOrigin = nil
+        finalizeTextOverlayEdit()
+    }
+
+    func deleteTextOverlay(id: UUID) {
+        clearTextOverlayEditUndo()
+        registerUndoIfNeeded()
+        textOverlays.removeAll { $0.id == id }
+        if selectedTextOverlayID == id {
+            selectedTextOverlayID = nil
+            isTextEditorPresented = false
+        }
+        scheduleSave()
+    }
+
+    func selectTextOverlay(_ id: UUID) {
+        if selectedTextOverlayID == id {
+            selectedTextOverlayID = nil
+        } else {
+            selectedTextOverlayID = id
+            selectedClipID = nil
+            selectedTool = nil
+        }
+    }
+
+    func dismissTextEditor() {
+        finalizeTextOverlayEdit()
+
+        // If the text is empty, delete the overlay.
+        if let id = selectedTextOverlayID,
+           let overlay = textOverlays.first(where: { $0.id == id }),
+           overlay.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            deleteTextOverlay(id: id)
+        }
+        // Notice we do NOT clear selectedTextOverlayID here, so it remains selected on the timeline
+        isTextEditorPresented = false
+    }
+
+    func updateTextOverlayTimeRange(id: UUID, start: TimeInterval, end: TimeInterval) {
+        if textTimeRangeUndoSnapshot == nil {
+            textTimeRangeUndoSnapshot = currentSnapshot()
+        }
+
+        guard let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
+        textOverlays[idx].startTime = start
+        textOverlays[idx].endTime = end
+    }
+
+    func commitTextOverlayTimeRange() {
+        if let before = textTimeRangeUndoSnapshot {
+            if before != currentSnapshot() {
+                undoManager.pushUndoState(before)
+                refreshUndoState()
+            }
+            textTimeRangeUndoSnapshot = nil
+        }
+        scheduleSave()
+    }
+
+    private func clearTextOverlayEditUndo() {
+        textEditUndoSnapshot = nil
+        textEditDragOrigin = nil
+        textTimeRangeUndoSnapshot = nil
     }
 
     // MARK: Clips
@@ -402,7 +553,12 @@ final class EditorViewModel {
 
             do {
                 let clipsSnapshot = clips
-                let url = try await EditorExportService.export(clips: clipsSnapshot, settings: settings) { progress in
+                let textOverlaysSnapshot = textOverlays
+                let url = try await EditorExportService.export(
+                    clips: clipsSnapshot,
+                    textOverlays: textOverlaysSnapshot,
+                    settings: settings
+                ) { progress in
                     Task { @MainActor in
                         self.exportProgress = progress
                     }

@@ -58,7 +58,12 @@ enum EditorCompositionBuilder {
 
     /// Shared composition pipeline for preview and export.
     /// `frameRate` drives the video composition's `frameDuration` (export passes the user's setting).
-    static func build(from clips: [EditorClip], frameRate: Int32 = 30) async -> EditorCompositionBuildResult? {
+    @MainActor
+    static func build(
+        from clips: [EditorClip],
+        textOverlays: [EditorTextOverlay] = [],
+        frameRate: Int32 = 30
+    ) async -> EditorCompositionBuildResult? {
         guard !clips.isEmpty else { return nil }
 
         let composition = AVMutableComposition()
@@ -144,12 +149,60 @@ enum EditorCompositionBuilder {
         guard cursor.seconds > 0 else { return nil }
 
         let segmentsSnapshot = videoSegments
+        var animationTool: AVVideoCompositionCoreAnimationTool?
+
+        if !textOverlays.isEmpty {
+            let parentLayer = CALayer()
+            parentLayer.frame = CGRect(origin: .zero, size: renderSize)
+            parentLayer.isGeometryFlipped = true // Video frames are rendered flipped
+
+            let videoLayer = CALayer()
+            videoLayer.frame = CGRect(origin: .zero, size: renderSize)
+            parentLayer.addSublayer(videoLayer)
+
+            let totalDuration = cursor.seconds
+            for overlay in textOverlays {
+                if let image = EditorTextOverlayRenderer.render(overlay: overlay, renderSize: renderSize) {
+                    let textLayer = CALayer()
+                    textLayer.contents = image.cgImage
+                    textLayer.contentsScale = 1
+                    textLayer.frame = CGRect(origin: .zero, size: renderSize)
+                    textLayer.opacity = 0
+
+                    let anim = CAKeyframeAnimation(keyPath: "opacity")
+                    anim.duration = totalDuration
+                    anim.beginTime = AVCoreAnimationBeginTimeAtZero
+                    anim.isRemovedOnCompletion = false
+                    anim.fillMode = .forwards
+
+                    let startRatio = max(0, overlay.startTime / totalDuration)
+                    let endRatio = min(1.0, overlay.endTime / totalDuration)
+
+                    anim.values = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]
+                    anim.keyTimes = [
+                        0.0,
+                        NSNumber(value: startRatio),
+                        NSNumber(value: startRatio),
+                        NSNumber(value: endRatio),
+                        NSNumber(value: endRatio),
+                        1.0
+                    ]
+
+                    textLayer.add(anim, forKey: "opacityAnim")
+                    parentLayer.addSublayer(textLayer)
+                }
+            }
+
+            animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
+        }
+
         let videoComposition: AVVideoComposition? = {
             guard !segmentsSnapshot.isEmpty else { return nil }
             return makeVideoComposition(
                 compositionTrack: compositionVideoTrack,
                 segments: segmentsSnapshot,
-                frameRate: frameRate
+                frameRate: frameRate,
+                animationTool: animationTool
             )
         }()
 
@@ -189,11 +242,12 @@ enum EditorCompositionBuilder {
     private static func makeVideoComposition(
         compositionTrack: AVMutableCompositionTrack,
         segments: [VideoSegment],
-        frameRate: Int32
+        frameRate: Int32,
+        animationTool: AVVideoCompositionCoreAnimationTool? = nil
     ) -> AVVideoComposition {
         let frameDuration = CMTime(value: 1, timescale: frameRate)
 
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), animationTool == nil {
             let instructions: [AVVideoCompositionInstruction] = segments.map { segment in
                 var layerConfiguration = AVVideoCompositionLayerInstruction.Configuration(
                     assetTrack: compositionTrack
@@ -218,15 +272,18 @@ enum EditorCompositionBuilder {
             configuration.instructions = instructions
             return AVVideoComposition(configuration: configuration)
         } else {
-            // Pre-iOS 26 fallback: AVVideoComposition.Configuration is unavailable,
-            // so use the (now deprecated) mutable subclasses.
+            // Pre-iOS 26 fallback or when using animationTool
             let composition = AVMutableVideoComposition()
             composition.renderSize = renderSize
             composition.frameDuration = frameDuration
+            composition.animationTool = animationTool
 
             composition.instructions = segments.map { segment in
                 let instruction = AVMutableVideoCompositionInstruction()
                 instruction.timeRange = segment.timeRange
+                
+                // IMPORTANT: Without this, AVFoundation ignores animationTool for this instruction!
+                instruction.enablePostProcessing = (animationTool != nil)
 
                 let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
                 layer.setTransform(segment.transform, at: segment.timeRange.start)

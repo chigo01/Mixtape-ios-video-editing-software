@@ -94,7 +94,7 @@ struct EditorClipActionBar: View {
     }
 }
 
-private extension EditorClipAction {
+extension EditorClipAction {
     var tool: EditorTool? {
         switch self {
         case .split: return .split
@@ -107,7 +107,7 @@ private extension EditorClipAction {
     }
 }
 
-private struct ClipActionButton: View {
+struct ClipActionButton: View {
     let action: EditorClipAction
     let isSelected: Bool
     let isDisabled: Bool

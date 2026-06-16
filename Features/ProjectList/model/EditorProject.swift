@@ -34,15 +34,67 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
     var startTime: TimeInterval
     var endTime: TimeInterval
 
+    // Style properties (defaults for backward compat with older projects)
+    var fontSize: CGFloat
+    var fontFamily: TextOverlayFontFamily
+    var fontStyle: TextOverlayFontStyle
+    var textColor: TextOverlayColor
+    var opacity: Double
+    var horizontalAlignment: TextOverlayHAlignment
+    var verticalAlignment: TextOverlayVAlignment
+    var xOffset: CGFloat
+    var yOffset: CGFloat
+
     init(from overlay: EditorTextOverlay) {
         id = overlay.id
         text = overlay.text
         startTime = overlay.startTime
         endTime = overlay.endTime
+        fontSize = overlay.fontSize
+        fontFamily = overlay.fontFamily
+        fontStyle = overlay.fontStyle
+        textColor = overlay.textColor
+        opacity = overlay.opacity
+        horizontalAlignment = overlay.horizontalAlignment
+        verticalAlignment = overlay.verticalAlignment
+        xOffset = overlay.xOffset
+        yOffset = overlay.yOffset
     }
 
     func toOverlay() -> EditorTextOverlay {
-        EditorTextOverlay(id: id, text: text, startTime: startTime, endTime: endTime)
+        EditorTextOverlay(
+            id: id,
+            text: text,
+            startTime: startTime,
+            endTime: endTime,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            fontStyle: fontStyle,
+            textColor: textColor,
+            opacity: opacity,
+            horizontalAlignment: horizontalAlignment,
+            verticalAlignment: verticalAlignment,
+            xOffset: xOffset,
+            yOffset: yOffset
+        )
+    }
+
+    // Backward-compatible decoding: older JSON files won't have style fields.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        startTime = try c.decode(TimeInterval.self, forKey: .startTime)
+        endTime = try c.decode(TimeInterval.self, forKey: .endTime)
+        fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 36
+        fontFamily = try c.decodeIfPresent(TextOverlayFontFamily.self, forKey: .fontFamily) ?? .system
+        fontStyle = try c.decodeIfPresent(TextOverlayFontStyle.self, forKey: .fontStyle) ?? .plain
+        textColor = try c.decodeIfPresent(TextOverlayColor.self, forKey: .textColor) ?? .white
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1.0
+        horizontalAlignment = try c.decodeIfPresent(TextOverlayHAlignment.self, forKey: .horizontalAlignment) ?? .center
+        verticalAlignment = try c.decodeIfPresent(TextOverlayVAlignment.self, forKey: .verticalAlignment) ?? .center
+        xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0.0
+        yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0.0
     }
 }
 

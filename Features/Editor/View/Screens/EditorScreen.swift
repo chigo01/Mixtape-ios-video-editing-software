@@ -61,11 +61,13 @@ struct EditorScreen: View {
                     Group {
                         if vm.selectedClipID != nil {
                             EditorClipActionBar(vm: vm)
+                        } else if vm.selectedTextOverlayID != nil {
+                            EditorTextActionBar(vm: vm)
                         } else {
                             EditorBottomToolbar(vm: vm)
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: vm.selectedClipID != nil)
+                    .animation(.easeInOut(duration: 0.2), value: vm.selectedClipID != nil || vm.selectedTextOverlayID != nil)
                 }
             }
 
@@ -89,6 +91,19 @@ struct EditorScreen: View {
                     isMediaPickerPresented = false
                 }
             )
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.isTextEditorPresented },
+                set: { newValue in
+                    if !newValue { vm.dismissTextEditor() }
+                }
+            )
+        ) {
+            if let overlay = vm.selectedTextOverlay {
+                TextOverlayEditorSheet(vm: vm, overlay: overlay)
+                    .presentationBackgroundInteraction(.enabled)
+            }
         }
         .task {
             await Task.yield()
@@ -149,6 +164,9 @@ private struct EditorFullscreenPreviewSheet: View {
                 }
             }
 
+            // Text overlays rendered on top of video/poster
+            EditorTextOverlayLayerView(vm: vm)
+
             VStack(spacing: 0) {
                 HStack {
                     Button(action: onClose) {
@@ -163,7 +181,10 @@ private struct EditorFullscreenPreviewSheet: View {
                     .padding(.top, 8)
                     Spacer(minLength: 0)
                 }
+
                 Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+
                 fullscreenHUD
                     .padding(.bottom, 28)
             }
