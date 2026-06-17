@@ -6,22 +6,24 @@
 import SwiftUI
 import Photos
 import UIKit
+import AVFoundation
 
 struct EditorExportScreen: View {
     @Bindable var vm: EditorViewModel
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = EditorExportSettings()
-    @State private var coverImage: UIImage?
     @State private var showShareSheet = false
 
     var body: some View {
         AppGlobalBackgroundScaffold {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    previewHeader
+                    EditorExportPreviewSection(vm: vm)
                     resolutionSection
                     frameRateSection
+                    qualitySection
+                    hdrToggle
                     formatAndSizeRow
                 }
                 .padding(.horizontal, 16)
@@ -43,12 +45,12 @@ struct EditorExportScreen: View {
         .safeAreaInset(edge: .top) {
             exportNavBar
         }
-        .task { loadCover() }
         .sheet(isPresented: $showShareSheet) {
             if let url = vm.exportedFileURL {
                 ShareSheet(items: [url])
             }
         }
+        .onDisappear { vm.commitProjectTitle() }
     }
 
     private var exportNavBar: some View {
@@ -76,45 +78,6 @@ struct EditorExportScreen: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.appColors.backgroundColor.opacity(0.95))
-    }
-
-    private var previewHeader: some View {
-        ZStack(alignment: .bottomLeading) {
-            Group {
-                if let coverImage {
-                    Image(uiImage: coverImage)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Color.white.opacity(0.06)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 220)
-            .clipped()
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.75)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-
-            Image(systemName: "play.fill")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(.white.opacity(0.9))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            HStack(spacing: 8) {
-                badge(vm.formatDuration(vm.totalDuration))
-                badge("MIXTAPE")
-            }
-            .padding(12)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
     }
 
     private var resolutionSection: some View {
@@ -153,6 +116,49 @@ struct EditorExportScreen: View {
             .padding(4)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
         }
+    }
+
+    private var qualitySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                sectionTitle("QUALITY")
+                Spacer()
+                Text(settings.targetVideoMbpsLabel)
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundColor(Color.appColors.primaryColor)
+            }
+            HStack(spacing: 0) {
+                ForEach(EditorExportQuality.allCases) { option in
+                    settingsChip(
+                        title: option.title,
+                        isSelected: settings.quality == option
+                    ) {
+                        settings.quality = option
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(4)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+        }
+    }
+
+    private var hdrToggle: some View {
+        Toggle(isOn: $settings.includeHDR) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("HDR export")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                Text("HEVC 10-bit — best for HDR source clips")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+        }
+        .tint(Color.appColors.primaryColor)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+        .disabled(vm.isExporting)
     }
 
     private var formatAndSizeRow: some View {
@@ -324,14 +330,298 @@ struct EditorExportScreen: View {
         .buttonStyle(.plain)
         .disabled(vm.isExporting)
     }
+}
 
-    private func badge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+// MARK: - Export preview
+
+private struct EditorExportPreviewSection: View {
+    @Bindable var vm: EditorViewModel
+
+    @State private var coverImage: UIImage?
+    @State private var exportedPlayer: AVPlayer?
+    @State private var isExportedPlaying = false
+    @State private var exportedDuration: TimeInterval = 0
+    @State private var exportedPosition: TimeInterval = 0
+    @State private var isScrubbing = false
+    @State private var scrubPosition: TimeInterval = 0
+    @State private var exportedTickTimer: Timer?
+
+    private var isShowingExportedFile: Bool {
+        vm.exportedFileURL != nil && !vm.isExporting
+    }
+
+    private var previewClip: EditorClip? {
+        vm.playbackInfo?.clip ?? vm.clips.first
+    }
+
+    private var showingCompositionVideo: Bool {
+        guard !isShowingExportedFile, let clip = previewClip, clip.isVideo else { return false }
+        return vm.player != nil
+    }
+
+    private var isPreviewPlaying: Bool {
+        isShowingExportedFile ? isExportedPlaying : vm.isPlaying
+    }
+
+    private var playbackDuration: TimeInterval {
+        max(isShowingExportedFile ? exportedDuration : vm.totalDuration, 0.01)
+    }
+
+    private var displayedPosition: TimeInterval {
+        if isShowingExportedFile {
+            exportedPosition
+        } else if isScrubbing {
+            scrubPosition
+        } else {
+            vm.timelinePosition
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            videoPreview
+            playbackControls
+            projectNameField
+        }
+        .task {
+            await vm.setupPlayer()
+            loadCover()
+        }
+        .onDisappear { stopPreview() }
+        .onChange(of: vm.exportedFileURL) { _, url in
+            Task { await configureExportedPlayer(url: url) }
+        }
+        .onChange(of: vm.isExporting) { _, exporting in
+            if exporting { stopPreview() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+            guard let item = exportedPlayer?.currentItem,
+                  notification.object as? AVPlayerItem === item else { return }
+            isExportedPlaying = false
+            exportedPosition = exportedDuration
+            stopExportedTicking()
+        }
+    }
+
+    private var videoPreview: some View {
+        ZStack {
+            previewSurface
+                .frame(maxWidth: .infinity)
+                .frame(height: 220)
+                .clipped()
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.55)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+
+            if !vm.isExporting {
+                Button(action: togglePlayback) {
+                    Image(systemName: isPreviewPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 28, weight: .bold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isPreviewPlaying ? "Pause preview" : "Play preview")
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .opacity(vm.isExporting ? 0.45 : 1)
+    }
+
+    private var playbackControls: some View {
+        HStack(spacing: 10) {
+            Text(vm.formatPlaybackTime(displayedPosition))
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundColor(.white.opacity(0.75))
+                .frame(width: 72, alignment: .leading)
+
+            Slider(
+                value: sliderBinding,
+                in: 0...playbackDuration,
+                onEditingChanged: handleScrubEditingChanged
+            )
+            .tint(Color.appColors.primaryColor)
+            .disabled(vm.isExporting || playbackDuration <= 0)
+
+            Text(vm.formatDuration(playbackDuration))
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundColor(.white.opacity(0.75))
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    private var projectNameField: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            exportSectionTitle("PROJECT NAME")
+            TextField(
+                "",
+                text: $vm.projectTitle,
+                prompt: Text("Enter project name")
+                    .foregroundColor(Color.white.opacity(0.45))
+            )
+            .font(.system(size: 16, weight: .semibold))
             .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color.black.opacity(0.55)))
+            .textFieldStyle(.plain)
+            .submitLabel(.done)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .disabled(vm.isExporting)
+            .onSubmit { vm.commitProjectTitle() }
+        }
+    }
+
+    private var sliderBinding: Binding<Double> {
+        Binding(
+            get: { displayedPosition },
+            set: { newValue in
+                let time = min(max(0, newValue), playbackDuration)
+                if isShowingExportedFile {
+                    seekExported(to: time)
+                } else {
+                    scrubPosition = time
+                    vm.setTimelinePositionForScrub(time)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var previewSurface: some View {
+        ZStack {
+            Color.black
+
+            if isShowingExportedFile, let exportedPlayer {
+                PlayerLayerView(player: exportedPlayer, videoGravity: .resizeAspectFill)
+            } else {
+                if let coverImage, !showingCompositionVideo {
+                    Image(uiImage: coverImage)
+                        .resizable()
+                        .scaledToFill()
+                }
+
+                if showingCompositionVideo, let player = vm.player {
+                    PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+                }
+
+                EditorTextOverlayLayerView(vm: vm)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func handleScrubEditingChanged(_ editing: Bool) {
+        isScrubbing = editing
+        if editing {
+            if isShowingExportedFile {
+                if isExportedPlaying {
+                    exportedPlayer?.pause()
+                    isExportedPlaying = false
+                    stopExportedTicking()
+                }
+                exportedPosition = displayedPosition
+            } else {
+                scrubPosition = vm.timelinePosition
+            }
+        } else if isShowingExportedFile {
+            seekExported(to: exportedPosition)
+        } else {
+            vm.commitTimelineAfterScrub()
+        }
+    }
+
+    private func togglePlayback() {
+        if isShowingExportedFile {
+            toggleExportedPlayback()
+        } else {
+            vm.togglePlay()
+        }
+    }
+
+    private func toggleExportedPlayback() {
+        guard let player = exportedPlayer else { return }
+        if isExportedPlaying {
+            player.pause()
+            isExportedPlaying = false
+            stopExportedTicking()
+        } else {
+            if exportedPosition >= exportedDuration - 0.05 {
+                seekExported(to: 0)
+            }
+            player.play()
+            isExportedPlaying = true
+            startExportedTicking()
+        }
+    }
+
+    private func configureExportedPlayer(url: URL?) async {
+        stopExportedTicking()
+        exportedPlayer?.pause()
+        exportedPlayer = nil
+        isExportedPlaying = false
+        exportedDuration = 0
+        exportedPosition = 0
+
+        guard let url else { return }
+        if vm.isPlaying { vm.togglePlay() }
+
+        let asset = AVURLAsset(url: url)
+        let duration = (try? await asset.load(.duration))?.seconds ?? vm.totalDuration
+        exportedDuration = max(duration, 0.01)
+        exportedPlayer = AVPlayer(url: url)
+    }
+
+    private func seekExported(to time: TimeInterval) {
+        let clamped = min(max(0, time), exportedDuration)
+        exportedPosition = clamped
+        let target = CMTime(seconds: clamped, preferredTimescale: 600)
+        exportedPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func startExportedTicking() {
+        stopExportedTicking()
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in
+            Task { @MainActor in
+                guard isExportedPlaying, let player = exportedPlayer else { return }
+                let current = player.currentTime().seconds
+                if current.isFinite {
+                    exportedPosition = min(current, exportedDuration)
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        exportedTickTimer = timer
+    }
+
+    private func stopExportedTicking() {
+        exportedTickTimer?.invalidate()
+        exportedTickTimer = nil
+    }
+
+    private func stopPreview() {
+        if vm.isPlaying { vm.togglePlay() }
+        exportedPlayer?.pause()
+        isExportedPlaying = false
+        stopExportedTicking()
+    }
+
+    private func exportSectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold))
+            .tracking(1)
+            .foregroundColor(Color.white.opacity(0.45))
     }
 
     private func loadCover() {

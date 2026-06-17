@@ -98,17 +98,64 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
     }
 }
 
+struct SavedAudioClip: Codable, Identifiable, Hashable {
+    let id: UUID
+    var title: String
+    var fileURLPath: String
+    var originalDuration: TimeInterval
+    var trimStart: TimeInterval
+    var trimEnd: TimeInterval
+    var timelineStart: TimeInterval
+    var volume: Float
+
+    init(from clip: EditorAudioClip) {
+        id = clip.id
+        title = clip.title
+        fileURLPath = clip.fileURL.path
+        originalDuration = clip.originalDuration
+        trimStart = clip.trimStart
+        trimEnd = clip.trimEnd
+        timelineStart = clip.timelineStart
+        volume = clip.volume
+    }
+
+    func toAudioClip() -> EditorAudioClip? {
+        let url = URL(fileURLWithPath: fileURLPath)
+        guard FileManager.default.fileExists(atPath: fileURLPath) else { return nil }
+        return EditorAudioClip(
+            id: id,
+            title: title,
+            fileURL: url,
+            originalDuration: originalDuration,
+            trimStart: trimStart,
+            trimEnd: trimEnd,
+            timelineStart: timelineStart,
+            volume: volume
+        )
+    }
+}
+
+/// Legacy single-track format — migrated to `audioClips` on load.
 struct SavedAudioTrack: Codable, Identifiable, Hashable {
     let id: UUID
     var title: String
+    var fileURLPath: String
     var duration: TimeInterval
     var volume: Float
 
-    init(from track: EditorAudioTrack) {
-        id = track.id
-        title = track.title
-        duration = track.duration
-        volume = track.volume
+    func toAudioClip() -> EditorAudioClip? {
+        let url = URL(fileURLWithPath: fileURLPath)
+        guard FileManager.default.fileExists(atPath: fileURLPath) else { return nil }
+        return EditorAudioClip(
+            id: id,
+            title: title,
+            fileURL: url,
+            originalDuration: duration,
+            trimStart: 0,
+            trimEnd: duration,
+            timelineStart: 0,
+            volume: volume
+        )
     }
 }
 
@@ -121,9 +168,75 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var modifiedAt: Date
     var clips: [SavedEditorClip]
     var textOverlays: [SavedTextOverlay]
-    var audioTrack: SavedAudioTrack?
+    var audioClips: [SavedAudioClip]
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
+    var selectedAudioClipID: UUID?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, createdAt, modifiedAt, clips, textOverlays
+        case audioClips, audioTrack, timelinePosition, selectedClipID, selectedAudioClipID
+    }
+
+    init(
+        id: UUID,
+        title: String,
+        createdAt: Date,
+        modifiedAt: Date,
+        clips: [SavedEditorClip],
+        textOverlays: [SavedTextOverlay],
+        audioClips: [SavedAudioClip],
+        timelinePosition: TimeInterval,
+        selectedClipID: UUID?,
+        selectedAudioClipID: UUID? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.modifiedAt = modifiedAt
+        self.clips = clips
+        self.textOverlays = textOverlays
+        self.audioClips = audioClips
+        self.timelinePosition = timelinePosition
+        self.selectedClipID = selectedClipID
+        self.selectedAudioClipID = selectedAudioClipID
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
+        clips = try c.decode([SavedEditorClip].self, forKey: .clips)
+        textOverlays = try c.decodeIfPresent([SavedTextOverlay].self, forKey: .textOverlays) ?? []
+        timelinePosition = try c.decodeIfPresent(TimeInterval.self, forKey: .timelinePosition) ?? 0
+        selectedClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedClipID)
+        selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
+
+        if let saved = try c.decodeIfPresent([SavedAudioClip].self, forKey: .audioClips) {
+            audioClips = saved
+        } else if let legacy = try c.decodeIfPresent(SavedAudioTrack.self, forKey: .audioTrack),
+                  let clip = legacy.toAudioClip() {
+            audioClips = [SavedAudioClip(from: clip)]
+        } else {
+            audioClips = []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(modifiedAt, forKey: .modifiedAt)
+        try c.encode(clips, forKey: .clips)
+        try c.encode(textOverlays, forKey: .textOverlays)
+        try c.encode(audioClips, forKey: .audioClips)
+        try c.encode(timelinePosition, forKey: .timelinePosition)
+        try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
+        try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
+    }
 
     var formattedDuration: String {
         let total = Int(clips.reduce(0.0) { partial, clip in
@@ -144,9 +257,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
             modifiedAt: now,
             clips: savedClips,
             textOverlays: [],
-            audioTrack: nil,
+            audioClips: [],
             timelinePosition: 0,
-            selectedClipID: savedClips.first?.id
+            selectedClipID: savedClips.first?.id,
+            selectedAudioClipID: nil
         )
     }
 

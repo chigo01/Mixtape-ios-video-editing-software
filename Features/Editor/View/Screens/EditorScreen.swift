@@ -13,8 +13,10 @@ struct EditorScreen: View {
     @State private var vm: EditorViewModel
     @State private var isFullscreenPreview = false
     @State private var isMediaPickerPresented = false
+    @State private var isAudioPickerPresented = false
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
+    @State private var insertAfterAudioIndex: Int?
     @Environment(\.dismiss) private var dismiss
 
     private let editorChromeMinHeight: CGFloat = 228
@@ -51,15 +53,26 @@ struct EditorScreen: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
-                    EditorTimeline(vm: vm) { clipIndex in
-                        insertAfterClipIndex = clipIndex
-                        isMediaPickerPresented = true
-                    }
+
+
+                    EditorTimeline(
+                        vm: vm,
+                        onInsertAfterClip: { clipIndex in
+                            insertAfterClipIndex = clipIndex
+                            isMediaPickerPresented = true
+                        },
+                        onAddAudioClip: { audioIndex in
+                            insertAfterAudioIndex = audioIndex
+                            isAudioPickerPresented = true
+                        }
+                    )
                     .padding(.top, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
 
                     Group {
-                        if vm.selectedClipID != nil {
+                        if vm.selectedAudioClipID != nil {
+                            EditorAudioActionBar(vm: vm)
+                        } else if vm.selectedClipID != nil {
                             EditorClipActionBar(vm: vm)
                         } else if vm.selectedTextOverlayID != nil {
                             EditorTextActionBar(vm: vm)
@@ -67,7 +80,12 @@ struct EditorScreen: View {
                             EditorBottomToolbar(vm: vm)
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: vm.selectedClipID != nil || vm.selectedTextOverlayID != nil)
+                    .animation(
+                        .easeInOut(duration: 0.2),
+                        value: vm.selectedClipID != nil
+                            || vm.selectedTextOverlayID != nil
+                            || vm.selectedAudioClipID != nil
+                    )
                 }
             }
 
@@ -92,6 +110,18 @@ struct EditorScreen: View {
                 }
             )
         }
+        .sheet(isPresented: $isAudioPickerPresented) {
+            AudioPickerView(
+                onPick: { url in
+                    isAudioPickerPresented = false
+                    vm.loadAudioClip(from: url, insertAfterIndex: insertAfterAudioIndex)
+                    insertAfterAudioIndex = nil
+                },
+                onCancel: {
+                    isAudioPickerPresented = false
+                }
+            )
+        }
         .sheet(
             isPresented: Binding(
                 get: { vm.isTextEditorPresented },
@@ -104,6 +134,22 @@ struct EditorScreen: View {
                 TextOverlayEditorSheet(vm: vm, overlay: overlay)
                     .presentationBackgroundInteraction(.enabled)
             }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .volume },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .volume {
+                        vm.selectedTool = nil
+                    }
+                }
+            )
+        ) {
+            VolumeToolPanel(vm: vm)
+                .presentationDetents([.height(180)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
         }
         .task {
             await Task.yield()

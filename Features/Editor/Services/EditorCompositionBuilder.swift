@@ -10,6 +10,7 @@ import UIKit
 struct EditorCompositionBuildResult {
     let composition: AVMutableComposition
     let videoComposition: AVVideoComposition?
+    let audioMix: AVAudioMix?
     let duration: CMTime
 }
 
@@ -17,7 +18,7 @@ enum EditorCompositionBuilder {
 
     private static let timescale: CMTimeScale = 600
     /// Portrait canvas matching `EditorPreviewLayout` (9:16).
-    private static let renderSize = CGSize(width: 1080, height: 1920)
+    private static let previewCanvasSize = CGSize(width: 1080, height: 1920)
     private static var assetCache: [String: AVAsset] = [:]
     private static var photoVideoCache: [String: URL] = [:]
     private static var warmedPlayerItem: AVPlayerItem?
@@ -51,6 +52,11 @@ enum EditorCompositionBuilder {
         return item
     }
 
+    private struct AudioVolumeSegment {
+        let timeRange: CMTimeRange
+        let volume: Float
+    }
+
     private struct VideoSegment {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
@@ -62,9 +68,13 @@ enum EditorCompositionBuilder {
     static func build(
         from clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
-        frameRate: Int32 = 30
+        audioClips: [EditorAudioClip] = [],
+        frameRate: Int32 = 30,
+        canvasSize: CGSize? = nil
     ) async -> EditorCompositionBuildResult? {
         guard !clips.isEmpty else { return nil }
+
+        let renderSize = canvasSize ?? previewCanvasSize
 
         let composition = AVMutableComposition()
         guard
@@ -81,6 +91,7 @@ enum EditorCompositionBuilder {
 
         var cursor = CMTime.zero
         var videoSegments: [VideoSegment] = []
+        var audioVolumeSegments: [AudioVolumeSegment] = []
 
         for clip in clips {
             let segmentDuration = CMTime(seconds: clip.duration, preferredTimescale: timescale)
@@ -132,6 +143,7 @@ enum EditorCompositionBuilder {
                         on: compositionAudioTrack,
                         at: cursor
                     )
+                    audioVolumeSegments.append(AudioVolumeSegment(timeRange: segmentRange, volume: clip.volume))
                 }
             } else if let photoURL = await photoVideoURL(for: clip.asset, duration: clip.duration) {
                 let photoAsset = AVURLAsset(url: photoURL)
@@ -148,7 +160,16 @@ enum EditorCompositionBuilder {
 
         guard cursor.seconds > 0 else { return nil }
 
-        let segmentsSnapshot = videoSegments
+        let videoDuration = cursor.seconds
+        var timelineExtent = videoDuration
+        for audioClip in audioClips {
+            timelineExtent = max(timelineExtent, audioClip.timelineStart + audioClip.duration)
+        }
+        for overlay in textOverlays {
+            timelineExtent = max(timelineExtent, overlay.endTime)
+        }
+
+        var segmentsSnapshot = videoSegments
         var animationTool: AVVideoCompositionCoreAnimationTool?
 
         if !textOverlays.isEmpty {
@@ -160,7 +181,7 @@ enum EditorCompositionBuilder {
             videoLayer.frame = CGRect(origin: .zero, size: renderSize)
             parentLayer.addSublayer(videoLayer)
 
-            let totalDuration = cursor.seconds
+            let totalDuration = timelineExtent
             for overlay in textOverlays {
                 if let image = EditorTextOverlayRenderer.render(overlay: overlay, renderSize: renderSize) {
                     let textLayer = CALayer()
@@ -196,31 +217,97 @@ enum EditorCompositionBuilder {
             animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
         }
 
+        // Background music clips (inserted before extending video track / instructions).
+        var mixParams: [AVMutableAudioMixInputParameters] = []
+
+        // Per-clip volume
+        if let clipAudioTrack = compositionAudioTrack, !audioVolumeSegments.isEmpty {
+            let needsClipMix = audioVolumeSegments.contains(where: { abs($0.volume - 1.0) > 0.001 })
+            if needsClipMix {
+                let params = AVMutableAudioMixInputParameters(track: clipAudioTrack)
+                for seg in audioVolumeSegments {
+                    params.setVolume(seg.volume, at: seg.timeRange.start)
+                }
+                mixParams.append(params)
+            }
+        }
+
+        // Background music clips
+        for audioClip in audioClips where FileManager.default.fileExists(atPath: audioClip.fileURL.path) {
+            let bgAsset = AVURLAsset(url: audioClip.fileURL)
+            guard let bgSourceTrack = try? await bgAsset.loadTracks(withMediaType: .audio).first,
+                  let bgCompTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                  ) else { continue }
+
+            let timelineStart = CMTime(seconds: audioClip.timelineStart, preferredTimescale: timescale)
+            let sourceStart = CMTime(seconds: audioClip.trimStart, preferredTimescale: timescale)
+            let sourceDuration = CMTime(seconds: audioClip.duration, preferredTimescale: timescale)
+            guard sourceDuration.seconds > 0 else { continue }
+
+            let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
+
+            try? bgCompTrack.insertTimeRange(sourceRange, of: bgSourceTrack, at: timelineStart)
+
+            timelineExtent = max(timelineExtent, audioClip.timelineStart + audioClip.duration)
+
+            let bgParams = AVMutableAudioMixInputParameters(track: bgCompTrack)
+            bgParams.setVolume(audioClip.volume, at: timelineStart)
+            mixParams.append(bgParams)
+        }
+
+        // Keep the video track and composition instructions aligned with the full timeline
+        // (long background audio extends composition duration past the last video frame).
+        if timelineExtent > videoDuration {
+            let emptyStart = CMTime(seconds: videoDuration, preferredTimescale: timescale)
+            let emptyDuration = CMTime(seconds: timelineExtent - videoDuration, preferredTimescale: timescale)
+            try? compositionVideoTrack.insertEmptyTimeRange(
+                CMTimeRange(start: emptyStart, duration: emptyDuration)
+            )
+        }
+        segmentsSnapshot = segmentsCoveringTimelineExtent(
+            segmentsSnapshot,
+            extent: timelineExtent
+        )
+
         let videoComposition: AVVideoComposition? = {
             guard !segmentsSnapshot.isEmpty else { return nil }
             return makeVideoComposition(
                 compositionTrack: compositionVideoTrack,
                 segments: segmentsSnapshot,
                 frameRate: frameRate,
+                renderSize: renderSize,
                 animationTool: animationTool
             )
         }()
 
+        let audioMix: AVAudioMix?
+        if mixParams.isEmpty {
+            audioMix = nil
+        } else {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = mixParams
+            audioMix = mix
+        }
+
         return EditorCompositionBuildResult(
             composition: composition,
             videoComposition: videoComposition,
-            duration: cursor
+            audioMix: audioMix,
+            duration: CMTime(seconds: timelineExtent, preferredTimescale: timescale)
         )
     }
 
     /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
-    static func makePlayerItem(from clips: [EditorClip]) async -> AVPlayerItem? {
-        guard let built = await build(from: clips) else { return nil }
+    static func makePlayerItem(from clips: [EditorClip], audioClips: [EditorAudioClip] = []) async -> AVPlayerItem? {
+        guard let built = await build(from: clips, audioClips: audioClips) else { return nil }
 
         let item = await AVPlayerItem(asset: built.composition)
         await MainActor.run {
             item.audioTimePitchAlgorithm = .spectral
             item.videoComposition = built.videoComposition
+            item.audioMix = built.audioMix
         }
         return item
     }
@@ -237,12 +324,30 @@ enum EditorCompositionBuilder {
         track.scaleTimeRange(insertedRange, toDuration: timelineDuration)
     }
 
+    /// Extends the last video segment so instructions span the full composition (audio/text tail).
+    private static func segmentsCoveringTimelineExtent(
+        _ segments: [VideoSegment],
+        extent: TimeInterval
+    ) -> [VideoSegment] {
+        guard !segments.isEmpty, extent > 0 else { return segments }
+        let extentTime = CMTime(seconds: extent, preferredTimescale: timescale)
+        guard let last = segments.last else { return segments }
+        let lastEnd = last.timeRange.end
+        guard lastEnd < extentTime else { return segments }
+
+        let holdRange = CMTimeRange(start: lastEnd, duration: extentTime - lastEnd)
+        var extended = segments
+        extended.append(VideoSegment(timeRange: holdRange, transform: last.transform))
+        return extended
+    }
+
     // MARK: - Video composition (orientation + aspect fit)
 
     private static func makeVideoComposition(
         compositionTrack: AVMutableCompositionTrack,
         segments: [VideoSegment],
         frameRate: Int32,
+        renderSize: CGSize,
         animationTool: AVVideoCompositionCoreAnimationTool? = nil
     ) -> AVVideoComposition {
         let frameDuration = CMTime(value: 1, timescale: frameRate)
@@ -256,7 +361,7 @@ enum EditorCompositionBuilder {
 
                 let instructionConfiguration = AVVideoCompositionInstruction.Configuration(
                     backgroundColor: nil,
-                    enablePostProcessing: true,
+                    enablePostProcessing: false,
                     layerInstructions: [
                         AVVideoCompositionLayerInstruction(configuration: layerConfiguration)
                     ],
@@ -360,8 +465,8 @@ enum EditorCompositionBuilder {
 
     private static func writePhotoVideo(image: UIImage, duration: TimeInterval) async -> URL? {
         let oriented = normalizedPortraitImage(image)
-        let width = Int(renderSize.width)
-        let height = Int(renderSize.height)
+        let width = Int(previewCanvasSize.width)
+        let height = Int(previewCanvasSize.height)
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mixtape-photo-\(UUID().uuidString).mov")
@@ -418,15 +523,15 @@ enum EditorCompositionBuilder {
     private static func normalizedPortraitImage(_ image: UIImage) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        let renderer = UIGraphicsImageRenderer(size: renderSize, format: format)
+        let renderer = UIGraphicsImageRenderer(size: previewCanvasSize, format: format)
         return renderer.image { _ in
             UIColor.black.setFill()
-            UIBezierPath(rect: CGRect(origin: .zero, size: renderSize)).fill()
-            let aspect = min(renderSize.width / image.size.width, renderSize.height / image.size.height)
+            UIBezierPath(rect: CGRect(origin: .zero, size: previewCanvasSize)).fill()
+            let aspect = min(previewCanvasSize.width / image.size.width, previewCanvasSize.height / image.size.height)
             let drawSize = CGSize(width: image.size.width * aspect, height: image.size.height * aspect)
             let origin = CGPoint(
-                x: (renderSize.width - drawSize.width) / 2,
-                y: (renderSize.height - drawSize.height) / 2
+                x: (previewCanvasSize.width - drawSize.width) / 2,
+                y: (previewCanvasSize.height - drawSize.height) / 2
             )
             image.draw(in: CGRect(origin: origin, size: drawSize))
         }

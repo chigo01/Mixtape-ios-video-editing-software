@@ -65,7 +65,8 @@ final class ClipTrimHandleContainerView: UIView {
     private var speed: Float = 1
     private var pixelsPerSecond: CGFloat = 18
 
-    private let handleWidth: CGFloat = 18
+    private let handleWidth: CGFloat = 22
+    private weak var scrollViewWhilePanning: UIScrollView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -127,6 +128,8 @@ final class ClipTrimHandleContainerView: UIView {
         case .began:
             baselineTrimStart = trimStart
             baselineTrimEnd = trimEnd
+            scrollViewWhilePanning = enclosingScrollView()
+            scrollViewWhilePanning?.isScrollEnabled = false
         case .changed:
             let deltaX = gesture.translation(in: self).x
             let deltaTimeline = TimeInterval(deltaX / pixelsPerSecond)
@@ -149,11 +152,22 @@ final class ClipTrimHandleContainerView: UIView {
             trimEnd = newEnd
             onTrimChanged?(clipID, newStart, newEnd)
         case .ended, .cancelled:
+            scrollViewWhilePanning?.isScrollEnabled = true
+            scrollViewWhilePanning = nil
             onTrimEnded?()
             gesture.setTranslation(.zero, in: self)
         default:
             break
         }
+    }
+
+    private func enclosingScrollView() -> UIScrollView? {
+        var view: UIView? = superview
+        while let current = view {
+            if let scroll = current as? UIScrollView { return scroll }
+            view = current.superview
+        }
+        return nil
     }
 }
 
@@ -193,7 +207,7 @@ private final class TrimHandleView: UIView {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        let hit = bounds.insetBy(dx: -6, dy: -4)
+        let hit = bounds.insetBy(dx: -10, dy: -6)
         return hit.contains(point)
     }
 

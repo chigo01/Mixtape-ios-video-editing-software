@@ -6,7 +6,7 @@ This document explains **what the Mixtape editing flow does today** — from **N
 
 ## 1. From the home screen to the editor (project + media pick)
 
-The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, text overlays, playhead, and selection — not raw video files.
+The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, volume, text overlays, **background audio clips**, playhead, selection, and **project title** — not raw video files.
 
 ### 1.1 App entry and home screen
 
@@ -88,8 +88,10 @@ In code we represent that with:
 |------|----------------|
 | **Global time** (playhead on the ruler) | `EditorViewModel.timelinePosition` — a single `TimeInterval` from `0` to `totalDuration`. |
 | **Which asset + time inside it** | `clipAndLocalTime(at:)` maps global time → `(clip, index, localTime)`. |
-| **Total length** | `totalDuration` = sum of each clip’s **timeline** duration (after trim/speed). |
+| **Video-only length** | `videoDuration` = sum of clip timeline durations (trim + speed). Used for filmstrip layout and “hold last frame” past video end. |
+| **Full timeline length** | `totalDuration` = `max(videoDuration, audioEnd, textEnd)` — ruler and playback can extend past the last video frame when music or text runs longer. |
 | **Text on screen** | `textOverlays` with global `startTime`/`endTime`; preview filters by `isVisible(at: timelinePosition)`. |
+| **Background music** | `audioClips: [EditorAudioClip]` — each has `timelineStart`, trim range, volume; mixed in composition on separate tracks. |
 
 So: **scrubbing the ruler** or **moving the playhead** updates `timelinePosition` only. The preview then asks: “At this global time, which clip is playing, and where inside that clip?”
 
@@ -107,24 +109,28 @@ So: **scrubbing the ruler** or **moving the playhead** updates `timelinePosition
 EditorScreen
 ├── EditorTopBar             ← back, undo/redo, Export → EditorExportScreen
 ├── EditorPreviewPlayer      ← 9:16 card, AVPlayerLayer, text overlay layer, HUD, fullscreen
-├── SpeedToolPanel           ← when SPEED tool active
-├── EditorTimeline           ← ruler, text lane, filmstrip clips, audio lane (stub), playhead, + insert
-├── EditorBottomToolbar      ← default tools (split, speed, volume*, filter*, text)
+├── SpeedToolPanel           ← when SPEED tool active (inline above timeline)
+├── EditorTimeline           ← ruler, text lane, filmstrip clips, audio lane, playhead, + insert
+├── EditorBottomToolbar      ← default tools (split, speed, volume, filter*, text)
 ├── EditorClipActionBar      ← when a clip is selected: back + contextual actions + delete
-└── EditorTextActionBar      ← when a text overlay is selected: back + edit + delete
+├── EditorTextActionBar      ← when a text overlay is selected: back + edit + delete
+└── EditorAudioActionBar     ← when an audio clip is selected: split, volume, delete
 
+VolumeToolPanel              ← bottom sheet when VOLUME tool active (clip or audio)
 TextOverlayEditorSheet       ← bottom sheet (styles, fonts, position); live-syncs to preview
+AudioPickerView              ← sheet to import MP3/M4A etc. onto the audio lane
 
-* volume / filter: toolbar buttons only — no panel or composition wiring yet
+* filter: toolbar button only — no panel or CIFilter compositor yet
 
 EditorExportScreen (pushed from Export)
-├── Preview + duration badge
+├── EditorExportPreviewSection ← live composition preview, play/pause, scrub slider
+├── Project name field         ← edits projectTitle (saved + used as export filename)
 ├── Resolution / frame rate / format settings
 ├── File size estimate
-└── Export panel             ← progress, Cancel, Share on complete
+└── Export panel               ← progress, Cancel, Share on complete (plays exported file)
 ```
 
-- **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, **`textOverlays`**, a **single** `AVPlayer?` backed by an **`AVMutableComposition`**, scrub/seek helpers, playback tick timer, and clip/text-editing APIs (trim, split, insert, text overlays, delete clip).
+- **`EditorViewModel`** (`@MainActor`, `@Observable`): owns timeline state, **`textOverlays`**, **`audioClips`**, **`projectTitle`**, a **single** `AVPlayer?` backed by an **`AVMutableComposition`**, scrub/seek helpers, playback tick timer, and clip/text/audio-editing APIs (trim, split, insert, move, text overlays, delete clip, export orchestration).
 - **`EditorCompositionBuilder`** (`Services/`): builds the continuous preview stream from all clips (see **§4**).
 - **Views** (`View/Components`, `View/Screens`) are mostly passive: they call `vm.setTimelinePositionForScrub`, `commitTimelineAfterScrub`, `togglePlay()`, etc.
 
@@ -143,17 +149,21 @@ This follows **MVVM + unidirectional data flow**: the view model is the source o
 
 ### 4.1 How it works today
 
-1. **`EditorCompositionBuilder.makePlayerItem(from:)`** (`Services/EditorCompositionBuilder.swift`):
+1. **`EditorCompositionBuilder.makePlayerItem(from:audioClips:)`** (`Services/EditorCompositionBuilder.swift`):
    - Creates **`AVMutableComposition`**.
    - For each **`EditorClip`**, inserts the trimmed source range (`trimStart` … `trimEnd`) at the correct **composition time** (sequential cursor).
-   - **Videos:** `PHImageManager.requestAVAsset(forVideo:)` → insert video + audio tracks.
+   - **Videos:** `PHImageManager.requestAVAsset(forVideo:)` → insert video + audio tracks (per-clip volume via **`AVAudioMix`** when not 100%).
    - **Photos:** converts still → short silent video segment (via **`AVAssetWriter`**) so photos sit in the same composition.
+   - **Background audio:** each **`EditorAudioClip`** is inserted on its own composition audio track at `timelineStart` (full trim duration — not capped to video length).
+   - **Extended timeline:** when audio/text extends past the last video frame, the video track gets an empty tail and video-composition instructions are extended so preview still renders correctly.
 2. An **`AVVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview. On **iOS 26+** it is built with the new **`AVVideoComposition.Configuration`** value type (plus `AVVideoCompositionInstruction.Configuration` / `AVVideoCompositionLayerInstruction.Configuration`); on older OS versions we fall back to the deprecated **`AVMutableVideoComposition`** subclasses, which Apple deprecated in iOS 26.
 3. **`EditorViewModel`** keeps **one** `AVPlayer` whose item is that composition.
 4. **`playbackTick`** reads **`player.currentTime()`** → updates **`timelinePosition`**. No manual “advance to next clip” hop.
-5. When clips change (trim commit, split, insert), **`invalidateComposition()`** forces a rebuild on next align/play.
+5. When clips, audio, or per-clip volume change, **`invalidateComposition()`** forces a rebuild on next align/play. **`clipsFingerprint()`** includes clip + audio state so warmed picker compositions are skipped when audio is present.
 
 **Seeking after scrub:** `alignPlaybackToTimeline()` → `ensureCompositionPlayer()` → `seekPlayerToTimeline()`.
+
+**Warmed composition:** `EditorCompositionBuilder.warmUp` pre-builds video-only items on the picker **Next** screen. `consumeWarmedPlayerItem` is only used when **no** `audioClips` are loaded.
 
 **Poster vs video layer:** `EditorPreviewPlayer` hides the still poster while the video layer is active so you don’t see double images.
 
@@ -195,7 +205,7 @@ Text is **not** part of the preview `AVMutableComposition`. Instead:
 
 Preview rebuilds (`makePlayerItem`) call `build(from: clips)` **without** overlays — that is intentional. Only export passes `textOverlays`.
 
-When text overlays exist, `makeVideoComposition` uses the legacy **`AVMutableVideoComposition`** path (even on iOS 26+) because `AVVideoCompositionCoreAnimationTool` requires it. `enablePostProcessing = true` on each instruction so the animation tool runs.
+When text overlays exist, `makeVideoComposition` uses the legacy **`AVMutableVideoComposition`** path (even on iOS 26+) because `AVVideoCompositionCoreAnimationTool` requires it. `enablePostProcessing = true` on each instruction so the animation tool runs. The iOS 26 **Configuration** path (no animation tool) uses `enablePostProcessing = false`.
 
 **Learn:**
 
@@ -346,21 +356,43 @@ Selected clips can be **reordered** by long-pressing and dragging left or right 
 - [UIViewRepresentable](https://developer.apple.com/documentation/swiftui/uiviewrepresentable) — bridging UIKit gesture views into SwiftUI.
 - [interactiveSpring](https://developer.apple.com/documentation/swiftui/animation/interactivespring(response:dampingfraction:blenduration:)) — spring animation tuned for gesture-driven interactions.
 
-### 6.7 Text overlays (timeline + editing)
+### 6.8 Text overlays (timeline + editing)
 
 **Model:** `EditorTextOverlay` (`Model/EditorTextOverlay.swift`) — text, `startTime`/`endTime`, font family/style/size, color, opacity, alignment, `xOffset`/`yOffset`.
 
 **Adding text:** Tap **TEXT** in `EditorBottomToolbar` or `EditorClipActionBar` → `addTextOverlay()` creates a 3-second overlay at the playhead → opens **`TextOverlayEditorSheet`**.
 
-**Timeline lane:** When `textOverlays` is non-empty, `EditorTimeline` renders a row above the clip filmstrip. Each bar shows truncated text; tap to select. Selected overlays reuse **`ClipTrimHandleRepresentable`** to drag start/end times (same UIKit trim handles as clips, but times are global seconds).
+**Timeline lane:** When `textOverlays` is non-empty, `EditorTimeline` renders a row above the clip filmstrip. Each bar shows truncated text; tap to select; **drag body** to move along the timeline. Selected overlays reuse **`ClipTrimHandleRepresentable`** to drag start/end times (same UIKit trim handles as clips, but times are global seconds).
 
 **Editing:** `TextOverlayEditorSheet` has **Styles** and **Fonts** tabs — font presets, colors, size slider, opacity, alignment, position offsets. Changes call `updateTextOverlay(_:)` live. **Done** commits; empty text on dismiss deletes the overlay.
 
-**Selection chrome:** `EditorScreen` swaps the bottom bar — clip selected → **`EditorClipActionBar`**; text selected → **`EditorTextActionBar`** (edit / delete); nothing selected → **`EditorBottomToolbar`**.
+**Selection chrome:** `EditorScreen` swaps the bottom bar — clip → **`EditorClipActionBar`**; text → **`EditorTextActionBar`**; audio → **`EditorAudioActionBar`**; nothing selected → **`EditorBottomToolbar`**.
 
 **Persistence:** Saved as **`SavedTextOverlay`** inside `EditorProject` JSON. Restored in `EditorViewModel.init(project:)`.
 
-### 6.8 Contextual clip action bar
+### 6.9 Background audio (CapCut-style)
+
+**Model:** `EditorAudioClip` (`Model/EditorAudioClip.swift`) — imported file URL, `timelineStart`, `trimStart`/`trimEnd`, `volume`, `split(atSourceTime:)`.
+
+**Adding audio:** Tap **+** on the audio lane → **`AudioPickerView`** sheet → file copied to app documents → `loadAudioClip(from:insertAfterIndex:)`.
+
+**Timeline lane:** `EditorTimeline.audioRow` renders bars per clip (`AudioClipThumb`). Select for trim handles; **drag body** to move; **drag handles** to trim (parent scroll disabled while trimming).
+
+**Contextual bar:** **`EditorAudioActionBar`** — SPLIT (at playhead), VOLUME (opens **`VolumeToolPanel`**), DELETE.
+
+**Composition:** each clip → separate composition audio track + per-track volume in **`AVAudioMix`**. Timeline can extend past video when music is longer.
+
+**Persistence:** `SavedAudioClip[]` in `EditorProject`; legacy `SavedAudioTrack` migrates to one clip on decode.
+
+**Layout:** `TimelineLayout` positions video clips using `videoDuration`; ruler width uses `timelineExtent` (= `totalDuration`).
+
+### 6.10 Volume tool
+
+- Tap **VOLUME** (main toolbar, clip bar, or audio bar) → **`VolumeToolPanel`** bottom sheet.
+- Targets **selected video clip** (embedded audio) or **selected audio clip** (background music).
+- Presets, mute toggle, slider commits on release → `alignPlaybackToTimeline()` rebuilds **`AVAudioMix`**.
+
+### 6.11 Contextual clip action bar
 
 When a clip thumbnail is selected, **`EditorClipActionBar`** replaces the main toolbar (CapCut-style):
 
@@ -368,7 +400,7 @@ When a clip thumbnail is selected, **`EditorClipActionBar`** replaces the main t
 - **SPLIT / SPEED / VOLUME / FILTER / TEXT** → same actions as the main toolbar (`performClipAction`).
 - **DELETE** → `deleteSelectedClip()` (disabled when only one clip remains).
 
-Selecting a clip clears text-overlay selection; selecting a text overlay clears clip selection.
+Selecting a clip clears text-overlay and audio selection; selecting text or audio clears the others.
 
 ---
 
@@ -389,31 +421,35 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 | Path | Role |
 |------|------|
-| `View/Screens/EditorScreen.swift` | Editor layout, speed panel, contextual toolbars, text sheet, navigates to export. |
-| `View/Screens/EditorExportScreen.swift` | Dedicated export UI: settings, progress, share. |
-| `ViewModel/EditorViewModel.swift` | Timeline, playback, text overlays, undo, export orchestration, auto-save. |
+| `View/Screens/EditorScreen.swift` | Editor layout, speed panel, volume sheet, contextual toolbars, text/audio sheets, export navigation. |
+| `View/Screens/EditorExportScreen.swift` | Export UI: live preview + scrubber, project name, settings, progress, share. |
+| `ViewModel/EditorViewModel.swift` | Timeline, playback, text/audio overlays, `projectTitle`, undo, export, auto-save. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
-| `Services/EditorCompositionBuilder.swift` | Shared `build(from:textOverlays:frameRate:)` for preview + export; speed via `scaleTimeRange`; text burn-in via `AVVideoCompositionCoreAnimationTool`. |
-| `Services/EditorExportService.swift` | `AVAssetExportSession` with settings + text overlays; save to Photos; cancel. |
+| `Services/EditorCompositionBuilder.swift` | Shared `build(from:textOverlays:audioClips:frameRate:)` for preview + export; per-clip + background audio mix; extended timeline fix. |
+| `Services/EditorExportService.swift` | `AVAssetExportSession` with settings + overlays + audio; sanitized project-title filename; save to Photos. |
 | `Services/EditorTextOverlayRenderer.swift` | SwiftUI text → `UIImage` for export (`ImageRenderer` + off-screen fallback). |
 | `Services/EditorUndoManager.swift` | Snapshot undo/redo stack. |
 | `Services/ClipThumbnailService.swift` | Cached multi-frame filmstrip generation. |
-| `View/Components/EditorTimeline.swift` | Ruler, text lane, scrub, filmstrip clips, audio lane stub, playhead, `TimelineLayout`. |
+| `View/Components/EditorTimeline.swift` | Ruler, text lane, filmstrip, audio lane, scrub, playhead, `TimelineLayout`. |
 | `View/Components/ClipFilmstripView.swift` | Tiled thumbnail row per clip. |
 | `View/Components/SpeedToolPanel.swift` | Speed presets + slider when SPEED tool is active. |
+| `View/Components/VolumeToolPanel.swift` | Volume presets + slider sheet (clip or audio clip). |
+| `View/Components/AudioPickerView.swift` | Document picker for background music import. |
+| `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected. |
 | `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
-| `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`) — clips and text overlays. |
+| `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`) — clips, text, and audio. |
 | `View/Components/EditorPreviewPlayer.swift` | Inline preview, text overlay layer, HUD, `PlayerLayerView`. |
 | `View/Components/EditorTextOverlayLayerView.swift` | SwiftUI text composited over preview (inline + fullscreen). |
 | `View/Components/TextOverlayEditorSheet.swift` | Bottom sheet for text content + style controls. |
 | `View/Components/EditorClipActionBar.swift` | Contextual toolbar when a clip is selected (incl. delete). |
 | `View/Components/EditorTextActionBar.swift` | Contextual toolbar when a text overlay is selected. |
 | `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + main editing tools. |
-| `Model/EditorClip.swift` | Clip model, trim/speed/split, preview aspect. |
+| `Model/EditorClip.swift` | Clip model, trim/speed/volume/split, preview aspect. |
 | `Model/EditorTextOverlay.swift` | Text overlay model + style enums. |
-| `Model/EditorTimelineSnapshot.swift` | Undo snapshot (`clips`, playhead, selection, `textOverlays`). |
-| `Model/EditorAudioTrack.swift` / `EditorTool.swift` | Audio track stub + tool enum (volume/filter not wired). |
-| `ProjectList/Model/EditorProject.swift` | Codable project document (`SavedEditorClip`, `SavedTextOverlay`, etc.). |
+| `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume). |
+| `Model/EditorTimelineSnapshot.swift` | Undo snapshot (`clips`, playhead, selections, `textOverlays`, `audioClips`). |
+| `Model/EditorTool.swift` | Tool enum (`filter` not wired yet). |
+| `ProjectList/Model/EditorProject.swift` | Codable project document (`SavedEditorClip`, `SavedTextOverlay`, `SavedAudioClip`, etc.). |
 | `ProjectList/Services/ProjectStore.swift` | JSON persistence in Application Support. |
 | `Core/AudioSessionConfigurator.swift` | Speaker / headphone routing for preview audio. |
 | `Core/SwipeBackEnabler.swift` | Edge-swipe back despite hidden nav bars (see **§1.7**). |
@@ -436,7 +472,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 **Composition + export**
 
-- Preview calls **`EditorCompositionBuilder.build(from:frameRate:)`** (no text). Export calls **`build(from:textOverlays:frameRate:)`** — same 1080×1920 canvas and transforms, plus optional text burn-in. Export passes the user's frame-rate setting in (the resulting `AVVideoComposition` is immutable, so `frameDuration` is set at build time, not patched afterwards). Export uses **`AVAssetExportSession.export(to:as:)`** via `EditorExportService`. See [AVAssetExportSession](https://developer.apple.com/documentation/avfoundation/avassetexportsession).
+- Preview calls **`EditorCompositionBuilder.build(from:audioClips:frameRate:)`** (no text overlays in preview player). Export calls **`build(from:textOverlays:audioClips:frameRate:)`** — same 1080×1920 canvas, transforms, text burn-in, and background audio. Export passes the user's frame-rate setting and **`projectTitle`** for the output filename via `EditorExportService`.
 
 **SwiftUI + UIKit together**
 
@@ -463,8 +499,9 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 9. In the simulator: scrub ruler vs drag filmstrip vs tap-to-select vs trim handle drag — map each to the gesture / hit-test code.
 10. Tap **TEXT** → edit in **`TextOverlayEditorSheet`** → scrub through the overlay's time range and confirm preview text appears/disappears. Export and confirm text is burned into the file.
 11. Select a clip → use **`EditorClipActionBar`** → **DELETE** (with 2+ clips) or **reorder** via long-press drag.
-12. Tap **Export** → configure settings on **`EditorExportScreen`** → watch `EditorExportService` progress → confirm Photos + Share.
-13. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip (including text overlays).
+12. Tap **Export** → preview/scrub on **`EditorExportScreen`** → set project name → configure settings → export → confirm Photos + Share (filename = sanitized project title).
+13. Add background music → trim/move/split → adjust volume → confirm playback past video end if music is longer.
+14. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip (clips, text, audio, title).
 
 ---
 
@@ -502,6 +539,13 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Clip delete** | Remove selected clip (min 2 clips); playhead + selection adjust | `EditorClipActionBar`, `deleteSelectedClip` | Array editing + composition invalidation |
 | **Text preview drag** | Drag selected overlay on preview to reposition | `EditorTextOverlayLayerView`, `beginTextOverlayPositionDrag` | `DragGesture` + offset undo batching |
 | **Text style undo** | Sheet edits + position drag register one undo step | `beginTextOverlayEdit`, `finalizeTextOverlayEdit`, `TextOverlayEditorSheet` | Memento pattern (same as speed/trim) |
+| **Background audio** | Import, trim, move, split, delete; multi-clip lane | `EditorAudioClip`, `AudioClipThumb`, `EditorAudioActionBar`, `AudioPickerView` | Multi-track `AVMutableComposition` + `AVAudioMix` |
+| **Volume tool** | Per-clip and per-audio volume with live preview | `VolumeToolPanel`, `commitVolume`, `commitAudioVolume` | `AVAudioMixInputParameters` |
+| **Extended timeline** | Audio/text can extend past video; composition aligned | `totalDuration`, `videoDuration`, `segmentsCoveringTimelineExtent` | Composition duration vs video-composition instructions |
+| **Export preview** | Live player, scrub slider, play/pause on export screen | `EditorExportPreviewSection` | Reuses editor `AVPlayer` + exported-file player |
+| **Project name on export** | Rename before export; persists to JSON | `commitProjectTitle`, export screen `PROJECT NAME` field | Debounced `ProjectStore` save |
+| **Export filename** | Shared file uses sanitized project title | `EditorExportService.sanitizeFileName` | Filesystem-safe naming |
+| **Export quality / bitrate** | Mbps tiers + HDR/HEVC; writer-based encode | `EditorExportQuality`, `EditorExportService.exportWithWriter` | `AVAssetWriter` + `AVVideoAverageBitRateKey` |
 
 ---
 
@@ -510,18 +554,20 @@ Use this as a map of **what we built** and **why**, in learning order:
 ### 12.1 Export
 
 - Tap **Export** in `EditorTopBar` → navigates to **`EditorExportScreen`**.
-- Configure **resolution** (720p / 1080p / 4K), **frame rate** (24–120), and **format** (MP4 / MOV).
-- **File size** shows a rough estimate from duration + resolution.
-- Tap **EXPORT PROJECT** → `EditorViewModel.startExport(settings:)` runs `EditorExportService.export(clips:textOverlays:settings:)` using **`EditorCompositionBuilder.build(from:textOverlays:frameRate:)`** — clips + burned-in text overlays.
+- **Preview section:** live composition playback (same `AVPlayer` as editor), play/pause, **scrub slider** with current/total time. After export completes, preview switches to the exported file.
+- **Project name:** editable field — updates `projectTitle`, auto-saved on leave/export; also used as the **export filename** (`My Project.mp4`, sanitized).
+- Configure **resolution** (720p / 1080p / 4K), **frame rate** (24–120), **quality** (Efficient / Balanced / High / Max with target Mbps), optional **HDR (HEVC 10-bit)**, and **format** (MP4 / MOV).
+- **File size** estimate uses the selected video bitrate + AAC audio.
+- Tap **EXPORT PROJECT** → `EditorViewModel.startExport(settings:)` → `EditorExportService.export(…, projectTitle:)` using **`EditorCompositionBuilder.build(from:textOverlays:audioClips:frameRate:)`** — clips + text burn-in + background audio.
 - Bottom **progress panel**: percentage, linear bar, **Cancel** while rendering.
-- On success: saved to Photos + **Share** sheet (system `UIActivityViewController`) and **Done**.
+- On success: saved to Photos + **Share** sheet (filename reflects project title) and **Done**.
 - Requires **Photo Library Add** permission (`NSPhotoLibraryAddUsageDescription`).
 
 ### 12.2 Undo / Redo
 
 - **Undo** / **Redo** buttons live in `EditorTopBar` (next to back).
-- `EditorUndoManager` stores **`EditorTimelineSnapshot`** (`clips`, `timelinePosition`, `selectedClipID`, `textOverlays`).
-- Registered automatically on: **split**, **insert**, **trim commit**, **speed change** (when SPEED panel closes), **text overlay add/delete**, **text style/position edits** (sheet dismiss or preview drag end), **text time-range trim commit**, **clip delete**, **clip reorder**.
+- `EditorUndoManager` stores **`EditorTimelineSnapshot`** (`clips`, `timelinePosition`, `selectedClipID`, `selectedAudioClipID`, `textOverlays`, `audioClips`).
+- Registered automatically on: **split**, **insert**, **trim commit**, **speed change** (when SPEED panel closes), **volume commit**, **text overlay** add/delete/style/position/time-range edits, **clip delete**, **clip reorder**, **audio** trim/move/split/delete/volume.
 - After restore: `invalidateComposition()` + `alignPlaybackToTimeline()`.
 
 ### 12.3 Speed tool
@@ -540,8 +586,8 @@ Use this as a map of **what we built** and **why**, in learning order:
 ### 12.5 Persist projects
 
 - Projects are **`EditorProject`** JSON files in **Application Support / MixtapeProjects**.
-- Stores **`SavedEditorClip`** (`assetLocalIdentifier`, trim, speed, volume) and **`SavedTextOverlay`** (text, time range, style) — not raw video bytes.
-- **`SavedAudioTrack`** is in the schema but **`audioTrack` is not loaded** in `EditorViewModel.init` yet (always `nil` on open).
+- Stores **`SavedEditorClip`** (`assetLocalIdentifier`, trim, speed, volume), **`SavedTextOverlay`**, **`SavedAudioClip`** (file path, trim, `timelineStart`, volume), **`title`**, playhead, and selection — not raw video bytes.
+- Legacy **`SavedAudioTrack`** in older JSON files migrates to `audioClips` on decode.
 - **New project:** `CreateProjectScreen` saves on Next, then opens `EditorScreen(project:)`.
 - **Resume:** `ProjectListScreen` lists saved projects via **`ProjectListViewModel`**; tap anywhere on a **`ProjectCardView`** to reopen. The list re-sorts by `modifiedAt` and reloads each time the navigation path empties.
 - **Delete:** long-press a card → **Delete Project** → confirmation dialog → `ProjectStore.delete(id:)` removes the JSON file.
@@ -559,19 +605,80 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Styles tab:** font style chips, color palette, size slider, opacity, horizontal/vertical alignment, position offsets.
 - **Fonts tab:** system + bundled iOS font families.
 - **Preview:** `EditorTextOverlayLayerView` filters overlays by `isVisible(at: timelinePosition)` — also shown in fullscreen preview.
-- **Timeline:** dedicated lane above clips; tap bar to select; drag trim handles to adjust `startTime`/`endTime`.
+- **Timeline:** dedicated lane above clips; tap bar to select; drag body to move; drag trim handles for `startTime`/`endTime`.
 - **Preview drag:** select a text overlay, then drag it directly on the inline or fullscreen preview to adjust `xOffset`/`yOffset` (same offsets as the sheet sliders).
 - **Export:** `EditorTextOverlayRenderer` rasterizes each overlay → `CALayer` + opacity keyframe animation in `EditorCompositionBuilder` (see **§4.5**).
 - **Empty text on dismiss** auto-deletes the overlay.
+
+### 12.8 Background audio
+
+- Tap **+** on the audio lane → **`AudioPickerView`** imports an audio file (copied into the app sandbox).
+- **Select** a bar → **`EditorAudioActionBar`**: split at playhead, volume sheet, delete.
+- **Trim** with left/right handles (UIKit, same pattern as clips); **move** by dragging the selected bar body.
+- **Split** creates two adjacent audio clips from one source file at the playhead-local time.
+- Volume changes rebuild the composition mix (`AVAudioMix`).
+- Timeline ruler extends when music is longer than video; preview holds the last video frame in the tail.
+- **Export** includes all audio clips mixed under the video.
 
 ---
 
 ## 13. What to build next
 
+Prioritized backlog. Items marked **done** shipped recently — kept here for context.
+
+### Near term (core editor gaps)
+
 | Priority | Feature | Current state |
 |----------|---------|---------------|
-| 1 | **Volume tool** | `EditorClip.volume` + toolbar buttons exist; no UI panel, no `AVAudioMix` in composition/export. |
-| 2 | **Filter tool** | Toolbar button toggles `selectedTool`; no filter panel or `CIFilter` compositor. |
-| 3 | **Background music** | `EditorAudioTrack` model + timeline lane UI exist; `audioTrack` never loaded/set; not in composition. |
-| 4 | **Export preview playback** | `EditorExportScreen` preview header is static (cover image + play icon); no player wired. |
-| 5 | **Project rename** | `projectTitle` saved but no home-screen edit UI. |
+| 1 | **Filter tool** | Toolbar toggles `selectedTool == .filter`; no panel, no `CIFilter` / custom compositor in `EditorCompositionBuilder`. |
+| 2 | **Home-screen project rename** | **Partial:** rename on export screen saves `projectTitle`; no edit UI on `ProjectCardView` / long-press menu yet. |
+| 3 | **Audio fade in/out** | Volume is step/preset only; no envelope or keyframed fade on audio clip edges. |
+| 4 | **Clip transitions** | Hard cuts only; no crossfade / dip-to-black between adjacent video clips. |
+| 5 | **Photo clip duration** | Photos default to 3 s; no UI to stretch a still on the timeline without opening speed/trim workarounds. |
+
+### Export & sharing
+
+| Priority | Feature | Current state |
+|----------|---------|---------------|
+| 6 | **Export quality / bitrate** | **Done:** quality tiers (6–35 Mbps @1080p), live Mbps label, HDR/HEVC toggle; `AVAssetWriter` with explicit bitrate. |
+| 7 | **Photos library display name** | Share sheet uses project title; asset name inside Photos may still be generic. |
+| 8 | **Export range** | Always full `totalDuration`; no in/out markers for partial export. |
+
+### Timeline & media
+
+| Priority | Feature | Current state |
+|----------|---------|---------------|
+| 9 | **Duplicate clip** | No one-tap duplicate (video or audio). |
+| 10 | **Per-clip crop / rotate** | Only global aspect-fit in video composition; no reframe UI. |
+| 11 | **Video audio waveform** | Audio lane shows imported music; clip embedded audio has no waveform strip. |
+| 12 | **Snap playhead** | Free scrub; no magnetic snap to clip/overlay edges or beat grid. |
+| 13 | **Multi-select** | Single selection only across clips, text, and audio. |
+
+### Text & creative
+
+| Priority | Feature | Current state |
+|----------|---------|---------------|
+| 14 | **Text animations** | Static opacity keyframes (on/off); no typewriter, slide-in, or bounce presets. |
+| 15 | **Stickers / emoji layer** | Text only; no sticker track or SF Symbol overlays. |
+| 16 | **Templates** | Fixed 9:16 canvas; no 1:1 / 16:9 / TikTok-safe-zone presets. |
+
+### Platform & polish
+
+| Priority | Feature | Current state |
+|----------|---------|---------------|
+| 17 | **Beat sync / auto-cut** | Manual editing only; no BPM detection or cut-to-beat assist. |
+| 18 | **Voiceover recording** | Import audio files only; no in-app mic capture lane. |
+| 19 | **iCloud project sync** | Local JSON in Application Support only. |
+| 20 | **iPad layout** | Phone-first; no split view, keyboard shortcuts, or pointer hover on timeline. |
+| 21 | **Haptics on snap** | Reorder has haptics; trim/split/playhead snap do not. |
+
+### Recently shipped (for reference)
+
+| Feature | Notes |
+|---------|-------|
+| ~~Export preview playback~~ | Live player + scrub slider on `EditorExportScreen`. |
+| ~~Project name on export~~ | Field on export screen; persists + drives share filename. |
+| ~~Background audio~~ | Multi-clip lane, trim, move, split, volume, export mix. |
+| ~~Volume tool~~ | `VolumeToolPanel` for clip and audio clip. |
+| ~~Extended timeline~~ | Audio/text can run past video end without breaking preview. |
+| ~~Export quality / bitrate~~ | Efficient–Max tiers, Mbps label, HDR/HEVC toggle, writer encode. |

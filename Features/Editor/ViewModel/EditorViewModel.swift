@@ -19,7 +19,7 @@ final class EditorViewModel {
     private(set) var clips: [EditorClip]
     var selectedClipID: UUID?
     var textOverlays: [EditorTextOverlay]
-    var audioTrack: EditorAudioTrack?
+    var audioClips: [EditorAudioClip]
 
     /// Global playhead: 0 … totalDuration across every clip in order.
     var timelinePosition: TimeInterval = 0
@@ -31,6 +31,10 @@ final class EditorViewModel {
 
     var selectedTextOverlayID: UUID?
     var isTextEditorPresented: Bool = false
+
+    // MARK: Audio editing
+
+    var selectedAudioClipID: UUID?
 
     // MARK: Project persistence
 
@@ -76,6 +80,16 @@ final class EditorViewModel {
     @ObservationIgnored
     private var textTimeRangeUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var textMoveUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var volumeUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var audioTrimUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var audioMoveUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var audioVolumeUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
     private var saveTask: Task<Void, Never>?
 
     // MARK: Init
@@ -89,12 +103,20 @@ final class EditorViewModel {
         self.selectedClipID = project.selectedClipID ?? clips.first?.id
         self.timelinePosition = project.timelinePosition
         self.textOverlays = project.textOverlays.map { $0.toOverlay() }
-        self.audioTrack = nil
+        self.audioClips = project.audioClips.compactMap { $0.toAudioClip() }
+        self.selectedAudioClipID = project.selectedAudioClipID
     }
 
     // MARK: Derived
 
     var totalDuration: TimeInterval {
+        let video = clips.reduce(0) { $0 + $1.duration }
+        let audioEnd = audioClips.map(\.timelineEnd).max() ?? 0
+        let textEnd = textOverlays.map(\.endTime).max() ?? 0
+        return max(video, audioEnd, textEnd)
+    }
+
+    var videoDuration: TimeInterval {
         clips.reduce(0) { $0 + $1.duration }
     }
 
@@ -110,6 +132,15 @@ final class EditorViewModel {
     var selectedTextOverlay: EditorTextOverlay? {
         guard let id = selectedTextOverlayID else { return nil }
         return textOverlays.first { $0.id == id }
+    }
+
+    var selectedAudioClip: EditorAudioClip? {
+        guard let id = selectedAudioClipID else { return nil }
+        return audioClips.first { $0.id == id }
+    }
+
+    var sortedAudioClips: [EditorAudioClip] {
+        audioClips.sorted { $0.timelineStart < $1.timelineStart }
     }
 
     /// Clip currently under the global playhead (what the preview should show).
@@ -140,7 +171,9 @@ final class EditorViewModel {
 
     func clipAndLocalTime(at timelineT: TimeInterval) -> (clip: EditorClip, index: Int, localTime: TimeInterval)? {
         guard !clips.isEmpty else { return nil }
-        let clamped = min(max(0, timelineT), totalDuration)
+        // Map playhead to a video clip; past the video tail, hold the last frame.
+        let upperBound = videoDuration > 0 ? videoDuration : totalDuration
+        let clamped = min(max(0, timelineT), upperBound)
         var acc: TimeInterval = 0
         for (i, clip) in clips.enumerated() {
             let d = clip.duration
@@ -160,7 +193,23 @@ final class EditorViewModel {
     func selectClipForEditing(_ id: UUID) {
         selectedClipID = id
         selectedTextOverlayID = nil
+        selectedAudioClipID = nil
         isTextEditorPresented = false
+        selectedTool = nil
+    }
+
+    func selectAudioClip(_ id: UUID) {
+        selectedAudioClipID = id
+        selectedClipID = nil
+        selectedTextOverlayID = nil
+        isTextEditorPresented = false
+        selectedTool = nil
+    }
+
+    func deselectAudioClip() {
+        finalizeAudioVolumeEditUndo()
+        selectedTool = nil
+        selectedAudioClipID = nil
     }
 
     func deselectClip() {
@@ -169,6 +218,18 @@ final class EditorViewModel {
         }
         selectedTool = nil
         selectedClipID = nil
+    }
+
+    func performAudioAction(_ action: EditorAudioAction) {
+        switch action {
+        case .delete:
+            deleteSelectedAudioClip()
+        case .split:
+            splitSelectedAudioAtPlayhead()
+            selectedTool = .split
+        case .volume:
+            performToolAction(.volume)
+        }
     }
 
     func performClipAction(_ action: EditorClipAction) {
@@ -201,6 +262,10 @@ final class EditorViewModel {
     func selectTool(_ tool: EditorTool) {
         if selectedTool == .speed, tool != .speed {
             finalizeSpeedEditUndo()
+        }
+        if selectedTool == .volume, tool != .volume {
+            finalizeVolumeEditUndo()
+            finalizeAudioVolumeEditUndo()
         }
 
         if selectedTool == tool {
@@ -257,6 +322,36 @@ final class EditorViewModel {
         finalizeSpeedEditUndo()
         speedUndoSnapshot = currentSnapshot()
         Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Volume
+
+    func setVolume(clipID: UUID, volume: Float) {
+        guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        if volumeUndoSnapshot == nil {
+            volumeUndoSnapshot = currentSnapshot()
+        }
+        var clip = clips[idx]
+        clip.volume = min(max(volume, 0), 1.0)
+        clips[idx] = clip
+        invalidateComposition()
+    }
+
+    func commitVolume(clipID: UUID, volume: Float) {
+        setVolume(clipID: clipID, volume: volume)
+        finalizeVolumeEditUndo()
+        volumeUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func finalizeVolumeEditUndo() {
+        guard let before = volumeUndoSnapshot else { return }
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        volumeUndoSnapshot = nil
     }
 
     // MARK: Text Overlays
@@ -342,6 +437,8 @@ final class EditorViewModel {
         } else {
             selectedTextOverlayID = id
             selectedClipID = nil
+            selectedAudioClipID = nil
+            isTextEditorPresented = false
             selectedTool = nil
         }
     }
@@ -380,10 +477,33 @@ final class EditorViewModel {
         scheduleSave()
     }
 
+    func moveTextOverlayOnTimeline(id: UUID, startTime: TimeInterval) {
+        if textMoveUndoSnapshot == nil {
+            textMoveUndoSnapshot = currentSnapshot()
+        }
+        guard let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
+        let duration = textOverlays[idx].duration
+        let clampedStart = max(0, startTime)
+        textOverlays[idx].startTime = clampedStart
+        textOverlays[idx].endTime = clampedStart + duration
+    }
+
+    func commitTextOverlayMove() {
+        if let before = textMoveUndoSnapshot {
+            if before != currentSnapshot() {
+                undoManager.pushUndoState(before)
+                refreshUndoState()
+                scheduleSave()
+            }
+            textMoveUndoSnapshot = nil
+        }
+    }
+
     private func clearTextOverlayEditUndo() {
         textEditUndoSnapshot = nil
         textEditDragOrigin = nil
         textTimeRangeUndoSnapshot = nil
+        textMoveUndoSnapshot = nil
     }
 
     // MARK: Clips
@@ -515,6 +635,200 @@ final class EditorViewModel {
         Task { await alignPlaybackToTimeline() }
     }
 
+    // MARK: Audio Clips
+
+    func loadAudioClip(from sourceURL: URL, insertAfterIndex: Int? = nil) {
+        guard sourceURL.startAccessingSecurityScopedResource() else { return }
+        defer { sourceURL.stopAccessingSecurityScopedResource() }
+
+        let fm = FileManager.default
+        let audioDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MixtapeAudio", isDirectory: true)
+        try? fm.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        let dest = audioDir.appendingPathComponent("\(UUID().uuidString)-\(sourceURL.lastPathComponent)")
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: sourceURL, to: dest)
+        } catch {
+            return
+        }
+
+        let avAsset = AVURLAsset(url: dest)
+        Task {
+            let originalDuration: TimeInterval
+            if let cmDuration = try? await avAsset.load(.duration) {
+                originalDuration = cmDuration.seconds
+            } else {
+                originalDuration = totalDuration
+            }
+
+            await MainActor.run {
+                registerUndoIfNeeded()
+                let title = sourceURL.deletingPathExtension().lastPathComponent
+                let sorted = sortedAudioClips
+                let timelineStart: TimeInterval
+                let insertAt: Int
+
+                if let idx = insertAfterIndex, idx >= 0, idx < sorted.count {
+                    timelineStart = sorted[idx].timelineEnd
+                    insertAt = idx + 1
+                } else if let last = sorted.last {
+                    timelineStart = last.timelineEnd
+                    insertAt = audioClips.count
+                } else {
+                    timelineStart = 0
+                    insertAt = audioClips.count
+                }
+
+                let clip = EditorAudioClip(
+                    title: title,
+                    fileURL: dest,
+                    originalDuration: originalDuration,
+                    timelineStart: timelineStart
+                )
+
+                if insertAt >= audioClips.count {
+                    audioClips.append(clip)
+                } else {
+                    let targetID = sorted[insertAt].id
+                    if let rawIndex = audioClips.firstIndex(where: { $0.id == targetID }) {
+                        audioClips.insert(clip, at: rawIndex)
+                    } else {
+                        audioClips.append(clip)
+                    }
+                }
+
+                selectAudioClip(clip.id)
+                invalidateComposition()
+                scheduleSave()
+                Task { await alignPlaybackToTimeline() }
+            }
+        }
+    }
+
+    func deleteSelectedAudioClip() {
+        guard let id = selectedAudioClipID,
+              let index = audioClips.firstIndex(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        let removed = audioClips.remove(at: index)
+        releaseAudioFileIfUnused(removed.fileURL)
+        selectedAudioClipID = audioClips.first?.id
+        if selectedAudioClipID == nil { selectedTool = nil }
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func setAudioTrim(clipID: UUID, trimStart: TimeInterval, trimEnd: TimeInterval) {
+        if audioTrimUndoSnapshot == nil {
+            audioTrimUndoSnapshot = currentSnapshot()
+        }
+        guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        var clip = audioClips[idx]
+        let minSpan = EditorAudioClip.minimumSpan
+        let start = min(max(0, trimStart), clip.originalDuration - minSpan)
+        let end = max(min(clip.originalDuration, trimEnd), start + minSpan)
+        clip.trimStart = start
+        clip.trimEnd = end
+        audioClips[idx] = clip
+        invalidateComposition()
+    }
+
+    func commitAudioTrim(clipID: UUID) {
+        if let before = audioTrimUndoSnapshot,
+           let idx = audioClips.firstIndex(where: { $0.id == clipID }),
+           let baseline = before.audioClips.first(where: { $0.id == clipID }) {
+            audioClips[idx].timelineStart = max(
+                0,
+                baseline.timelineStart + (audioClips[idx].trimStart - baseline.trimStart)
+            )
+        }
+        if let before = audioTrimUndoSnapshot {
+            if before != currentSnapshot() {
+                undoManager.pushUndoState(before)
+                refreshUndoState()
+                scheduleSave()
+            }
+            audioTrimUndoSnapshot = nil
+        }
+        invalidateComposition()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func setAudioTimelineStart(clipID: UUID, timelineStart: TimeInterval) {
+        if audioMoveUndoSnapshot == nil {
+            audioMoveUndoSnapshot = currentSnapshot()
+        }
+        guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        audioClips[idx].timelineStart = max(0, timelineStart)
+        invalidateComposition()
+    }
+
+    func commitAudioMove() {
+        if let before = audioMoveUndoSnapshot {
+            if before != currentSnapshot() {
+                undoManager.pushUndoState(before)
+                refreshUndoState()
+                scheduleSave()
+            }
+            audioMoveUndoSnapshot = nil
+        }
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func splitSelectedAudioAtPlayhead() {
+        guard let id = selectedAudioClipID,
+              let idx = audioClips.firstIndex(where: { $0.id == id }) else { return }
+        let clip = audioClips[idx]
+        let playhead = timelinePosition
+        guard playhead > clip.timelineStart + EditorAudioClip.minimumSpan,
+              playhead < clip.timelineEnd - EditorAudioClip.minimumSpan else { return }
+
+        let local = playhead - clip.timelineStart
+        let sourceTime = clip.sourceTime(forTimelineLocal: local)
+        guard let parts = clip.split(atSourceTime: sourceTime) else { return }
+
+        registerUndoIfNeeded()
+        audioClips[idx] = parts.left
+        audioClips.insert(parts.right, at: idx + 1)
+        selectedAudioClipID = parts.right.id
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    func setAudioVolume(clipID: UUID, volume: Float) {
+        guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        if audioVolumeUndoSnapshot == nil {
+            audioVolumeUndoSnapshot = currentSnapshot()
+        }
+        audioClips[idx].volume = min(max(volume, 0), 1.0)
+        invalidateComposition()
+    }
+
+    func commitAudioVolume(clipID: UUID, volume: Float) {
+        setAudioVolume(clipID: clipID, volume: volume)
+        finalizeAudioVolumeEditUndo()
+        audioVolumeUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func finalizeAudioVolumeEditUndo() {
+        guard let before = audioVolumeUndoSnapshot else { return }
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        audioVolumeUndoSnapshot = nil
+    }
+
+    private func releaseAudioFileIfUnused(_ url: URL) {
+        let stillUsed = audioClips.contains { $0.fileURL == url }
+        guard !stillUsed else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
     // MARK: Undo / Redo
 
     func undo() {
@@ -542,6 +856,7 @@ final class EditorViewModel {
 
     func startExport(settings: EditorExportSettings) {
         guard !clips.isEmpty, !isExporting else { return }
+        commitProjectTitle()
         exportTask?.cancel()
         exportedFileURL = nil
         exportMessage = nil
@@ -554,10 +869,14 @@ final class EditorViewModel {
             do {
                 let clipsSnapshot = clips
                 let textOverlaysSnapshot = textOverlays
+                let audioClipsSnapshot = audioClips
+                let projectTitleSnapshot = projectTitle
                 let url = try await EditorExportService.export(
                     clips: clipsSnapshot,
                     textOverlays: textOverlaysSnapshot,
-                    settings: settings
+                    audioClips: audioClipsSnapshot,
+                    settings: settings,
+                    projectTitle: projectTitleSnapshot
                 ) { progress in
                     Task { @MainActor in
                         self.exportProgress = progress
@@ -641,6 +960,16 @@ final class EditorViewModel {
         scheduleSave()
     }
 
+    func commitProjectTitle() {
+        let trimmed = projectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            projectTitle = "Untitled Project"
+        } else {
+            projectTitle = trimmed
+        }
+        scheduleSave()
+    }
+
     // MARK: Lifecycle
 
     func setupPlayer() async {
@@ -672,7 +1001,9 @@ final class EditorViewModel {
             clips: clips,
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
-            textOverlays: textOverlays
+            selectedAudioClipID: selectedAudioClipID,
+            textOverlays: textOverlays,
+            audioClips: audioClips
         )
     }
 
@@ -680,7 +1011,9 @@ final class EditorViewModel {
         clips = snapshot.clips
         timelinePosition = min(snapshot.timelinePosition, totalDuration)
         selectedClipID = snapshot.selectedClipID
+        selectedAudioClipID = snapshot.selectedAudioClipID
         textOverlays = snapshot.textOverlays
+        audioClips = snapshot.audioClips
         invalidateComposition()
     }
 
@@ -702,9 +1035,10 @@ final class EditorViewModel {
             modifiedAt: Date(),
             clips: clips.map { SavedEditorClip(from: $0) },
             textOverlays: textOverlays.map { SavedTextOverlay(from: $0) },
-            audioTrack: audioTrack.map { SavedAudioTrack(from: $0) },
+            audioClips: audioClips.map { SavedAudioClip(from: $0) },
             timelinePosition: timelinePosition,
-            selectedClipID: selectedClipID
+            selectedClipID: selectedClipID,
+            selectedAudioClipID: selectedAudioClipID
         )
     }
 
@@ -718,9 +1052,13 @@ final class EditorViewModel {
     }
 
     private func clipsFingerprint() -> String {
-        clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.duration)|\(clip.asset.localIdentifier)"
+        let clipsHash = clips.map { clip in
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
+        let audioHash = audioClips.map {
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fileURL.path)"
+        }.joined(separator: ";")
+        return clipsHash + "|||" + audioHash
     }
 
     private func invalidateComposition() {
@@ -748,13 +1086,15 @@ final class EditorViewModel {
         let savedTime = timelinePosition
         let wasPlaying = isPlaying
         let clipsSnapshot = clips
+        let audioClipsSnapshot = audioClips
 
         let item: AVPlayerItem?
-        if let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
+        if audioClipsSnapshot.isEmpty,
+           let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
             item = warmed
         } else {
             item = await Task.detached(priority: .userInitiated) {
-                await EditorCompositionBuilder.makePlayerItem(from: clipsSnapshot)
+                await EditorCompositionBuilder.makePlayerItem(from: clipsSnapshot, audioClips: audioClipsSnapshot)
             }.value
         }
 
