@@ -634,7 +634,7 @@ Prioritized backlog. Items marked **done** shipped recently — kept here for co
 | 2 | **Home-screen project rename** | **Partial:** rename on export screen saves `projectTitle`; no edit UI on `ProjectCardView` / long-press menu yet. |
 | 3 | **Audio fade in/out** | Volume is step/preset only; no envelope or keyframed fade on audio clip edges. |
 | 4 | **Clip transitions** | Hard cuts only; no crossfade / dip-to-black between adjacent video clips. |
-| 5 | **Photo clip duration** | Photos default to 3 s; no UI to stretch a still on the timeline without opening speed/trim workarounds. |
+| 5 | **Photo clip duration** | **Done:** photo-only DURATION presets/slider plus an uncapped right trim handle; updates timeline, preview/export, undo, and persistence. |
 
 ### Export & sharing
 
@@ -682,3 +682,4 @@ Prioritized backlog. Items marked **done** shipped recently — kept here for co
 | ~~Volume tool~~ | `VolumeToolPanel` for clip and audio clip. |
 | ~~Extended timeline~~ | Audio/text can run past video end without breaking preview. |
 | ~~Export quality / bitrate~~ | Efficient–Max tiers, Mbps label, HDR/HEVC toggle, writer encode. |
+| ~~Photo clip duration~~ | Photo-only DURATION presets/slider + uncapped right-edge stretching with timeline, preview/export, undo, and persistence support. |

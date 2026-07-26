@@ -12,7 +12,7 @@ struct EditorBottomToolbar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(EditorTool.allCases) { tool in
+            ForEach(EditorTool.mainTools) { tool in
                 ToolButton(
                     tool: tool,
                     isSelected: vm.selectedTool == tool

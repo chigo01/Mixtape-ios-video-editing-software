@@ -391,6 +391,7 @@ private struct AudioClipThumb: View {
                         trimStart: clip.trimStart,
                         trimEnd: clip.trimEnd,
                         originalDuration: clip.originalDuration,
+                        allowsDurationExtension: false,
                         speed: 1.0,
                         pixelsPerSecond: pixelsPerSecond,
                         onTrimChanged: { _, start, end in
@@ -525,6 +526,7 @@ private struct TextOverlayThumb: View {
                         trimStart: overlay.startTime,
                         trimEnd: overlay.endTime,
                         originalDuration: max(layout.timelineExtent, 1),
+                        allowsDurationExtension: false,
                         speed: 1.0,
                         pixelsPerSecond: layout.pixelsPerSecond,
                         onTrimChanged: { _, start, end in
@@ -766,14 +768,12 @@ private struct ClipThumb: View {
             ClipFilmstripView(clip: clip, width: width, height: height)
 
             HStack(spacing: 4) {
-                if clip.isVideo {
-                    Text(format(duration: clip.duration))
-                        .font(.system(size: 8, weight: .semibold).monospacedDigit())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.black.opacity(0.55)))
-                }
+                Text(format(duration: clip.duration))
+                    .font(.system(size: 8, weight: .semibold).monospacedDigit())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
                 if abs(clip.speed - 1.0) > 0.02 {
                     Text(String(format: "%.2g×", clip.speed))
                         .font(.system(size: 8, weight: .bold).monospacedDigit())
@@ -808,6 +808,7 @@ private struct ClipThumb: View {
                     trimStart: clip.trimStart,
                     trimEnd: clip.trimEnd,
                     originalDuration: clip.originalDuration,
+                    allowsDurationExtension: clip.isPhoto,
                     speed: clip.speed,
                     pixelsPerSecond: pixelsPerSecond,
                     onTrimChanged: { _, start, end in

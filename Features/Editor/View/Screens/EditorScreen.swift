@@ -49,6 +49,12 @@ struct EditorScreen: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
+                    if vm.selectedTool == .duration {
+                        PhotoDurationToolPanel(vm: vm)
+                            .padding(.top, 8)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+
                     EditorTimelineControls(
                         onUndo: { vm.undo() },
                         onRedo: { vm.redo() },

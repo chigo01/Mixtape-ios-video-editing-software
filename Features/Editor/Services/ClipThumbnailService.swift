@@ -69,7 +69,10 @@ actor ClipThumbnailService {
 
     private func requestPhoto(for asset: PHAsset, height: CGFloat) async -> UIImage? {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
+        // Opportunistic delivery may invoke the result handler twice (a degraded
+        // preview followed by the final image), but this async bridge must resume
+        // its continuation exactly once.
+        options.deliveryMode = .highQualityFormat
         options.resizeMode = .fast
         options.isNetworkAccessAllowed = true
         let scale = await MainActor.run { UIScreen.main.scale }

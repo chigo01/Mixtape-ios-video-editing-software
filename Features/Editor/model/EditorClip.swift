@@ -18,10 +18,12 @@ enum EditorPreviewLayout {
 /// that mixed photo+video timelines still produce a coherent timeline ruler.
 struct EditorClip: Identifiable, Hashable {
     static let photoDefaultDuration: TimeInterval = 3.0
+    static let photoMinimumDuration: TimeInterval = 0.5
+    static let photoMaximumDuration: TimeInterval = 30.0
 
     let id: UUID
     let asset: PHAsset
-    let originalDuration: TimeInterval
+    var originalDuration: TimeInterval
 
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
@@ -86,6 +88,7 @@ struct EditorClip: Identifiable, Hashable {
     }
 
     var isVideo: Bool { asset.mediaType == .video }
+    var isPhoto: Bool { asset.mediaType == .image }
 
     /// Duration after trim + speed (timeline seconds for this clip).
     var duration: TimeInterval {

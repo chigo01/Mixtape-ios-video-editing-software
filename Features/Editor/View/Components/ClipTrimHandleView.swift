@@ -13,6 +13,7 @@ struct ClipTrimHandleRepresentable: UIViewRepresentable {
     let trimStart: TimeInterval
     let trimEnd: TimeInterval
     let originalDuration: TimeInterval
+    let allowsDurationExtension: Bool
     let speed: Float
     let pixelsPerSecond: CGFloat
     let onTrimChanged: (UUID, TimeInterval, TimeInterval) -> Void
@@ -27,6 +28,7 @@ struct ClipTrimHandleRepresentable: UIViewRepresentable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             originalDuration: originalDuration,
+            allowsDurationExtension: allowsDurationExtension,
             speed: speed,
             pixelsPerSecond: pixelsPerSecond
         )
@@ -41,6 +43,7 @@ struct ClipTrimHandleRepresentable: UIViewRepresentable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             originalDuration: originalDuration,
+            allowsDurationExtension: allowsDurationExtension,
             speed: speed,
             pixelsPerSecond: pixelsPerSecond
         )
@@ -62,6 +65,7 @@ final class ClipTrimHandleContainerView: UIView {
     private var trimStart: TimeInterval = 0
     private var trimEnd: TimeInterval = 0
     private var originalDuration: TimeInterval = 0
+    private var allowsDurationExtension = false
     private var speed: Float = 1
     private var pixelsPerSecond: CGFloat = 18
 
@@ -101,6 +105,7 @@ final class ClipTrimHandleContainerView: UIView {
         trimStart: TimeInterval,
         trimEnd: TimeInterval,
         originalDuration: TimeInterval,
+        allowsDurationExtension: Bool,
         speed: Float,
         pixelsPerSecond: CGFloat
     ) {
@@ -108,6 +113,7 @@ final class ClipTrimHandleContainerView: UIView {
         self.trimStart = trimStart
         self.trimEnd = trimEnd
         self.originalDuration = originalDuration
+        self.allowsDurationExtension = allowsDurationExtension
         self.speed = speed
         self.pixelsPerSecond = pixelsPerSecond
         setNeedsLayout()
@@ -145,7 +151,11 @@ final class ClipTrimHandleContainerView: UIView {
                 newStart = min(max(0, newStart), baselineTrimEnd - minSpan)
             case .end:
                 newEnd = baselineTrimEnd + deltaSource
-                newEnd = max(min(originalDuration, newEnd), baselineTrimStart + minSpan)
+                if allowsDurationExtension {
+                    newEnd = max(newEnd, baselineTrimStart + minSpan)
+                } else {
+                    newEnd = max(min(originalDuration, newEnd), baselineTrimStart + minSpan)
+                }
             }
 
             trimStart = newStart

@@ -10,6 +10,7 @@ import SwiftUI
 enum EditorClipAction: String, CaseIterable, Identifiable {
     case split
     case speed
+    case duration
     case volume
     case filter
     case text
@@ -21,6 +22,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "SPLIT"
         case .speed: return "SPEED"
+        case .duration: return "DURATION"
         case .volume: return "VOLUME"
         case .filter: return "FILTER"
         case .text: return "TEXT"
@@ -32,6 +34,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "scissors"
         case .speed: return "speedometer"
+        case .duration: return "timer"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
         case .text: return "textformat"
@@ -44,6 +47,12 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
 
 struct EditorClipActionBar: View {
     let vm: EditorViewModel
+
+    private var availableActions: [EditorClipAction] {
+        EditorClipAction.allCases.filter { action in
+            action != .duration || vm.selectedClip?.isPhoto == true
+        }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -63,7 +72,7 @@ struct EditorClipActionBar: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(EditorClipAction.allCases) { action in
+                    ForEach(availableActions) { action in
                         ClipActionButton(
                             action: action,
                             isSelected: action.tool.map { vm.selectedTool == $0 } ?? false,
@@ -99,6 +108,7 @@ extension EditorClipAction {
         switch self {
         case .split: return .split
         case .speed: return .speed
+        case .duration: return .duration
         case .volume: return .volume
         case .filter: return .filter
         case .text: return .text

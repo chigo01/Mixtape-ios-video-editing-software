@@ -74,6 +74,8 @@ final class EditorViewModel {
     @ObservationIgnored
     private var speedUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var photoDurationUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
     private var textEditUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
     private var textEditDragOrigin: (x: CGFloat, y: CGFloat)?
@@ -191,6 +193,9 @@ final class EditorViewModel {
     // MARK: Selection
 
     func selectClipForEditing(_ id: UUID) {
+        if selectedTool == .duration {
+            finalizePhotoDurationEditUndo()
+        }
         selectedClipID = id
         selectedTextOverlayID = nil
         selectedAudioClipID = nil
@@ -199,6 +204,9 @@ final class EditorViewModel {
     }
 
     func selectAudioClip(_ id: UUID) {
+        if selectedTool == .duration {
+            finalizePhotoDurationEditUndo()
+        }
         selectedAudioClipID = id
         selectedClipID = nil
         selectedTextOverlayID = nil
@@ -215,6 +223,9 @@ final class EditorViewModel {
     func deselectClip() {
         if selectedTool == .speed {
             finalizeSpeedEditUndo()
+        }
+        if selectedTool == .duration {
+            finalizePhotoDurationEditUndo()
         }
         selectedTool = nil
         selectedClipID = nil
@@ -241,6 +252,8 @@ final class EditorViewModel {
             selectedTool = .split
         case .speed:
             performToolAction(.speed)
+        case .duration:
+            performToolAction(.duration)
         case .volume:
             performToolAction(.volume)
         case .filter:
@@ -263,6 +276,9 @@ final class EditorViewModel {
         if selectedTool == .speed, tool != .speed {
             finalizeSpeedEditUndo()
         }
+        if selectedTool == .duration, tool != .duration {
+            finalizePhotoDurationEditUndo()
+        }
         if selectedTool == .volume, tool != .volume {
             finalizeVolumeEditUndo()
             finalizeAudioVolumeEditUndo()
@@ -270,6 +286,7 @@ final class EditorViewModel {
 
         if selectedTool == tool {
             if tool == .speed { finalizeSpeedEditUndo() }
+            if tool == .duration { finalizePhotoDurationEditUndo() }
             selectedTool = nil
             return
         }
@@ -277,6 +294,9 @@ final class EditorViewModel {
         selectedTool = tool
         if tool == .speed {
             speedUndoSnapshot = currentSnapshot()
+        }
+        if tool == .duration {
+            photoDurationUndoSnapshot = currentSnapshot()
         }
     }
 
@@ -322,6 +342,47 @@ final class EditorViewModel {
         finalizeSpeedEditUndo()
         speedUndoSnapshot = currentSnapshot()
         Task { await alignPlaybackToTimeline() }
+    }
+
+    // MARK: Photo duration
+
+    func setPhotoDuration(clipID: UUID, duration: TimeInterval) {
+        guard let idx = clips.firstIndex(where: { $0.id == clipID }),
+              clips[idx].isPhoto else { return }
+        if photoDurationUndoSnapshot == nil {
+            photoDurationUndoSnapshot = currentSnapshot()
+        }
+
+        let clampedDuration = min(
+            max(duration, EditorClip.photoMinimumDuration),
+            EditorClip.photoMaximumDuration
+        )
+        var clip = clips[idx]
+        let sourceSpan = clampedDuration * TimeInterval(max(clip.speed, 0.001))
+        clip.originalDuration = sourceSpan
+        clip.trimStart = 0
+        clip.trimEnd = sourceSpan
+        clips[idx] = clip
+
+        timelinePosition = min(timelinePosition, totalDuration)
+        invalidateComposition()
+    }
+
+    func commitPhotoDuration(clipID: UUID, duration: TimeInterval) {
+        setPhotoDuration(clipID: clipID, duration: duration)
+        finalizePhotoDurationEditUndo()
+        photoDurationUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func finalizePhotoDurationEditUndo() {
+        guard let before = photoDurationUndoSnapshot else { return }
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        photoDurationUndoSnapshot = nil
     }
 
     // MARK: Volume
@@ -517,8 +578,16 @@ final class EditorViewModel {
         var clip = clips[idx]
         let minSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
 
-        let start = min(max(0, trimStart), clip.originalDuration - minSpan)
-        let end = max(min(clip.originalDuration, trimEnd), start + minSpan)
+        let start: TimeInterval
+        let end: TimeInterval
+        if clip.isPhoto {
+            start = max(0, min(trimStart, trimEnd - minSpan))
+            end = max(trimEnd, start + minSpan)
+            clip.originalDuration = end
+        } else {
+            start = min(max(0, trimStart), clip.originalDuration - minSpan)
+            end = max(min(clip.originalDuration, trimEnd), start + minSpan)
+        }
 
         clip.trimStart = start
         clip.trimEnd = end
