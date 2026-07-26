@@ -19,7 +19,7 @@ struct EditorScreen: View {
     @State private var insertAfterAudioIndex: Int?
     @Environment(\.dismiss) private var dismiss
 
-    private let editorChromeMinHeight: CGFloat = 228
+    private let editorChromeMinHeight: CGFloat = 268
     private let previewHorizontalInset: CGFloat = 16
 
     init(project: EditorProject) {
@@ -32,11 +32,7 @@ struct EditorScreen: View {
                 VStack(spacing: 0) {
                     EditorTopBar(
                         onBack: { close() },
-                        onUndo: { vm.undo() },
-                        onRedo: { vm.redo() },
-                        onExport: { showExportScreen = true },
-                        canUndo: vm.canUndo,
-                        canRedo: vm.canRedo
+                        onExport: { showExportScreen = true }
                     )
 
                     EditorPreviewPlayer(vm: vm) {
@@ -53,7 +49,13 @@ struct EditorScreen: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
-
+                    EditorTimelineControls(
+                        onUndo: { vm.undo() },
+                        onRedo: { vm.redo() },
+                        canUndo: vm.canUndo,
+                        canRedo: vm.canRedo
+                    )
+                    .padding(.top, 4)
 
                     EditorTimeline(
                         vm: vm,
@@ -66,7 +68,6 @@ struct EditorScreen: View {
                             isAudioPickerPresented = true
                         }
                     )
-                    .padding(.top, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
 
                     Group {

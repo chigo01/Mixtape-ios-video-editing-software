@@ -9,13 +9,10 @@ import SwiftUI
 
 struct EditorTopBar: View {
     var onBack: () -> Void
-    var onUndo: () -> Void = {}
-    var onRedo: () -> Void = {}
     var onExport: () -> Void = {}
-    var canUndo: Bool = false
-    var canRedo: Bool = false
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack {
             Button(action: onBack) {
                 Image(systemName: "arrow.left")
                     .font(.system(size: 17, weight: .semibold))
@@ -24,6 +21,34 @@ struct EditorTopBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Back")
+
+            Spacer(minLength: 0)
+
+            Button(action: onExport) {
+                Text("Export")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(Color.appColors.primaryColor))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Export")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+}
+
+struct EditorTimelineControls: View {
+    var onUndo: () -> Void
+    var onRedo: () -> Void
+    var canUndo: Bool
+    var canRedo: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
 
             Button(action: onUndo) {
                 Image(systemName: "arrow.uturn.backward")
@@ -44,21 +69,7 @@ struct EditorTopBar: View {
             .buttonStyle(.plain)
             .disabled(!canRedo)
             .accessibilityLabel("Redo")
-
-            Spacer(minLength: 0)
-
-            Button(action: onExport) {
-                Text("Export")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(Capsule().fill(Color.appColors.primaryColor))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Export")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 }
