@@ -8,6 +8,10 @@ import Foundation
 /// Point-in-time editor state used by the undo/redo stack.
 struct EditorTimelineSnapshot: Equatable {
     var clips: [EditorClip]
+    var openingTransitionKind: EditorTransitionKind
+    var openingTransitionDuration: TimeInterval
+    var closingTransitionKind: EditorTransitionKind
+    var closingTransitionDuration: TimeInterval
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
     var selectedAudioClipID: UUID?

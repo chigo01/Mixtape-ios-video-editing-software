@@ -42,6 +42,10 @@ enum EditorExportService {
         clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
         audioClips: [EditorAudioClip] = [],
+        openingTransitionKind: EditorTransitionKind = .none,
+        openingTransitionDuration: TimeInterval = 0,
+        closingTransitionKind: EditorTransitionKind = .none,
+        closingTransitionDuration: TimeInterval = 0,
         settings: EditorExportSettings,
         projectTitle: String,
         progress: @escaping @Sendable (Double) -> Void
@@ -50,8 +54,13 @@ enum EditorExportService {
             from: clips,
             textOverlays: textOverlays,
             audioClips: audioClips,
+            openingTransitionKind: openingTransitionKind,
+            openingTransitionDuration: openingTransitionDuration,
+            closingTransitionKind: closingTransitionKind,
+            closingTransitionDuration: closingTransitionDuration,
             frameRate: Int32(settings.frameRate.rawValue),
-            canvasSize: settings.resolution.canvasSize
+            canvasSize: settings.resolution.canvasSize,
+            isOfflineRender: true
         ) else {
             throw EditorExportError.compositionFailed
         }

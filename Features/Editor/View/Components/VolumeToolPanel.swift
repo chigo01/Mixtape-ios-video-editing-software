@@ -26,6 +26,8 @@ struct VolumeToolPanel: View {
         vm.selectedAudioClip != nil || vm.selectedClip != nil
     }
 
+    private var selectedAudio: EditorAudioClip? { vm.selectedAudioClip }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -87,6 +89,22 @@ struct VolumeToolPanel: View {
                     .tint(Color.appColors.primaryColor)
                     .disabled(!hasSelection)
                 }
+
+                if let audio = selectedAudio {
+                    Divider().overlay(Color.white.opacity(0.12))
+                    fadeControl(
+                        title: "Fade in",
+                        value: audio.fadeInDuration,
+                        maximum: audio.duration,
+                        isFadeIn: true
+                    )
+                    fadeControl(
+                        title: "Fade out",
+                        value: audio.fadeOutDuration,
+                        maximum: audio.duration,
+                        isFadeIn: false
+                    )
+                }
             }
         }
         .padding(.horizontal, 24)
@@ -125,6 +143,52 @@ struct VolumeToolPanel: View {
             } else {
                 vm.setVolume(clipID: id, volume: volume)
             }
+        }
+    }
+
+    private func fadeControl(
+        title: String,
+        value: TimeInterval,
+        maximum: TimeInterval,
+        isFadeIn: Bool
+    ) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: 58, alignment: .leading)
+            Slider(
+                value: Binding(
+                    get: {
+                        guard let audio = selectedAudio else { return 0 }
+                        return isFadeIn ? audio.fadeInDuration : audio.fadeOutDuration
+                    },
+                    set: { newValue in applyFade(newValue, isFadeIn: isFadeIn, commit: false) }
+                ),
+                in: 0...max(0.1, maximum),
+                step: 0.05
+            ) { Text(title) } onEditingChanged: { editing in
+                if !editing, let current = selectedAudio {
+                    let currentValue = isFadeIn ? current.fadeInDuration : current.fadeOutDuration
+                    applyFade(currentValue, isFadeIn: isFadeIn, commit: true)
+                }
+            }
+            .tint(Color.appColors.primaryColor)
+            Text(String(format: "%.1fs", value))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundColor(Color.appColors.primaryColor)
+                .frame(width: 38, alignment: .trailing)
+        }
+    }
+
+    private func applyFade(_ value: TimeInterval, isFadeIn: Bool, commit: Bool) {
+        guard let audio = selectedAudio else { return }
+        let fadeIn = isFadeIn ? value : audio.fadeInDuration
+        let fadeOut = isFadeIn ? audio.fadeOutDuration : value
+        if commit {
+            vm.commitAudioFades(clipID: audio.id, fadeIn: fadeIn, fadeOut: fadeOut)
+        } else {
+            vm.setAudioFades(clipID: audio.id, fadeIn: fadeIn, fadeOut: fadeOut)
         }
     }
 }

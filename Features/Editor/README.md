@@ -6,7 +6,7 @@ This document explains **what the Mixtape editing flow does today** — from **N
 
 ## 1. From the home screen to the editor (project + media pick)
 
-The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, volume, text overlays, **background audio clips**, playhead, selection, and **project title** — not raw video files.
+The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, volume, text overlays, **background audio clips and fades**, opening/cut/closing transitions, playhead, selection, and **project title** — not raw video files.
 
 ### 1.1 App entry and home screen
 
@@ -156,7 +156,7 @@ This follows **MVVM + unidirectional data flow**: the view model is the source o
    - **Photos:** converts still → short silent video segment (via **`AVAssetWriter`**) so photos sit in the same composition.
    - **Background audio:** each **`EditorAudioClip`** is inserted on its own composition audio track at `timelineStart` (full trim duration — not capped to video length).
    - **Extended timeline:** when audio/text extends past the last video frame, the video track gets an empty tail and video-composition instructions are extended so preview still renders correctly.
-2. An **`AVVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview. On **iOS 26+** it is built with the new **`AVVideoComposition.Configuration`** value type (plus `AVVideoCompositionInstruction.Configuration` / `AVVideoCompositionLayerInstruction.Configuration`); on older OS versions we fall back to the deprecated **`AVMutableVideoComposition`** subclasses, which Apple deprecated in iOS 26.
+2. An **`AVMutableVideoComposition`** applies each source track’s **`preferredTransform`** and **aspect-fits** into a **1080×1920** portrait canvas (matches `EditorPreviewLayout` 9∶16). Without this, iPhone portrait footage looks **rotated / squashed** in the preview. The mutable instruction path is currently intentional: standard transition ramps, encoded backing-video layers, the custom GPU compositor, and offline Core Animation text burn-in all share this instruction model.
 3. **`EditorViewModel`** keeps **one** `AVPlayer` whose item is that composition.
 4. **`playbackTick`** reads **`player.currentTime()`** → updates **`timelinePosition`**. No manual “advance to next clip” hop.
 5. When clips, audio, or per-clip volume change, **`invalidateComposition()`** forces a rebuild on next align/play. **`clipsFingerprint()`** includes clip + audio state so warmed picker compositions are skipped when audio is present.
@@ -188,7 +188,7 @@ The **+ insert slots** on the timeline are **UI-only gaps** (`TimelineLayout.ins
 ### 4.4 Useful reading
 
 - [AVMutableComposition](https://developer.apple.com/documentation/avfoundation/avmutablecomposition) — stitching clips.
-- [AVVideoComposition.Configuration](https://developer.apple.com/documentation/avfoundation/avvideocomposition/configuration) — orientation, transforms, render size (iOS 26+ replacement for the deprecated [AVMutableVideoComposition](https://developer.apple.com/documentation/avfoundation/avmutablevideocomposition)). 
+- [AVMutableVideoComposition](https://developer.apple.com/documentation/avfoundation/avmutablevideocomposition) — render size, frame duration, animation tools, and custom compositor configuration.
 - [AVAssetTrack.preferredTransform](https://developer.apple.com/documentation/avfoundation/avassettrack/1386708-preferredtransform) — why portrait video looks wrong without a video composition.
 - [AVAudioSession](https://developer.apple.com/documentation/avfaudio/avaudiosession) — categories, routing, silent switch behavior.
 - [AVFoundation Programming Guide (archive)](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html) — **Editing Assets** chapter; still the best conceptual intro to compositions.
@@ -205,7 +205,10 @@ Text is **not** part of the preview `AVMutableComposition`. Instead:
 
 Preview rebuilds (`makePlayerItem`) call `build(from: clips)` **without** overlays — that is intentional. Only export passes `textOverlays`.
 
-When text overlays exist, `makeVideoComposition` uses the legacy **`AVMutableVideoComposition`** path (even on iOS 26+) because `AVVideoCompositionCoreAnimationTool` requires it. `enablePostProcessing = true` on each instruction so the animation tool runs. The iOS 26 **Configuration** path (no animation tool) uses `enablePostProcessing = false`.
+Offline text export attaches `AVVideoCompositionCoreAnimationTool` to the shared
+**`AVMutableVideoComposition`**. `enablePostProcessing = true` is used only for
+offline instructions that need the animation tool; player items never receive the
+Core Animation tool because AVPlayer rejects that offline-only configuration.
 
 **Learn:**
 
@@ -356,6 +359,17 @@ Selected clips can be **reordered** by long-pressing and dragging left or right 
 - [UIViewRepresentable](https://developer.apple.com/documentation/swiftui/uiviewrepresentable) — bridging UIKit gesture views into SwiftUI.
 - [interactiveSpring](https://developer.apple.com/documentation/swiftui/animation/interactivespring(response:dampingfraction:blenduration:)) — spring animation tuned for gesture-driven interactions.
 
+### 6.7 Photo clip duration
+
+Photo clips expose a **DURATION** action with presets and a continuous slider. The
+selected photo’s right trim handle can also stretch beyond the original default
+duration because a still image has no fixed source-video endpoint.
+
+Changing photo duration updates the timeline width and total duration, invalidates
+the shared composition, regenerates the encoded still-video segment when needed,
+registers undo, and persists through `SavedEditorClip`. Preview and export therefore
+use the same selected duration.
+
 ### 6.8 Text overlays (timeline + editing)
 
 **Model:** `EditorTextOverlay` (`Model/EditorTextOverlay.swift`) — text, `startTime`/`endTime`, font family/style/size, color, opacity, alignment, `xOffset`/`yOffset`.
@@ -425,8 +439,9 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Screens/EditorExportScreen.swift` | Export UI: live preview + scrubber, project name, settings, progress, share. |
 | `ViewModel/EditorViewModel.swift` | Timeline, playback, text/audio overlays, `projectTitle`, undo, export, auto-save. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
-| `Services/EditorCompositionBuilder.swift` | Shared `build(from:textOverlays:audioClips:frameRate:)` for preview + export; per-clip + background audio mix; extended timeline fix. |
-| `Services/EditorExportService.swift` | `AVAssetExportSession` with settings + overlays + audio; sanitized project-title filename; save to Photos. |
+| `Services/EditorCompositionBuilder.swift` | Shared composition pipeline for preview + export; transforms, standard transitions, per-clip/background audio mix, solid backing tracks, and extended timelines. |
+| `Services/EditorTransitionCompositor.swift` | Isolated custom AVFoundation compositor for Metal-backed Core Image transitions and immutable render instructions. |
+| `Services/EditorExportService.swift` | Explicit `AVAssetReader`/`AVAssetWriter` encoding with bitrate/HDR settings, progress/cancel, sanitized project-title filename, and Photos save. |
 | `Services/EditorTextOverlayRenderer.swift` | SwiftUI text → `UIImage` for export (`ImageRenderer` + off-screen fallback). |
 | `Services/EditorUndoManager.swift` | Snapshot undo/redo stack. |
 | `Services/ClipThumbnailService.swift` | Cached multi-frame filmstrip generation. |
@@ -445,9 +460,10 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/EditorTextActionBar.swift` | Contextual toolbar when a text overlay is selected. |
 | `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + main editing tools. |
 | `Model/EditorClip.swift` | Clip model, trim/speed/volume/split, preview aspect. |
+| `Model/EditorTransition.swift` | Single transition catalog: 105 stable identifiers plus picker title, icon, category, renderer routing, and opening/cut/closing targets. |
 | `Model/EditorTextOverlay.swift` | Text overlay model + style enums. |
-| `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume). |
-| `Model/EditorTimelineSnapshot.swift` | Undo snapshot (`clips`, playhead, selections, `textOverlays`, `audioClips`). |
+| `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume, fade in/out). |
+| `Model/EditorTimelineSnapshot.swift` | Undo snapshot for clips, project endpoints, playhead, selections, text, and audio. |
 | `Model/EditorTool.swift` | Tool enum (`filter` not wired yet). |
 | `ProjectList/Model/EditorProject.swift` | Codable project document (`SavedEditorClip`, `SavedTextOverlay`, `SavedAudioClip`, etc.). |
 | `ProjectList/Services/ProjectStore.swift` | JSON persistence in Application Support. |
@@ -499,9 +515,10 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 9. In the simulator: scrub ruler vs drag filmstrip vs tap-to-select vs trim handle drag — map each to the gesture / hit-test code.
 10. Tap **TEXT** → edit in **`TextOverlayEditorSheet`** → scrub through the overlay's time range and confirm preview text appears/disappears. Export and confirm text is burned into the file.
 11. Select a clip → use **`EditorClipActionBar`** → **DELETE** (with 2+ clips) or **reorder** via long-press drag.
-12. Tap **Export** → preview/scrub on **`EditorExportScreen`** → set project name → configure settings → export → confirm Photos + Share (filename = sanitized project title).
-13. Add background music → trim/move/split → adjust volume → confirm playback past video end if music is longer.
-14. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip (clips, text, audio, title).
+12. Open an opening, cut, and closing transition → preview GPU and standard styles → confirm cancel, undo, persistence, and export parity.
+13. Tap **Export** → preview/scrub on **`EditorExportScreen`** → set project name → configure settings → export → confirm Photos + Share (filename = sanitized project title).
+14. Add background music → trim/move/split → adjust volume/fades → confirm playback past video end if music is longer.
+15. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip (clips, transitions, text, audio, fades, title).
 
 ---
 
@@ -518,16 +535,15 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Trim handles** | Drag start/end of clip source range | `ClipTrimHandleView`, `setTrim` | UIKit gestures in SwiftUI, clamping |
 | **Split** | Cut clip at playhead into two | `splitAtPlayhead`, `EditorClip.split` | Non-destructive trim ranges on same asset |
 | **Composition playback** | Smooth play through all clips | `EditorCompositionBuilder`, `EditorViewModel` | `AVMutableComposition` |
-| **Orientation fix** | Portrait video not rotated in preview | `AVVideoComposition.Configuration`, `preferredTransform` | Video composition transforms |
-| **Export** | Render timeline → MP4 → Photos | `EditorExportService`, `EditorTopBar` Export | `AVAssetExportSession` |
+| **Orientation fix** | Portrait video not rotated in preview | `AVMutableVideoComposition`, `preferredTransform` | Video composition transforms |
+| **Export** | Render timeline → MP4/MOV → Photos | `EditorExportService`, `EditorTopBar` Export | `AVAssetReader`, `AVAssetWriter` |
 | **Undo / Redo** | Snapshot restore after edits | `EditorUndoManager`, `EditorTimelineSnapshot` | Command / memento pattern |
 | **Speed tool** | 0.25×–3× per clip; composition `scaleTimeRange` | `SpeedToolPanel`, `EditorCompositionBuilder.applySpeed` | Timeline vs source time |
 | **Filmstrip thumbnails** | Multiple frames tiled per clip cell | `ClipFilmstripView`, `ClipThumbnailService` | `AVAssetImageGenerator` batching |
 | **Project persistence** | JSON project files; home list opens saved edits | `EditorProject`, `ProjectStore`, `ProjectListViewModel` | Codable + PhotoKit rehydration |
 | **Picker preload** | “Preparing…” on Next warms composition before editor | `EditorCompositionBuilder.warmUp`, `CreateProjectScreen` | Perceived performance |
-| **Dedicated export screen** | Resolution / FPS / format settings + progress panel | `EditorExportScreen`, `EditorExportSettings` | `AVAssetExportSession` presets |
+| **Dedicated export screen** | Resolution / FPS / format settings + progress panel | `EditorExportScreen`, `EditorExportSettings` | Export configuration and progress state |
 | **Smooth editor entry** | Composition build off main actor; deferred thumbnail load | `EditorViewModel`, `EditorScreen.task` | Main-thread responsiveness |
-| **iOS 26 video composition** | `AVVideoComposition.Configuration` with pre-26 fallback | `EditorCompositionBuilder.makeVideoComposition` | Deprecated-API migration, `#available` |
 | **Value-based home navigation** | Fixes “tap project A, open project B”; lazy destinations | `ProjectListRoute`, `ProjectListScreen` | `NavigationStack(path:)`, view identity |
 | **Create flow back-stack** | Back from editor skips picker; list refreshes on return | `CreateProjectScreen.onProjectCreated`, `onChange(of: path)` | Programmatic path rewriting |
 | **Project delete** | Long-press card → confirm → remove JSON | `ProjectListScreen`, `ProjectListViewModel.deleteProject` | `contextMenu`, `confirmationDialog` |
@@ -546,6 +562,12 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Project name on export** | Rename before export; persists to JSON | `commitProjectTitle`, export screen `PROJECT NAME` field | Debounced `ProjectStore` save |
 | **Export filename** | Shared file uses sanitized project title | `EditorExportService.sanitizeFileName` | Filesystem-safe naming |
 | **Export quality / bitrate** | Mbps tiers + HDR/HEVC; writer-based encode | `EditorExportQuality`, `EditorExportService.exportWithWriter` | `AVAssetWriter` + `AVVideoAverageBitRateKey` |
+| **Home project rename** | Long-press card → rename with immediate persistence | `ProjectListScreen`, `ProjectListViewModel.renameProject` | Context menus, validation, persistence |
+| **Audio edge fades** | Per-audio-clip fade-in/out controls and render ramps | `EditorAudioClip`, `VolumeToolPanel`, `EditorCompositionBuilder` | `AVAudioMixInputParameters.setVolumeRamp` |
+| **Transition catalog** | 105 categorized opening/cut/closing choices in a separate model file | `EditorTransition`, `EditorScreen` | Stable persisted identifiers, metadata-driven UI |
+| **GPU transition engine** | 35 blur/color/distortion/mask effects with orientation-safe rendering | `EditorTransitionCompositor`, `EditorCompositionBuilder` | Custom `AVVideoCompositing`, Core Image, Metal |
+| **Green-frame prevention** | Encoded black/white backing tracks initialize every exported pixel | `EditorCompositionBuilder` | YUV surfaces, alpha, letterboxing, export parity |
+| **Opening and closing edges** | Project-level entrance/exit transitions stay on true timeline endpoints | `EditorTransitionTarget`, `EditorViewModel`, `EditorTimeline` | Endpoint state, undo, backward-compatible Codable |
 
 ---
 
@@ -586,7 +608,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 ### 12.5 Persist projects
 
 - Projects are **`EditorProject`** JSON files in **Application Support / MixtapeProjects**.
-- Stores **`SavedEditorClip`** (`assetLocalIdentifier`, trim, speed, volume), **`SavedTextOverlay`**, **`SavedAudioClip`** (file path, trim, `timelineStart`, volume), **`title`**, playhead, and selection — not raw video bytes.
+- Stores **`SavedEditorClip`** (`assetLocalIdentifier`, trim, speed, volume, cut transition), **`SavedTextOverlay`**, **`SavedAudioClip`** (file path, trim, `timelineStart`, volume, fades), project-level opening/closing transitions, **`title`**, playhead, and selection — not raw video bytes.
 - Legacy **`SavedAudioTrack`** in older JSON files migrates to `audioClips` on decode.
 - **New project:** `CreateProjectScreen` saves on Next, then opens `EditorScreen(project:)`.
 - **Resume:** `ProjectListScreen` lists saved projects via **`ProjectListViewModel`**; tap anywhere on a **`ProjectCardView`** to reopen. The list re-sorts by `modifiedAt` and reloads each time the navigation path empties.
@@ -617,69 +639,110 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Trim** with left/right handles (UIKit, same pattern as clips); **move** by dragging the selected bar body.
 - **Split** creates two adjacent audio clips from one source file at the playhead-local time.
 - Volume changes rebuild the composition mix (`AVAudioMix`).
+- **Fade in / fade out:** the audio volume sheet exposes edge-duration sliders. Values are persisted per audio clip and rendered as linear `AVAudioMix` volume ramps in preview and export.
 - Timeline ruler extends when music is longer than video; preview holds the last video frame in the tail.
 - **Export** includes all audio clips mixed under the video.
 
+### 12.9 Project rename and clip transitions
+
+- **Home rename:** long-press a `ProjectCardView` → **Rename Project** → edit and save. The title is persisted immediately and the project list refreshes in modified-date order.
+- **Opening, cut, and closing controls:** the leading-edge button applies a persisted entrance transition to clip one; every gap between adjacent clips has its own transition button plus a smaller add-media button; and the final slot combines a project-level exit transition with the existing add-media action. Endpoint state belongs to the project—not an asset—so reordering or appending clips keeps entrance and exit effects on the true timeline edges.
+- **Transition browser:** tap any opening, cut, or closing control to open a categorized sheet with 105 choices across Basic, Camera, Motion, Light, Blur, Glitch, Mask, Artistic, and Distortion. The catalog now includes additional swing/orbit/flip-zoom/bounce camera moves, compress/stretch/pan/skew motion, four-direction blur, radial/soft blur, glass/torus/triangle distortion, vortex/pinch/bump effects, hue/invert/posterize/photo-process treatments, heat shift, and edge glow.
+- **GPU transition engine:** 35 options marked **GPU** use the isolated `EditorTransitionCompositor.swift` pipeline. Core Image runs on Metal when available and provides real blur, pixel, color, artistic, distortion, glass, lens, mirror, glitch, and shader-mask processing. The standard Apple compositor remains active unless a GPU transition is selected.
+- **Render architecture:** immutable `EditorTransitionRenderInstruction` values carry only track IDs, timing, transforms, and transition metadata. Preview and export instantiate the same serial GPU compositor and render into BGRA Metal-compatible buffers. The compositor never reaches into view-model or mutable editor state.
+- **Orientation normalization:** the custom compositor converts each complete AVFoundation transform into Core Image pixel-buffer coordinates using the decoded source and render dimensions. Portrait, landscape, rotated, and generated-photo clips therefore retain their original presentation orientation throughout GPU effects.
+- **Color-space safety:** the GPU path explicitly advertises an 8-bit SDR working space, so AVFoundation conforms HDR/wide-color inputs before rendering rather than passing unsupported 10-bit frames. Projects that use only standard transitions keep the existing Apple compositor and its current color behavior.
+- Selecting a style rebuilds and plays the relevant edge/cut preview. Duration is adjustable up to 2 s (clamped to available clip lengths), and **Apply to all cuts** can update every internal boundary in one operation.
+- Cancel restores the endpoint/cut state; Done creates one undo step and persists the transition kind/duration. Preview and export use the same `AVVideoComposition` opacity/transform ramps over cached, encoded black/white backing-video tracks, so letterboxing and transformed or faded frames always contain initialized pixels instead of a green YUV surface. The closing effect finishes at the last video frame; any audio-only tail continues over the initialized black canvas. The Core Animation text-overlay tool is attached only during offline export because AVPlayer does not support it.
+
 ---
 
-## 13. What to build next
+## 13. Professional editor roadmap
 
-Prioritized backlog. Items marked **done** shipped recently — kept here for context.
+This roadmap is ordered by dependency and product value. A feature is only considered
+complete when it works in **preview and export**, participates in **undo/redo**, persists
+through project save/reopen, and has reasonable device-performance coverage.
 
-### Near term (core editor gaps)
+### Shipped foundation
 
-| Priority | Feature | Current state |
-|----------|---------|---------------|
-| 1 | **Filter tool** | Toolbar toggles `selectedTool == .filter`; no panel, no `CIFilter` / custom compositor in `EditorCompositionBuilder`. |
-| 2 | **Home-screen project rename** | **Partial:** rename on export screen saves `projectTitle`; no edit UI on `ProjectCardView` / long-press menu yet. |
-| 3 | **Audio fade in/out** | Volume is step/preset only; no envelope or keyframed fade on audio clip edges. |
-| 4 | **Clip transitions** | Hard cuts only; no crossfade / dip-to-black between adjacent video clips. |
-| 5 | **Photo clip duration** | **Done:** photo-only DURATION presets/slider plus an uncapped right trim handle; updates timeline, preview/export, undo, and persistence. |
+| Area | Current capability |
+|------|--------------------|
+| **Timeline** | Continuous composition playback; trim, split, reorder, insert, delete, speed, volume, photo duration, filmstrips, text/audio lanes, and extended timelines. |
+| **Transitions** | 105 opening/cut/closing transitions with live preview, duration, Apply to all cuts, undo, persistence, and export parity; 35 use the isolated GPU compositor. |
+| **Audio** | Imported multi-clip audio lane with trim, move, split, volume, fade in/out, and export mixing. |
+| **Text** | Styled text overlays with timeline trim/move, preview positioning, undo, persistence, and export burn-in. |
+| **Projects** | Autosaved JSON projects, resume, home rename, delete confirmation, PhotoKit rehydration, and modified-date ordering. |
+| **Export** | Preview, project filename, 720p/1080p/4K, 24–120 fps, bitrate tiers, MP4/MOV, optional HDR/HEVC, progress, cancellation, Photos, and Share. |
+| **Rendering safety** | Orientation normalization, SDR GPU working space, and encoded black/white backing tracks that prevent green or uninitialized export frames. |
 
-### Export & sharing
+### Phase 1 — complete the core editing toolkit
 
-| Priority | Feature | Current state |
-|----------|---------|---------------|
-| 6 | **Export quality / bitrate** | **Done:** quality tiers (6–35 Mbps @1080p), live Mbps label, HDR/HEVC toggle; `AVAssetWriter` with explicit bitrate. |
-| 7 | **Photos library display name** | Share sheet uses project title; asset name inside Photos may still be generic. |
-| 8 | **Export range** | Always full `totalDuration`; no in/out markers for partial export. |
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 1 | **Color and filters** | Filter browser, intensity, exposure, contrast, saturation, temperature, tint, highlights/shadows, vignette, reset/copy, and identical GPU preview/export. |
+| 2 | **Crop and reframe** | Per-clip crop, rotate, flip, scale, position, straighten, aspect presets, safe-area guides, and fit/fill background controls. |
+| 3 | **Canvas formats** | 9:16, 16:9, 1:1, 4:5, and custom sizes with blur/color/image backgrounds and project-level persistence. |
+| 4 | **Timeline snapping** | Magnetic playhead and clip/overlay edge snapping, visible guides, zoom-aware thresholds, and haptic feedback. |
+| 5 | **Duplicate and replace** | Duplicate video/audio/text; replace a clip while preserving compatible trim, timing, transform, filters, and transitions. |
+| 6 | **Export range** | In/out markers, selected-range export, range duration/size estimate, and correct audio/text trimming. |
 
-### Timeline & media
+### Phase 2 — motion and advanced compositing
 
-| Priority | Feature | Current state |
-|----------|---------|---------------|
-| 9 | **Duplicate clip** | No one-tap duplicate (video or audio). |
-| 10 | **Per-clip crop / rotate** | Only global aspect-fit in video composition; no reframe UI. |
-| 11 | **Video audio waveform** | Audio lane shows imported music; clip embedded audio has no waveform strip. |
-| 12 | **Snap playhead** | Free scrub; no magnetic snap to clip/overlay edges or beat grid. |
-| 13 | **Multi-select** | Single selection only across clips, text, and audio. |
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 7 | **Keyframe engine** | A reusable time/value model and curve editor for transform, opacity, volume, crop, filters, text, and effects. |
+| 8 | **Speed ramps** | Multiple speed points, curve presets, source/timeline remapping, pitch options, and transition-safe rendering. |
+| 9 | **Reverse and freeze frame** | Cached reverse media generation, cancellable progress, freeze insertion, audio policy, and project relinking. |
+| 10 | **Multi-layer video** | Additional video/overlay tracks with z-order, independent trim/move, opacity, transforms, and audio handling. |
+| 11 | **Blend, mask, and chroma key** | Blend modes, shape/feather/invert masks, green-screen keying, spill suppression, and GPU export parity. |
+| 12 | **Stabilization and motion tracking** | Vision-based subject/point tracking, transform smoothing, tracked text/stickers, and adjustable stabilization crop. |
 
-### Text & creative
+### Phase 3 — professional audio
 
-| Priority | Feature | Current state |
-|----------|---------|---------------|
-| 14 | **Text animations** | Static opacity keyframes (on/off); no typewriter, slide-in, or bounce presets. |
-| 15 | **Stickers / emoji layer** | Text only; no sticker track or SF Symbol overlays. |
-| 16 | **Templates** | Fixed 9:16 canvas; no 1:1 / 16:9 / TikTok-safe-zone presets. |
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 13 | **Waveforms and meters** | Cached waveforms for imported and embedded clip audio, peak/RMS meters, clipping indication, and zoom-aware drawing. |
+| 14 | **Voiceover recording** | Countdown, monitoring, punch-in, permission/error handling, waveform creation, and automatic timeline placement. |
+| 15 | **Audio automation** | Volume keyframes, pan, crossfades, mute/solo, track gain, and master limiting. |
+| 16 | **Audio cleanup** | Noise reduction, EQ, compressor, de-esser, normalize/loudness target, and speech enhancement presets. |
+| 17 | **Ducking and beat tools** | Speech/music detection, adjustable auto-ducking, BPM/beat markers, snap-to-beat, and assisted beat cuts. |
 
-### Platform & polish
+### Phase 4 — titles, captions, and reusable creative assets
 
-| Priority | Feature | Current state |
-|----------|---------|---------------|
-| 17 | **Beat sync / auto-cut** | Manual editing only; no BPM detection or cut-to-beat assist. |
-| 18 | **Voiceover recording** | Import audio files only; no in-app mic capture lane. |
-| 19 | **iCloud project sync** | Local JSON in Application Support only. |
-| 20 | **iPad layout** | Phone-first; no split view, keyboard shortcuts, or pointer hover on timeline. |
-| 21 | **Haptics on snap** | Reorder has haptics; trim/split/playhead snap do not. |
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 18 | **Text animation** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability. |
+| 19 | **Captions** | Speech transcription, editable timed segments, word highlighting, caption styles, safe zones, and SRT import/export. |
+| 20 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
+| 21 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
+| 22 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
 
-### Recently shipped (for reference)
+### Phase 5 — reliability, performance, and project portability
 
-| Feature | Notes |
-|---------|-------|
-| ~~Export preview playback~~ | Live player + scrub slider on `EditorExportScreen`. |
-| ~~Project name on export~~ | Field on export screen; persists + drives share filename. |
-| ~~Background audio~~ | Multi-clip lane, trim, move, split, volume, export mix. |
-| ~~Volume tool~~ | `VolumeToolPanel` for clip and audio clip. |
-| ~~Extended timeline~~ | Audio/text can run past video end without breaking preview. |
-| ~~Export quality / bitrate~~ | Efficient–Max tiers, Mbps label, HDR/HEVC toggle, writer encode. |
-| ~~Photo clip duration~~ | Photo-only DURATION presets/slider + uncapped right-edge stretching with timeline, preview/export, undo, and persistence support. |
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 23 | **Proxy and render cache** | Background proxy generation, cache invalidation by edit fingerprint, low-storage controls, and full-resolution export. |
+| 24 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
+| 25 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
+| 26 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |
+| 27 | **Color management** | Explicit SDR/HDR pipeline, transfer functions, wide-gamut handling, tone mapping, metadata validation, and scopes. |
+| 28 | **Automated quality suite** | Unit tests, UI flows, golden-frame renders, orientation matrices, audio timing tests, export probes, and long-project stress tests. |
+| 29 | **Performance budgets** | Signposted preview/export stages, frame-drop and memory targets, thermal testing, cancellation latency, and regression dashboards. |
+| 30 | **iCloud and collaboration readiness** | Conflict-safe project sync, asset availability states, deterministic document IDs, and future collaboration-friendly edit operations. |
+
+### Platform polish
+
+- Adaptive iPad layout with trackpad, pointer hover, keyboard shortcuts, and external display preview.
+- Accessibility labels, VoiceOver timeline navigation, Dynamic Type-safe sheets, reduced-motion behavior, and contrast audits.
+- Localization, right-to-left layout checks, onboarding, contextual help, and non-destructive editing education.
+- Searchable command menu, edit history inspection, favorites/recent assets, and reusable presets.
+- Storage management for imported audio, generated photo videos, proxies, caches, and completed exports.
+
+### Engineering guardrails
+
+- Keep transition/effect identifiers stable once persisted; add aliases or migrations instead of renaming raw values.
+- Keep views declarative and route all mutations through `EditorViewModel`.
+- Never add a preview-only effect: preview and export must use the same renderer and timing model.
+- Treat orientation, color space, alpha/background pixels, audio tails, cancellation, and missing media as test dimensions.
+- Avoid monolithic catalogs or render switches; use separate metadata, parameter, instruction, and renderer files as each system grows.
+- Measure on physical devices, including older supported hardware, portrait/landscape inputs, photos, HDR media, and long timelines.

@@ -17,6 +17,10 @@ final class EditorViewModel {
     // MARK: Timeline state
 
     private(set) var clips: [EditorClip]
+    private(set) var openingTransitionKind: EditorTransitionKind
+    private(set) var openingTransitionDuration: TimeInterval
+    private(set) var closingTransitionKind: EditorTransitionKind
+    private(set) var closingTransitionDuration: TimeInterval
     var selectedClipID: UUID?
     var textOverlays: [EditorTextOverlay]
     var audioClips: [EditorAudioClip]
@@ -92,6 +96,8 @@ final class EditorViewModel {
     @ObservationIgnored
     private var audioVolumeUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var transitionUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
     private var saveTask: Task<Void, Never>?
 
     // MARK: Init
@@ -102,6 +108,10 @@ final class EditorViewModel {
         self.projectTitle = project.title
         let clips = EditorProjectResolver.clips(from: project.clips)
         self.clips = clips
+        self.openingTransitionKind = project.openingTransitionKind
+        self.openingTransitionDuration = project.openingTransitionDuration
+        self.closingTransitionKind = project.closingTransitionKind
+        self.closingTransitionDuration = project.closingTransitionDuration
         self.selectedClipID = project.selectedClipID ?? clips.first?.id
         self.timelinePosition = project.timelinePosition
         self.textOverlays = project.textOverlays.map { $0.toOverlay() }
@@ -413,6 +423,142 @@ final class EditorViewModel {
             scheduleSave()
         }
         volumeUndoSnapshot = nil
+    }
+
+    // MARK: Transitions
+
+    func transition(for target: EditorTransitionTarget) -> (
+        kind: EditorTransitionKind,
+        duration: TimeInterval
+    )? {
+        switch target {
+        case .opening:
+            guard !clips.isEmpty else { return nil }
+            return (openingTransitionKind, openingTransitionDuration)
+        case .closing:
+            guard !clips.isEmpty else { return nil }
+            return (closingTransitionKind, closingTransitionDuration)
+        case .cut(let index):
+            return transition(afterClipAt: index)
+        }
+    }
+
+    func transition(afterClipAt index: Int) -> (kind: EditorTransitionKind, duration: TimeInterval)? {
+        guard index >= 0, index < clips.count - 1 else { return nil }
+        return (clips[index].transitionKind, clips[index].transitionDuration)
+    }
+
+    func maximumTransitionDuration(for target: EditorTransitionTarget) -> TimeInterval {
+        switch target {
+        case .opening:
+            return min(2, clips.first?.duration ?? 0)
+        case .closing:
+            return min(2, clips.last?.duration ?? 0)
+        case .cut(let index):
+            return maximumTransitionDuration(afterClipAt: index)
+        }
+    }
+
+    func maximumTransitionDuration(afterClipAt index: Int) -> TimeInterval {
+        guard index >= 0, index < clips.count - 1 else { return 0 }
+        return min(2, min(clips[index].duration, clips[index + 1].duration))
+    }
+
+    func beginTransitionEditing() {
+        pausePlaybackForEdit()
+        transitionUndoSnapshot = currentSnapshot()
+    }
+
+    func previewTransition(
+        kind: EditorTransitionKind,
+        duration: TimeInterval,
+        target: EditorTransitionTarget,
+        applyToAll: Bool
+    ) {
+        // Every preview starts from the sheet's opening state. This makes
+        // "Apply to all" reversible while the sheet is still open.
+        if let baseline = transitionUndoSnapshot {
+            clips = baseline.clips
+            openingTransitionKind = baseline.openingTransitionKind
+            openingTransitionDuration = baseline.openingTransitionDuration
+            closingTransitionKind = baseline.closingTransitionKind
+            closingTransitionDuration = baseline.closingTransitionDuration
+        }
+
+        switch target {
+        case .opening:
+            guard !clips.isEmpty else { return }
+            openingTransitionKind = kind
+            openingTransitionDuration = kind == .none
+                ? 0
+                : min(max(0.1, duration), maximumTransitionDuration(for: .opening))
+        case .closing:
+            guard !clips.isEmpty else { return }
+            closingTransitionKind = kind
+            closingTransitionDuration = kind == .none
+                ? 0
+                : min(max(0.1, duration), maximumTransitionDuration(for: .closing))
+        case .cut(let index):
+            guard index >= 0, index < clips.count - 1 else { return }
+            let indices = applyToAll ? Array(0..<(clips.count - 1)) : [index]
+            for boundaryIndex in indices {
+                let maxDuration = maximumTransitionDuration(afterClipAt: boundaryIndex)
+                clips[boundaryIndex].transitionKind = kind
+                clips[boundaryIndex].transitionDuration = kind == .none
+                    ? 0
+                    : min(max(0.1, duration), maxDuration)
+            }
+        }
+
+        invalidateComposition()
+        playTransitionPreview(target: target)
+    }
+
+    func commitTransitionEditing() {
+        guard let before = transitionUndoSnapshot else { return }
+        if before.clips != clips
+            || before.openingTransitionKind != openingTransitionKind
+            || before.openingTransitionDuration != openingTransitionDuration
+            || before.closingTransitionKind != closingTransitionKind
+            || before.closingTransitionDuration != closingTransitionDuration {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        transitionUndoSnapshot = nil
+    }
+
+    func cancelTransitionEditing() {
+        guard let before = transitionUndoSnapshot else { return }
+        clips = before.clips
+        openingTransitionKind = before.openingTransitionKind
+        openingTransitionDuration = before.openingTransitionDuration
+        closingTransitionKind = before.closingTransitionKind
+        closingTransitionDuration = before.closingTransitionDuration
+        transitionUndoSnapshot = nil
+        invalidateComposition()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func playTransitionPreview(target: EditorTransitionTarget) {
+        switch target {
+        case .opening:
+            timelinePosition = 0
+        case .closing:
+            timelinePosition = max(
+                0,
+                videoDuration - max(0.35, closingTransitionDuration)
+            )
+        case .cut(let index):
+            let cutTime = timelineOffsetForClipIndex(index + 1)
+            let duration = max(0.35, clips[index].transitionDuration)
+            timelinePosition = max(0, cutTime - duration)
+        }
+        Task {
+            await ensureCompositionPlayer(resumePlaying: true)
+            isPlaying = true
+            startPlaybackTicking()
+        }
     }
 
     // MARK: Text Overlays
@@ -799,6 +945,8 @@ final class EditorViewModel {
         let end = max(min(clip.originalDuration, trimEnd), start + minSpan)
         clip.trimStart = start
         clip.trimEnd = end
+        clip.fadeInDuration = min(clip.fadeInDuration, clip.duration)
+        clip.fadeOutDuration = min(clip.fadeOutDuration, clip.duration)
         audioClips[idx] = clip
         invalidateComposition()
     }
@@ -882,6 +1030,24 @@ final class EditorViewModel {
         Task { await alignPlaybackToTimeline() }
     }
 
+    func setAudioFades(clipID: UUID, fadeIn: TimeInterval, fadeOut: TimeInterval) {
+        guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        if audioVolumeUndoSnapshot == nil {
+            audioVolumeUndoSnapshot = currentSnapshot()
+        }
+        let duration = audioClips[idx].duration
+        audioClips[idx].fadeInDuration = min(max(0, fadeIn), duration)
+        audioClips[idx].fadeOutDuration = min(max(0, fadeOut), duration)
+        invalidateComposition()
+    }
+
+    func commitAudioFades(clipID: UUID, fadeIn: TimeInterval, fadeOut: TimeInterval) {
+        setAudioFades(clipID: clipID, fadeIn: fadeIn, fadeOut: fadeOut)
+        finalizeAudioVolumeEditUndo()
+        audioVolumeUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
     private func finalizeAudioVolumeEditUndo() {
         guard let before = audioVolumeUndoSnapshot else { return }
         if before != currentSnapshot() {
@@ -939,11 +1105,19 @@ final class EditorViewModel {
                 let clipsSnapshot = clips
                 let textOverlaysSnapshot = textOverlays
                 let audioClipsSnapshot = audioClips
+                let openingKindSnapshot = openingTransitionKind
+                let openingDurationSnapshot = openingTransitionDuration
+                let closingKindSnapshot = closingTransitionKind
+                let closingDurationSnapshot = closingTransitionDuration
                 let projectTitleSnapshot = projectTitle
                 let url = try await EditorExportService.export(
                     clips: clipsSnapshot,
                     textOverlays: textOverlaysSnapshot,
                     audioClips: audioClipsSnapshot,
+                    openingTransitionKind: openingKindSnapshot,
+                    openingTransitionDuration: openingDurationSnapshot,
+                    closingTransitionKind: closingKindSnapshot,
+                    closingTransitionDuration: closingDurationSnapshot,
                     settings: settings,
                     projectTitle: projectTitleSnapshot
                 ) { progress in
@@ -1068,6 +1242,10 @@ final class EditorViewModel {
     private func currentSnapshot() -> EditorTimelineSnapshot {
         EditorTimelineSnapshot(
             clips: clips,
+            openingTransitionKind: openingTransitionKind,
+            openingTransitionDuration: openingTransitionDuration,
+            closingTransitionKind: closingTransitionKind,
+            closingTransitionDuration: closingTransitionDuration,
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
             selectedAudioClipID: selectedAudioClipID,
@@ -1078,6 +1256,10 @@ final class EditorViewModel {
 
     private func applySnapshot(_ snapshot: EditorTimelineSnapshot) {
         clips = snapshot.clips
+        openingTransitionKind = snapshot.openingTransitionKind
+        openingTransitionDuration = snapshot.openingTransitionDuration
+        closingTransitionKind = snapshot.closingTransitionKind
+        closingTransitionDuration = snapshot.closingTransitionDuration
         timelinePosition = min(snapshot.timelinePosition, totalDuration)
         selectedClipID = snapshot.selectedClipID
         selectedAudioClipID = snapshot.selectedAudioClipID
@@ -1105,6 +1287,10 @@ final class EditorViewModel {
             clips: clips.map { SavedEditorClip(from: $0) },
             textOverlays: textOverlays.map { SavedTextOverlay(from: $0) },
             audioClips: audioClips.map { SavedAudioClip(from: $0) },
+            openingTransitionKind: openingTransitionKind,
+            openingTransitionDuration: openingTransitionDuration,
+            closingTransitionKind: closingTransitionKind,
+            closingTransitionDuration: closingTransitionDuration,
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
             selectedAudioClipID: selectedAudioClipID
@@ -1122,12 +1308,14 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fileURL.path)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.fileURL.path)"
         }.joined(separator: ";")
-        return clipsHash + "|||" + audioHash
+        let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
+        let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"
+        return clipsHash + "|||" + audioHash + "|||" + openingHash + "|||" + closingHash
     }
 
     private func invalidateComposition() {
@@ -1156,14 +1344,27 @@ final class EditorViewModel {
         let wasPlaying = isPlaying
         let clipsSnapshot = clips
         let audioClipsSnapshot = audioClips
+        let openingKindSnapshot = openingTransitionKind
+        let openingDurationSnapshot = openingTransitionDuration
+        let closingKindSnapshot = closingTransitionKind
+        let closingDurationSnapshot = closingTransitionDuration
 
         let item: AVPlayerItem?
         if audioClipsSnapshot.isEmpty,
+           openingKindSnapshot == .none,
+           closingKindSnapshot == .none,
            let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
             item = warmed
         } else {
             item = await Task.detached(priority: .userInitiated) {
-                await EditorCompositionBuilder.makePlayerItem(from: clipsSnapshot, audioClips: audioClipsSnapshot)
+                await EditorCompositionBuilder.makePlayerItem(
+                    from: clipsSnapshot,
+                    audioClips: audioClipsSnapshot,
+                    openingTransitionKind: openingKindSnapshot,
+                    openingTransitionDuration: openingDurationSnapshot,
+                    closingTransitionKind: closingKindSnapshot,
+                    closingTransitionDuration: closingDurationSnapshot
+                )
             }.value
         }
 

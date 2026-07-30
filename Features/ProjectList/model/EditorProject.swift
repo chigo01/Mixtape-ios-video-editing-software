@@ -16,6 +16,8 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var trimEnd: TimeInterval
     var speed: Float
     var volume: Float
+    var transitionKind: EditorTransitionKind
+    var transitionDuration: TimeInterval
 
     init(from clip: EditorClip) {
         id = clip.id
@@ -25,6 +27,28 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimEnd = clip.trimEnd
         speed = clip.speed
         volume = clip.volume
+        transitionKind = clip.transitionKind
+        transitionDuration = clip.transitionDuration
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        assetLocalIdentifier = try c.decode(String.self, forKey: .assetLocalIdentifier)
+        originalDuration = try c.decode(TimeInterval.self, forKey: .originalDuration)
+        trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
+        trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
+        speed = try c.decode(Float.self, forKey: .speed)
+        volume = try c.decode(Float.self, forKey: .volume)
+        transitionDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .transitionDuration) ?? 0
+        if let rawKind = try c.decodeIfPresent(String.self, forKey: .transitionKind) {
+            // `zoom` was shipped briefly before the catalog split it into Zoom In/Out.
+            transitionKind = rawKind == "zoom"
+                ? .zoomIn
+                : (EditorTransitionKind(rawValue: rawKind) ?? .none)
+        } else {
+            transitionKind = transitionDuration > 0 ? .dipToBlack : .none
+        }
     }
 }
 
@@ -107,6 +131,8 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
     var volume: Float
+    var fadeInDuration: TimeInterval
+    var fadeOutDuration: TimeInterval
 
     init(from clip: EditorAudioClip) {
         id = clip.id
@@ -117,6 +143,22 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         trimEnd = clip.trimEnd
         timelineStart = clip.timelineStart
         volume = clip.volume
+        fadeInDuration = clip.fadeInDuration
+        fadeOutDuration = clip.fadeOutDuration
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        fileURLPath = try c.decode(String.self, forKey: .fileURLPath)
+        originalDuration = try c.decode(TimeInterval.self, forKey: .originalDuration)
+        trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
+        trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
+        timelineStart = try c.decode(TimeInterval.self, forKey: .timelineStart)
+        volume = try c.decode(Float.self, forKey: .volume)
+        fadeInDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeInDuration) ?? 0
+        fadeOutDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeOutDuration) ?? 0
     }
 
     func toAudioClip() -> EditorAudioClip? {
@@ -130,7 +172,9 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             timelineStart: timelineStart,
-            volume: volume
+            volume: volume,
+            fadeInDuration: fadeInDuration,
+            fadeOutDuration: fadeOutDuration
         )
     }
 }
@@ -169,6 +213,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var clips: [SavedEditorClip]
     var textOverlays: [SavedTextOverlay]
     var audioClips: [SavedAudioClip]
+    var openingTransitionKind: EditorTransitionKind
+    var openingTransitionDuration: TimeInterval
+    var closingTransitionKind: EditorTransitionKind
+    var closingTransitionDuration: TimeInterval
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
     var selectedAudioClipID: UUID?
@@ -176,6 +224,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
         case audioClips, audioTrack, timelinePosition, selectedClipID, selectedAudioClipID
+        case openingTransitionKind, openingTransitionDuration
+        case closingTransitionKind, closingTransitionDuration
     }
 
     init(
@@ -186,6 +236,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
         clips: [SavedEditorClip],
         textOverlays: [SavedTextOverlay],
         audioClips: [SavedAudioClip],
+        openingTransitionKind: EditorTransitionKind = .none,
+        openingTransitionDuration: TimeInterval = 0,
+        closingTransitionKind: EditorTransitionKind = .none,
+        closingTransitionDuration: TimeInterval = 0,
         timelinePosition: TimeInterval,
         selectedClipID: UUID?,
         selectedAudioClipID: UUID? = nil
@@ -197,6 +251,14 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.clips = clips
         self.textOverlays = textOverlays
         self.audioClips = audioClips
+        self.openingTransitionKind = openingTransitionKind
+        self.openingTransitionDuration = openingTransitionKind == .none
+            ? 0
+            : max(0, openingTransitionDuration)
+        self.closingTransitionKind = closingTransitionKind
+        self.closingTransitionDuration = closingTransitionKind == .none
+            ? 0
+            : max(0, closingTransitionDuration)
         self.timelinePosition = timelinePosition
         self.selectedClipID = selectedClipID
         self.selectedAudioClipID = selectedAudioClipID
@@ -210,6 +272,38 @@ struct EditorProject: Codable, Identifiable, Hashable {
         modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
         clips = try c.decode([SavedEditorClip].self, forKey: .clips)
         textOverlays = try c.decodeIfPresent([SavedTextOverlay].self, forKey: .textOverlays) ?? []
+        let openingRawValue = try c.decodeIfPresent(
+            String.self,
+            forKey: .openingTransitionKind
+        )
+        openingTransitionKind = openingRawValue
+            .flatMap(EditorTransitionKind.init(rawValue:))
+            ?? .none
+        openingTransitionDuration = openingTransitionKind == .none
+            ? 0
+            : max(
+                0,
+                try c.decodeIfPresent(
+                    TimeInterval.self,
+                    forKey: .openingTransitionDuration
+                ) ?? 0
+            )
+        let closingRawValue = try c.decodeIfPresent(
+            String.self,
+            forKey: .closingTransitionKind
+        )
+        closingTransitionKind = closingRawValue
+            .flatMap(EditorTransitionKind.init(rawValue:))
+            ?? .none
+        closingTransitionDuration = closingTransitionKind == .none
+            ? 0
+            : max(
+                0,
+                try c.decodeIfPresent(
+                    TimeInterval.self,
+                    forKey: .closingTransitionDuration
+                ) ?? 0
+            )
         timelinePosition = try c.decodeIfPresent(TimeInterval.self, forKey: .timelinePosition) ?? 0
         selectedClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedClipID)
         selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
@@ -233,6 +327,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(clips, forKey: .clips)
         try c.encode(textOverlays, forKey: .textOverlays)
         try c.encode(audioClips, forKey: .audioClips)
+        try c.encode(openingTransitionKind, forKey: .openingTransitionKind)
+        try c.encode(openingTransitionDuration, forKey: .openingTransitionDuration)
+        try c.encode(closingTransitionKind, forKey: .closingTransitionKind)
+        try c.encode(closingTransitionDuration, forKey: .closingTransitionDuration)
         try c.encode(timelinePosition, forKey: .timelinePosition)
         try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
         try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
@@ -258,6 +356,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
             clips: savedClips,
             textOverlays: [],
             audioClips: [],
+            openingTransitionKind: .none,
+            openingTransitionDuration: 0,
+            closingTransitionKind: .none,
+            closingTransitionDuration: 0,
             timelinePosition: 0,
             selectedClipID: savedClips.first?.id,
             selectedAudioClipID: nil
@@ -293,7 +395,9 @@ enum EditorProjectResolver {
                 trimStart: item.trimStart,
                 trimEnd: item.trimEnd,
                 speed: item.speed,
-                volume: item.volume
+                volume: item.volume,
+                transitionKind: item.transitionKind,
+                transitionDuration: item.transitionDuration
             )
         }
     }

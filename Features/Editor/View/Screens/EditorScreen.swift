@@ -17,6 +17,7 @@ struct EditorScreen: View {
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioIndex: Int?
+    @State private var transitionTarget: EditorTransitionTarget?
     @Environment(\.dismiss) private var dismiss
 
     private let editorChromeMinHeight: CGFloat = 268
@@ -68,6 +69,18 @@ struct EditorScreen: View {
                         onInsertAfterClip: { clipIndex in
                             insertAfterClipIndex = clipIndex
                             isMediaPickerPresented = true
+                        },
+                        onSelectOpeningTransition: {
+                            vm.beginTransitionEditing()
+                            transitionTarget = .opening
+                        },
+                        onSelectClosingTransition: {
+                            vm.beginTransitionEditing()
+                            transitionTarget = .closing
+                        },
+                        onSelectTransition: { clipIndex in
+                            vm.beginTransitionEditing()
+                            transitionTarget = .cut(afterClipAt: clipIndex)
                         },
                         onAddAudioClip: { audioIndex in
                             insertAfterAudioIndex = audioIndex
@@ -131,6 +144,31 @@ struct EditorScreen: View {
         }
         .sheet(
             isPresented: Binding(
+                get: { transitionTarget != nil },
+                set: { if !$0 { transitionTarget = nil } }
+            )
+        ) {
+            if let transitionTarget {
+                EditorTransitionSheet(
+                    vm: vm,
+                    target: transitionTarget,
+                    onCancel: {
+                        vm.cancelTransitionEditing()
+                        self.transitionTarget = nil
+                    },
+                    onDone: {
+                        vm.commitTransitionEditing()
+                        self.transitionTarget = nil
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .interactiveDismissDisabled()
+            }
+        }
+        .sheet(
+            isPresented: Binding(
                 get: { vm.isTextEditorPresented },
                 set: { newValue in
                     if !newValue { vm.dismissTextEditor() }
@@ -153,7 +191,7 @@ struct EditorScreen: View {
             )
         ) {
             VolumeToolPanel(vm: vm)
-                .presentationDetents([.height(180)])
+                .presentationDetents([.height(vm.selectedAudioClip == nil ? 180 : 300)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
@@ -179,6 +217,267 @@ struct EditorScreen: View {
         let maxByChrome = geo.size.height - editorChromeMinHeight
         let maxByFraction = geo.size.height * 0.54
         return max(220, min(maxByChrome, maxByFraction))
+    }
+}
+
+private struct EditorTransitionSheet: View {
+    let vm: EditorViewModel
+    let target: EditorTransitionTarget
+    let onCancel: () -> Void
+    let onDone: () -> Void
+
+    @State private var selectedCategory: EditorTransitionCategory = .all
+    @State private var selectedKind: EditorTransitionKind
+    @State private var duration: TimeInterval
+    @State private var applyToAll = false
+
+    init(
+        vm: EditorViewModel,
+        target: EditorTransitionTarget,
+        onCancel: @escaping () -> Void,
+        onDone: @escaping () -> Void
+    ) {
+        self.vm = vm
+        self.target = target
+        self.onCancel = onCancel
+        self.onDone = onDone
+        let current = vm.transition(for: target) ?? (.none, 0)
+        _selectedKind = State(initialValue: current.kind)
+        _duration = State(
+            initialValue: current.duration > 0
+                ? current.duration
+                : min(0.4, vm.maximumTransitionDuration(for: target))
+        )
+    }
+
+    private var maximumDuration: TimeInterval {
+        max(0.1, vm.maximumTransitionDuration(for: target))
+    }
+
+    private var visibleTransitions: [EditorTransitionKind] {
+        EditorTransitionKind.allCases.filter {
+            selectedCategory == .all || $0.category == selectedCategory
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                categoryPicker
+                Divider().overlay(Color.white.opacity(0.12))
+
+                if !target.isEndpoint {
+                    HStack {
+                        Toggle("Apply to all cuts", isOn: $applyToAll)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .tint(Color.appColors.primaryColor)
+                            .onChange(of: applyToAll) {
+                                previewSelection()
+                            }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                }
+
+                ScrollView {
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(), spacing: 12),
+                            count: 3
+                        ),
+                        spacing: 16
+                    ) {
+                        ForEach(visibleTransitions) { transition in
+                            transitionCard(transition)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                }
+
+                if selectedKind != .none {
+                    durationControl
+                }
+            }
+            .background(Color.appColors.backgroundColor)
+            .navigationTitle(target.navigationTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .foregroundColor(.white)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        previewSelection()
+                        onDone()
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .fontWeight(.bold)
+                    }
+                    .foregroundColor(Color.appColors.primaryColor)
+                    .accessibilityLabel("Apply transition")
+                }
+            }
+        }
+    }
+
+    private var categoryPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 22) {
+                ForEach(EditorTransitionCategory.allCases) { category in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedCategory = category
+                        }
+                    } label: {
+                        VStack(spacing: 8) {
+                            Text(category.rawValue)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(
+                                    selectedCategory == category
+                                        ? .white
+                                        : Color.white.opacity(0.5)
+                                )
+                            Capsule()
+                                .fill(
+                                    selectedCategory == category
+                                        ? Color.appColors.primaryColor
+                                        : Color.clear
+                                )
+                                .frame(height: 3)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+        }
+        .frame(height: 48)
+    }
+
+    private func transitionCard(_ transition: EditorTransitionKind) -> some View {
+        let isSelected = selectedKind == transition
+        return Button {
+            selectedKind = transition
+            if transition != .none, duration <= 0 {
+                duration = min(0.4, maximumDuration)
+            }
+            previewSelection()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            VStack(spacing: 7) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(cardGradient(for: transition))
+                    Image(systemName: transition.systemImage)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundColor(.white)
+                    if transition.usesGPUCompositor {
+                        VStack {
+                            HStack {
+                                Spacer()
+                                Text("GPU")
+                                    .font(.system(size: 7, weight: .black))
+                                    .foregroundColor(.black)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        Capsule().fill(Color.appColors.primaryColor)
+                                    )
+                            }
+                            Spacer()
+                        }
+                        .padding(7)
+                    }
+                }
+                .aspectRatio(1.15, contentMode: .fit)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(
+                            isSelected ? Color.appColors.primaryColor : Color.white.opacity(0.12),
+                            lineWidth: isSelected ? 3 : 1
+                        )
+                )
+
+                Text(transition.title)
+                    .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+                    .foregroundColor(isSelected ? Color.appColors.primaryColor : .white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var durationControl: some View {
+        VStack(spacing: 8) {
+            Divider().overlay(Color.white.opacity(0.12))
+            HStack {
+                Text("Duration")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                Slider(
+                    value: $duration,
+                    in: 0.1...maximumDuration,
+                    step: 0.05
+                ) { Text("Transition duration") } onEditingChanged: { editing in
+                    if !editing { previewSelection() }
+                }
+                .tint(Color.appColors.primaryColor)
+                Text(String(format: "%.2fs", duration))
+                    .font(.system(size: 12, weight: .bold).monospacedDigit())
+                    .foregroundColor(Color.appColors.primaryColor)
+                    .frame(width: 48, alignment: .trailing)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func previewSelection() {
+        vm.previewTransition(
+            kind: selectedKind,
+            duration: duration,
+            target: target,
+            applyToAll: applyToAll
+        )
+    }
+
+    private func cardGradient(for transition: EditorTransitionKind) -> LinearGradient {
+        let colors: [Color]
+        if transition == .none {
+            colors = [.gray.opacity(0.55), .gray.opacity(0.25)]
+        } else if transition == .dipToBlack {
+            colors = [.white.opacity(0.35), .black]
+        } else if transition == .dipToWhite {
+            colors = [.black.opacity(0.7), .white]
+        } else {
+            switch transition.category {
+            case .all, .basic:
+                colors = [.gray.opacity(0.8), .black.opacity(0.7)]
+            case .camera:
+                colors = [.purple.opacity(0.9), .blue.opacity(0.55)]
+            case .motion:
+                colors = [.blue.opacity(0.85), .cyan.opacity(0.5)]
+            case .light:
+                colors = [.orange.opacity(0.95), .white.opacity(0.75)]
+            case .blur:
+                colors = [.indigo.opacity(0.9), .cyan.opacity(0.45)]
+            case .glitch:
+                colors = [.red.opacity(0.9), .blue.opacity(0.8)]
+            case .mask:
+                colors = [.mint.opacity(0.85), .black.opacity(0.75)]
+            case .artistic:
+                colors = [.yellow.opacity(0.85), .pink.opacity(0.7)]
+            case .distortion:
+                colors = [.pink.opacity(0.85), .purple.opacity(0.65)]
+            }
+        }
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
 

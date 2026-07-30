@@ -29,6 +29,9 @@ struct EditorClip: Identifiable, Hashable {
     var trimEnd: TimeInterval
     var speed: Float
     var volume: Float
+    /// Transition rendered at the cut after this clip.
+    var transitionKind: EditorTransitionKind
+    var transitionDuration: TimeInterval
 
     init(asset: PHAsset) {
         let raw = asset.mediaType == .video ? asset.duration : Self.photoDefaultDuration
@@ -47,7 +50,9 @@ struct EditorClip: Identifiable, Hashable {
         trimStart: TimeInterval,
         trimEnd: TimeInterval,
         speed: Float = 1.0,
-        volume: Float = 1.0
+        volume: Float = 1.0,
+        transitionKind: EditorTransitionKind = .none,
+        transitionDuration: TimeInterval = 0
     ) {
         self.id = id
         self.asset = asset
@@ -56,6 +61,8 @@ struct EditorClip: Identifiable, Hashable {
         self.trimEnd = trimEnd
         self.speed = speed
         self.volume = volume
+        self.transitionKind = transitionDuration > 0 ? transitionKind : .none
+        self.transitionDuration = max(0, transitionDuration)
     }
 
     /// Minimum source span so a clip stays at least ~0.25s on the timeline.
@@ -74,7 +81,9 @@ struct EditorClip: Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: sourceTime,
             speed: speed,
-            volume: volume
+            volume: volume,
+            transitionKind: .none,
+            transitionDuration: 0
         )
         let right = EditorClip(
             asset: asset,
@@ -82,7 +91,9 @@ struct EditorClip: Identifiable, Hashable {
             trimStart: sourceTime,
             trimEnd: trimEnd,
             speed: speed,
-            volume: volume
+            volume: volume,
+            transitionKind: transitionKind,
+            transitionDuration: transitionDuration
         )
         return (left, right)
     }
@@ -111,6 +122,8 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.trimEnd == rhs.trimEnd
             && lhs.speed == rhs.speed
             && lhs.volume == rhs.volume
+            && lhs.transitionKind == rhs.transitionKind
+            && lhs.transitionDuration == rhs.transitionDuration
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

@@ -13,6 +13,9 @@ import AVFoundation
 struct EditorTimeline: View {
     let vm: EditorViewModel
     var onInsertAfterClip: (Int) -> Void = { _ in }
+    var onSelectOpeningTransition: () -> Void = {}
+    var onSelectClosingTransition: () -> Void = {}
+    var onSelectTransition: (Int) -> Void = { _ in }
     var onAddAudioClip: (Int?) -> Void = { _ in }
 
     private let pixelsPerSecond: CGFloat = 18
@@ -185,6 +188,16 @@ struct EditorTimeline: View {
         let dragTx = reorderState.dragTranslationX
 
         return HStack(spacing: 0) {
+            OpeningTransitionControl(
+                transitionKind: vm.openingTransitionKind
+            ) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                onSelectOpeningTransition()
+            }
+            .frame(width: insertSlotWidth, height: clipsLaneHeight)
+            .opacity(isDragging ? 0.15 : 1)
+            .allowsHitTesting(!isDragging)
+
             ForEach(Array(vm.clips.enumerated()), id: \.element.id) { index, clip in
                 let start = vm.timelineOffsetForClipIndex(index)
                 let thumbWidth = layout.clipWidth(for: clip)
@@ -249,9 +262,36 @@ struct EditorTimeline: View {
                 .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.78), value: shiftOffset)
                 .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.72), value: isBeingDragged)
 
-                ClipInsertSlot(width: insertSlotWidth, height: clipsLaneHeight) {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    onInsertAfterClip(index)
+                Group {
+                    if index < vm.clips.count - 1 {
+                        ClipBoundarySlot(
+                            width: insertSlotWidth,
+                            height: clipsLaneHeight,
+                            transitionKind: clip.transitionKind,
+                            onTransition: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                onSelectTransition(index)
+                            },
+                            onInsert: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                onInsertAfterClip(index)
+                            }
+                        )
+                    } else {
+                        ClipEndingSlot(
+                            width: insertSlotWidth,
+                            height: clipsLaneHeight,
+                            transitionKind: vm.closingTransitionKind,
+                            onTransition: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                onSelectClosingTransition()
+                            },
+                            onInsert: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                onInsertAfterClip(index)
+                            }
+                        )
+                    }
                 }
                 .opacity(isDragging ? 0.15 : 1.0)
                 .offset(x: isDragging ? shiftOffset : 0)
@@ -639,8 +679,8 @@ private struct TimelineLayout {
     }
 
     func clipStartContentX(forIndex index: Int) -> CGFloat {
-        guard index > 0 else { return 0 }
-        var x: CGFloat = 0
+        guard index > 0 else { return insertSlotWidth }
+        var x = insertSlotWidth
         for i in 0..<index {
             x += clipWidth(for: clips[i]) + insertSlotWidth
         }
@@ -650,7 +690,7 @@ private struct TimelineLayout {
     var contentWidth: CGFloat {
         guard !clips.isEmpty else { return max(1, CGFloat(timelineExtent) * pixelsPerSecond) }
         let clipsW = clips.reduce(CGFloat(0)) { $0 + clipWidth(for: $1) }
-        let base = clipsW + CGFloat(clips.count) * insertSlotWidth
+        let base = clipsW + CGFloat(clips.count + 1) * insertSlotWidth
         let extra = max(0, timelineExtent - videoDuration)
         return max(base + CGFloat(extra) * pixelsPerSecond, 1)
     }
@@ -663,7 +703,7 @@ private struct TimelineLayout {
         }
         let clampedToVideo = min(clamped, videoDuration)
         var acc: TimeInterval = 0
-        var x: CGFloat = 0
+        var x = insertSlotWidth
 
         for (index, clip) in clips.enumerated() {
             let duration = clip.duration
@@ -689,6 +729,10 @@ private struct TimelineLayout {
             return videoDuration + extra
         }
         var x = max(0, rawX)
+        if x <= insertSlotWidth {
+            return 0
+        }
+        x -= insertSlotWidth
         var acc: TimeInterval = 0
 
         for clip in clips {
@@ -736,6 +780,150 @@ private struct ClipInsertSlot: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add media after this clip")
+    }
+}
+
+private struct ClipBoundarySlot: View {
+    let width: CGFloat
+    let height: CGFloat
+    let transitionKind: EditorTransitionKind
+    let onTransition: () -> Void
+    let onInsert: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.04))
+            Rectangle()
+                .fill(Color.white.opacity(0.16))
+                .frame(width: 1)
+
+            Button(action: onTransition) {
+                Image(systemName: transitionKind == .none
+                      ? "rectangle.split.2x1"
+                      : transitionKind.systemImage)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(transitionKind == .none ? .white : .black)
+                    .frame(width: 26, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(
+                                transitionKind == .none
+                                    ? Color.white.opacity(0.16)
+                                    : Color.appColors.primaryColor
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .offset(y: -9)
+            .accessibilityLabel("Edit transition at cut")
+
+            Button(action: onInsert) {
+                Image(systemName: "plus")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundColor(.black)
+                    .frame(width: 17, height: 17)
+                    .background(Circle().fill(Color.white))
+            }
+            .buttonStyle(.plain)
+            .offset(y: 16)
+            .accessibilityLabel("Add media at this cut")
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+private struct ClipEndingSlot: View {
+    let width: CGFloat
+    let height: CGFloat
+    let transitionKind: EditorTransitionKind
+    let onTransition: () -> Void
+    let onInsert: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.white.opacity(0.04))
+            Rectangle()
+                .fill(Color.white.opacity(0.16))
+                .frame(width: 1)
+
+            Button(action: onTransition) {
+                Image(
+                    systemName: transitionKind == .none
+                        ? "rectangle.portrait.and.arrow.forward"
+                        : transitionKind.systemImage
+                )
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(transitionKind == .none ? .white : .black)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(
+                            transitionKind == .none
+                                ? Color.white.opacity(0.16)
+                                : Color.appColors.primaryColor
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .offset(y: -9)
+            .accessibilityLabel("Edit closing transition")
+            .accessibilityHint("Applies an exit effect to the final clip")
+
+            Button(action: onInsert) {
+                Image(systemName: "plus")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundColor(.black)
+                    .frame(width: 17, height: 17)
+                    .background(Circle().fill(Color.white))
+            }
+            .buttonStyle(.plain)
+            .offset(y: 16)
+            .accessibilityLabel("Add media after this clip")
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+private struct OpeningTransitionControl: View {
+    let transitionKind: EditorTransitionKind
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(
+                systemName: transitionKind == .none
+                    ? "rectangle.portrait.and.arrow.forward"
+                    : transitionKind.systemImage
+            )
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(transitionKind == .none ? .white : .black)
+            .frame(width: 26, height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        transitionKind == .none
+                            ? Color.white.opacity(0.18)
+                            : Color.appColors.primaryColor
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.4), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit opening transition")
+        .accessibilityHint("Applies an entrance effect to the first clip")
     }
 }
 

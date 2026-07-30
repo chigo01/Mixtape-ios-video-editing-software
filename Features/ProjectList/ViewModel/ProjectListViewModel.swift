@@ -24,4 +24,18 @@ final class ProjectListViewModel {
         try? ProjectStore.shared.delete(id: project.id)
         reload()
     }
+
+    func renameProject(_ project: EditorProject, to proposedTitle: String) {
+        let trimmed = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        var renamed = project
+        renamed.title = trimmed
+        do {
+            try ProjectStore.shared.save(renamed)
+            reload()
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
 }

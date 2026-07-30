@@ -21,13 +21,14 @@ enum EditorCompositionBuilder {
     private static let previewCanvasSize = CGSize(width: 1080, height: 1920)
     private static var assetCache: [String: AVAsset] = [:]
     private static var photoVideoCache: [String: URL] = [:]
+    private static var solidVideoCache: [String: URL] = [:]
     private static var warmedPlayerItem: AVPlayerItem?
     private static var warmedFingerprint: String?
 
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -60,6 +61,15 @@ enum EditorCompositionBuilder {
     private struct VideoSegment {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
+        let transitionIn: EditorTransitionKind
+        let transitionOut: EditorTransitionKind
+        let fadeInDuration: TimeInterval
+        let fadeOutDuration: TimeInterval
+    }
+
+    private struct BackgroundVideoTracks {
+        let black: AVMutableCompositionTrack?
+        let white: AVMutableCompositionTrack?
     }
 
     /// Shared composition pipeline for preview and export.
@@ -69,8 +79,13 @@ enum EditorCompositionBuilder {
         from clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
         audioClips: [EditorAudioClip] = [],
+        openingTransitionKind: EditorTransitionKind = .none,
+        openingTransitionDuration: TimeInterval = 0,
+        closingTransitionKind: EditorTransitionKind = .none,
+        closingTransitionDuration: TimeInterval = 0,
         frameRate: Int32 = 30,
-        canvasSize: CGSize? = nil
+        canvasSize: CGSize? = nil,
+        isOfflineRender: Bool = false
     ) async -> EditorCompositionBuildResult? {
         guard !clips.isEmpty else { return nil }
 
@@ -93,7 +108,7 @@ enum EditorCompositionBuilder {
         var videoSegments: [VideoSegment] = []
         var audioVolumeSegments: [AudioVolumeSegment] = []
 
-        for clip in clips {
+        for (clipIndex, clip) in clips.enumerated() {
             let segmentDuration = CMTime(seconds: clip.duration, preferredTimescale: timescale)
             guard segmentDuration.seconds > 0 else { continue }
 
@@ -126,7 +141,18 @@ enum EditorCompositionBuilder {
                         at: cursor
                     )
                     let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
-                    videoSegments.append(VideoSegment(timeRange: segmentRange, transform: transform))
+                    videoSegments.append(
+                        videoSegment(
+                            timeRange: segmentRange,
+                            transform: transform,
+                            clipIndex: clipIndex,
+                            clips: clips,
+                            openingTransitionKind: openingTransitionKind,
+                            openingTransitionDuration: openingTransitionDuration,
+                            closingTransitionKind: closingTransitionKind,
+                            closingTransitionDuration: closingTransitionDuration
+                        )
+                    )
                 }
 
                 if let compositionAudioTrack,
@@ -151,7 +177,18 @@ enum EditorCompositionBuilder {
                     let fullRange = CMTimeRange(start: .zero, duration: segmentDuration)
                     try? compositionVideoTrack.insertTimeRange(fullRange, of: sourceVideo, at: cursor)
                     let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
-                    videoSegments.append(VideoSegment(timeRange: segmentRange, transform: transform))
+                    videoSegments.append(
+                        videoSegment(
+                            timeRange: segmentRange,
+                            transform: transform,
+                            clipIndex: clipIndex,
+                            clips: clips,
+                            openingTransitionKind: openingTransitionKind,
+                            openingTransitionDuration: openingTransitionDuration,
+                            closingTransitionKind: closingTransitionKind,
+                            closingTransitionDuration: closingTransitionDuration
+                        )
+                    )
                 }
             }
 
@@ -170,15 +207,20 @@ enum EditorCompositionBuilder {
         }
 
         var segmentsSnapshot = videoSegments
-        var animationTool: AVVideoCompositionCoreAnimationTool?
+        // Core Animation composition tools are valid for offline rendering only.
+        // Assigning one to an AVPlayerItem raises an Objective-C exception on device.
+        // Playback gets its opaque canvas from each video-composition instruction below.
+        let animationTool: AVVideoCompositionCoreAnimationTool? = {
+            guard isOfflineRender, !textOverlays.isEmpty else { return nil }
 
-        if !textOverlays.isEmpty {
             let parentLayer = CALayer()
             parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-            parentLayer.isGeometryFlipped = true // Video frames are rendered flipped
+            parentLayer.backgroundColor = UIColor.black.cgColor
+            parentLayer.isOpaque = true
+            parentLayer.isGeometryFlipped = true
 
             let videoLayer = CALayer()
-            videoLayer.frame = CGRect(origin: .zero, size: renderSize)
+            videoLayer.frame = parentLayer.bounds
             parentLayer.addSublayer(videoLayer)
 
             let totalDuration = timelineExtent
@@ -214,8 +256,11 @@ enum EditorCompositionBuilder {
                 }
             }
 
-            animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)
-        }
+            return AVVideoCompositionCoreAnimationTool(
+                postProcessingAsVideoLayer: videoLayer,
+                in: parentLayer
+            )
+        }()
 
         // Background music clips (inserted before extending video track / instructions).
         var mixParams: [AVMutableAudioMixInputParameters] = []
@@ -253,7 +298,38 @@ enum EditorCompositionBuilder {
             timelineExtent = max(timelineExtent, audioClip.timelineStart + audioClip.duration)
 
             let bgParams = AVMutableAudioMixInputParameters(track: bgCompTrack)
-            bgParams.setVolume(audioClip.volume, at: timelineStart)
+            let fadeIn = min(max(0, audioClip.fadeInDuration), audioClip.duration)
+            let fadeOut = min(
+                max(0, audioClip.fadeOutDuration),
+                max(0, audioClip.duration - fadeIn)
+            )
+
+            if fadeIn > 0 {
+                bgParams.setVolume(0, at: timelineStart)
+                bgParams.setVolumeRamp(
+                    fromStartVolume: 0,
+                    toEndVolume: audioClip.volume,
+                    timeRange: CMTimeRange(
+                        start: timelineStart,
+                        duration: CMTime(seconds: fadeIn, preferredTimescale: timescale)
+                    )
+                )
+            } else {
+                bgParams.setVolume(audioClip.volume, at: timelineStart)
+            }
+
+            if fadeOut > 0 {
+                let fadeOutStart = timelineStart
+                    + CMTime(seconds: audioClip.duration - fadeOut, preferredTimescale: timescale)
+                bgParams.setVolumeRamp(
+                    fromStartVolume: audioClip.volume,
+                    toEndVolume: 0,
+                    timeRange: CMTimeRange(
+                        start: fadeOutStart,
+                        duration: CMTime(seconds: fadeOut, preferredTimescale: timescale)
+                    )
+                )
+            }
             mixParams.append(bgParams)
         }
 
@@ -262,7 +338,7 @@ enum EditorCompositionBuilder {
         if timelineExtent > videoDuration {
             let emptyStart = CMTime(seconds: videoDuration, preferredTimescale: timescale)
             let emptyDuration = CMTime(seconds: timelineExtent - videoDuration, preferredTimescale: timescale)
-            try? compositionVideoTrack.insertEmptyTimeRange(
+            compositionVideoTrack.insertEmptyTimeRange(
                 CMTimeRange(start: emptyStart, duration: emptyDuration)
             )
         }
@@ -271,10 +347,24 @@ enum EditorCompositionBuilder {
             extent: timelineExtent
         )
 
+        // AVVideoCompositionInstruction.backgroundColor is not consistently materialized
+        // by AVAssetReaderVideoCompositionOutput. On device, uncovered YUV planes can then
+        // encode as green. Real black/white video tracks guarantee initialized pixels under
+        // letterboxed clips and every opacity/transform transition.
+        let backgroundTracks = await makeBackgroundVideoTracks(
+            in: composition,
+            duration: CMTime(seconds: timelineExtent, preferredTimescale: timescale),
+            renderSize: renderSize,
+            needsWhite: segmentsSnapshot.contains {
+                usesWhiteCanvas($0.transitionIn) || usesWhiteCanvas($0.transitionOut)
+            }
+        )
+
         let videoComposition: AVVideoComposition? = {
             guard !segmentsSnapshot.isEmpty else { return nil }
             return makeVideoComposition(
                 compositionTrack: compositionVideoTrack,
+                backgroundTracks: backgroundTracks,
                 segments: segmentsSnapshot,
                 frameRate: frameRate,
                 renderSize: renderSize,
@@ -300,8 +390,22 @@ enum EditorCompositionBuilder {
     }
 
     /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
-    static func makePlayerItem(from clips: [EditorClip], audioClips: [EditorAudioClip] = []) async -> AVPlayerItem? {
-        guard let built = await build(from: clips, audioClips: audioClips) else { return nil }
+    static func makePlayerItem(
+        from clips: [EditorClip],
+        audioClips: [EditorAudioClip] = [],
+        openingTransitionKind: EditorTransitionKind = .none,
+        openingTransitionDuration: TimeInterval = 0,
+        closingTransitionKind: EditorTransitionKind = .none,
+        closingTransitionDuration: TimeInterval = 0
+    ) async -> AVPlayerItem? {
+        guard let built = await build(
+            from: clips,
+            audioClips: audioClips,
+            openingTransitionKind: openingTransitionKind,
+            openingTransitionDuration: openingTransitionDuration,
+            closingTransitionKind: closingTransitionKind,
+            closingTransitionDuration: closingTransitionDuration
+        ) else { return nil }
 
         let item = await AVPlayerItem(asset: built.composition)
         await MainActor.run {
@@ -337,14 +441,62 @@ enum EditorCompositionBuilder {
 
         let holdRange = CMTimeRange(start: lastEnd, duration: extentTime - lastEnd)
         var extended = segments
-        extended.append(VideoSegment(timeRange: holdRange, transform: last.transform))
+        extended.append(
+            VideoSegment(
+                timeRange: holdRange,
+                transform: last.transform,
+                transitionIn: .none,
+                transitionOut: .none,
+                fadeInDuration: 0,
+                fadeOutDuration: 0
+            )
+        )
         return extended
+    }
+
+    private static func videoSegment(
+        timeRange: CMTimeRange,
+        transform: CGAffineTransform,
+        clipIndex: Int,
+        clips: [EditorClip],
+        openingTransitionKind: EditorTransitionKind,
+        openingTransitionDuration: TimeInterval,
+        closingTransitionKind: EditorTransitionKind,
+        closingTransitionDuration: TimeInterval
+    ) -> VideoSegment {
+        let duration = max(0, timeRange.duration.seconds)
+        let isLastClip = clipIndex == clips.count - 1
+        let requestedFadeIn = clipIndex > 0
+            ? clips[clipIndex - 1].transitionDuration
+            : openingTransitionDuration
+        let requestedFadeOut = isLastClip
+            ? closingTransitionDuration
+            : clips[clipIndex].transitionDuration
+        let transitionIn = clipIndex > 0
+            ? clips[clipIndex - 1].transitionKind
+            : openingTransitionKind
+        let transitionOut = isLastClip
+            ? closingTransitionKind
+            : clips[clipIndex].transitionKind
+        return VideoSegment(
+            timeRange: timeRange,
+            transform: transform,
+            transitionIn: transitionIn,
+            transitionOut: transitionOut,
+            fadeInDuration: clipIndex == 0
+                ? min(max(0, requestedFadeIn), duration)
+                : min(max(0, requestedFadeIn / 2), duration / 2),
+            fadeOutDuration: isLastClip
+                ? min(max(0, requestedFadeOut), duration)
+                : min(max(0, requestedFadeOut / 2), duration / 2)
+        )
     }
 
     // MARK: - Video composition (orientation + aspect fit)
 
     private static func makeVideoComposition(
         compositionTrack: AVMutableCompositionTrack,
+        backgroundTracks: BackgroundVideoTracks,
         segments: [VideoSegment],
         frameRate: Int32,
         renderSize: CGSize,
@@ -352,52 +504,705 @@ enum EditorCompositionBuilder {
     ) -> AVVideoComposition {
         let frameDuration = CMTime(value: 1, timescale: frameRate)
 
-        if #available(iOS 26.0, *), animationTool == nil {
-            let instructions: [AVVideoCompositionInstruction] = segments.map { segment in
-                var layerConfiguration = AVVideoCompositionLayerInstruction.Configuration(
-                    assetTrack: compositionTrack
-                )
-                layerConfiguration.setTransform(segment.transform, at: segment.timeRange.start)
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = renderSize
+        composition.frameDuration = frameDuration
+        composition.animationTool = animationTool
 
-                let instructionConfiguration = AVVideoCompositionInstruction.Configuration(
-                    backgroundColor: nil,
-                    enablePostProcessing: false,
-                    layerInstructions: [
-                        AVVideoCompositionLayerInstruction(configuration: layerConfiguration)
-                    ],
-                    requiredSourceSampleDataTrackIDs: [],
-                    timeRange: segment.timeRange
-                )
-                return AVVideoCompositionInstruction(configuration: instructionConfiguration)
-            }
-
-            var configuration = AVVideoComposition.Configuration()
-            configuration.renderSize = renderSize
-            configuration.frameDuration = frameDuration
-            configuration.instructions = instructions
-            return AVVideoComposition(configuration: configuration)
-        } else {
-            // Pre-iOS 26 fallback or when using animationTool
-            let composition = AVMutableVideoComposition()
-            composition.renderSize = renderSize
-            composition.frameDuration = frameDuration
-            composition.animationTool = animationTool
-
+        let needsGPUCompositor = segments.contains {
+            $0.transitionIn.usesGPUCompositor || $0.transitionOut.usesGPUCompositor
+        }
+        if needsGPUCompositor {
+            composition.customVideoCompositorClass = EditorTransitionCompositor.self
             composition.instructions = segments.map { segment in
-                let instruction = AVMutableVideoCompositionInstruction()
-                instruction.timeRange = segment.timeRange
-                
-                // IMPORTANT: Without this, AVFoundation ignores animationTool for this instruction!
-                instruction.enablePostProcessing = (animationTool != nil)
+                let usesWhiteBackground = usesWhiteCanvas(segment.transitionIn)
+                    || usesWhiteCanvas(segment.transitionOut)
+                let backgroundTrack = usesWhiteBackground
+                    ? (backgroundTracks.white ?? backgroundTracks.black)
+                    : backgroundTracks.black
 
-                let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
-                layer.setTransform(segment.transform, at: segment.timeRange.start)
+                return EditorTransitionRenderInstruction(
+                    timeRange: segment.timeRange,
+                    foregroundTrackID: compositionTrack.trackID,
+                    backgroundTrackID: backgroundTrack?.trackID,
+                    baseTransform: segment.transform,
+                    incomingKind: segment.transitionIn,
+                    outgoingKind: segment.transitionOut,
+                    incomingDuration: segment.fadeInDuration,
+                    outgoingDuration: segment.fadeOutDuration,
+                    incomingMotion: transitionMotionCurve(
+                        for: segment.transitionIn,
+                        base: segment.transform,
+                        renderSize: renderSize,
+                        entering: true
+                    ),
+                    outgoingMotion: transitionMotionCurve(
+                        for: segment.transitionOut,
+                        base: segment.transform,
+                        renderSize: renderSize,
+                        entering: false
+                    ),
+                    renderSize: renderSize,
+                    enablePostProcessing: animationTool != nil
+                )
+            }
+            return composition
+        }
 
-                instruction.layerInstructions = [layer]
-                return instruction
+        composition.instructions = segments.map { segment in
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = segment.timeRange
+            let usesWhiteBackground = usesWhiteCanvas(segment.transitionIn)
+                || usesWhiteCanvas(segment.transitionOut)
+            instruction.backgroundColor = (usesWhiteBackground ? UIColor.white : UIColor.black).cgColor
+            instruction.enablePostProcessing = (animationTool != nil)
+
+            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
+            layer.setTransform(segment.transform, at: segment.timeRange.start)
+
+            if segment.fadeInDuration > 0 {
+                applyTransition(
+                    segment.transitionIn,
+                    to: layer,
+                    base: segment.transform,
+                    renderSize: renderSize,
+                    timeRange: CMTimeRange(
+                        start: segment.timeRange.start,
+                        duration: CMTime(
+                            seconds: segment.fadeInDuration,
+                            preferredTimescale: timescale
+                        )
+                    ),
+                    entering: true
+                )
+            }
+            if segment.fadeOutDuration > 0 {
+                let fadeStart = segment.timeRange.end
+                    - CMTime(seconds: segment.fadeOutDuration, preferredTimescale: timescale)
+                applyTransition(
+                    segment.transitionOut,
+                    to: layer,
+                    base: segment.transform,
+                    renderSize: renderSize,
+                    timeRange: CMTimeRange(
+                        start: fadeStart,
+                        duration: CMTime(
+                            seconds: segment.fadeOutDuration,
+                            preferredTimescale: timescale
+                        )
+                    ),
+                    entering: false
+                )
             }
 
-            return composition
+            var layerInstructions: [AVVideoCompositionLayerInstruction] = [layer]
+            let backgroundTrack = usesWhiteBackground
+                ? (backgroundTracks.white ?? backgroundTracks.black)
+                : backgroundTracks.black
+            if let backgroundTrack {
+                let backgroundLayer = AVMutableVideoCompositionLayerInstruction(
+                    assetTrack: backgroundTrack
+                )
+                backgroundLayer.setTransform(.identity, at: segment.timeRange.start)
+                layerInstructions.append(backgroundLayer)
+            }
+            instruction.layerInstructions = layerInstructions
+            return instruction
+        }
+
+        return composition
+    }
+
+    private static func transitionMotionCurve(
+        for kind: EditorTransitionKind,
+        base: CGAffineTransform,
+        renderSize: CGSize,
+        entering: Bool
+    ) -> EditorTransitionMotionCurve? {
+        let effect = transitionTransform(
+            for: kind,
+            base: base,
+            renderSize: renderSize,
+            entering: entering
+        )
+        let start = entering ? effect : base
+        let end = entering ? base : effect
+        let overshoot = transitionOvershootTransform(
+            for: kind,
+            base: base,
+            renderSize: renderSize,
+            entering: entering
+        )
+        guard start != end || overshoot != nil else { return nil }
+        return EditorTransitionMotionCurve(start: start, overshoot: overshoot, end: end)
+    }
+
+    private static func applyTransition(
+        _ kind: EditorTransitionKind,
+        to layer: AVMutableVideoCompositionLayerInstruction,
+        base: CGAffineTransform,
+        renderSize: CGSize,
+        timeRange: CMTimeRange,
+        entering: Bool
+    ) {
+        let effectTransform = transitionTransform(
+            for: kind,
+            base: base,
+            renderSize: renderSize,
+            entering: entering
+        )
+        let firstTransform = entering ? effectTransform : base
+        let lastTransform = entering ? base : effectTransform
+
+        if let middleTransform = transitionOvershootTransform(
+            for: kind,
+            base: base,
+            renderSize: renderSize,
+            entering: entering
+        ) {
+            let firstDuration = CMTimeMultiplyByFloat64(
+                timeRange.duration,
+                multiplier: 0.68
+            )
+            let secondRange = CMTimeRange(
+                start: timeRange.start + firstDuration,
+                duration: timeRange.duration - firstDuration
+            )
+            layer.setTransformRamp(
+                fromStart: firstTransform,
+                toEnd: middleTransform,
+                timeRange: CMTimeRange(start: timeRange.start, duration: firstDuration)
+            )
+            layer.setTransformRamp(
+                fromStart: middleTransform,
+                toEnd: lastTransform,
+                timeRange: secondRange
+            )
+        } else if firstTransform != lastTransform {
+            layer.setTransformRamp(
+                fromStart: firstTransform,
+                toEnd: lastTransform,
+                timeRange: timeRange
+            )
+        }
+
+        applyTransitionOpacity(kind, to: layer, timeRange: timeRange, entering: entering)
+    }
+
+    private static func applyTransitionOpacity(
+        _ kind: EditorTransitionKind,
+        to layer: AVMutableVideoCompositionLayerInstruction,
+        timeRange: CMTimeRange,
+        entering: Bool
+    ) {
+        switch kind {
+        case .pushLeft, .pushRight, .pushUp, .pushDown:
+            layer.setOpacity(1, at: timeRange.start)
+        case .strobe:
+            let firstDuration = CMTimeMultiplyByFloat64(timeRange.duration, multiplier: 0.34)
+            let secondDuration = CMTimeMultiplyByFloat64(timeRange.duration, multiplier: 0.28)
+            let firstEnd = timeRange.start + firstDuration
+            let secondEnd = firstEnd + secondDuration
+            if entering {
+                layer.setOpacityRamp(
+                    fromStartOpacity: 0,
+                    toEndOpacity: 1,
+                    timeRange: CMTimeRange(start: timeRange.start, duration: firstDuration)
+                )
+                layer.setOpacityRamp(
+                    fromStartOpacity: 1,
+                    toEndOpacity: 0.18,
+                    timeRange: CMTimeRange(start: firstEnd, duration: secondDuration)
+                )
+                layer.setOpacityRamp(
+                    fromStartOpacity: 0.18,
+                    toEndOpacity: 1,
+                    timeRange: CMTimeRange(
+                        start: secondEnd,
+                        duration: timeRange.end - secondEnd
+                    )
+                )
+            } else {
+                layer.setOpacityRamp(
+                    fromStartOpacity: 1,
+                    toEndOpacity: 0.18,
+                    timeRange: CMTimeRange(start: timeRange.start, duration: firstDuration)
+                )
+                layer.setOpacityRamp(
+                    fromStartOpacity: 0.18,
+                    toEndOpacity: 1,
+                    timeRange: CMTimeRange(start: firstEnd, duration: secondDuration)
+                )
+                layer.setOpacityRamp(
+                    fromStartOpacity: 1,
+                    toEndOpacity: 0,
+                    timeRange: CMTimeRange(
+                        start: secondEnd,
+                        duration: timeRange.end - secondEnd
+                    )
+                )
+            }
+        default:
+            layer.setOpacityRamp(
+                fromStartOpacity: entering ? 0 : 1,
+                toEndOpacity: entering ? 1 : 0,
+                timeRange: timeRange
+            )
+        }
+    }
+
+    private static func transitionOvershootTransform(
+        for kind: EditorTransitionKind,
+        base: CGAffineTransform,
+        renderSize: CGSize,
+        entering: Bool
+    ) -> CGAffineTransform? {
+        let direction: CGFloat = entering ? -1 : 1
+        switch kind {
+        case .snapBack:
+            return base.concatenating(CGAffineTransform(scaleX: 1.12, y: 1.12))
+        case .diveAndBounce:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.08, y: 1.08))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: 0,
+                        y: direction * renderSize.height * 0.08
+                    )
+                )
+        case .dofWiggle, .cameraShake:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.06, y: 1.06))
+                .concatenating(CGAffineTransform(rotationAngle: -direction * 0.055))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: -direction * renderSize.width * 0.06,
+                        y: direction * renderSize.height * 0.025
+                    )
+                )
+        case .elasticLeft, .elasticRight:
+            return base.concatenating(CGAffineTransform(scaleX: 0.88, y: 1.08))
+        case .swingLeft, .swingRight:
+            let angle: CGFloat = kind == .swingLeft ? -0.08 : 0.08
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.04, y: 1.04))
+                .concatenating(CGAffineTransform(rotationAngle: angle * direction))
+        case .bounceIn, .bounceOut:
+            return base.concatenating(CGAffineTransform(scaleX: 1.10, y: 1.10))
+        case .compressLeft, .compressRight:
+            return base.concatenating(CGAffineTransform(scaleX: 1.12, y: 0.96))
+        default:
+            return nil
+        }
+    }
+
+    private static func usesWhiteCanvas(_ kind: EditorTransitionKind) -> Bool {
+        switch kind {
+        case .dipToWhite, .blink, .flash, .flashZoom, .glare, .strobe, .lightSweep:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func makeBackgroundVideoTracks(
+        in composition: AVMutableComposition,
+        duration: CMTime,
+        renderSize: CGSize,
+        needsWhite: Bool
+    ) async -> BackgroundVideoTracks {
+        guard duration.seconds > 0 else {
+            return BackgroundVideoTracks(black: nil, white: nil)
+        }
+
+        let black = await insertSolidVideoTrack(
+            color: .black,
+            colorKey: "black",
+            in: composition,
+            duration: duration,
+            renderSize: renderSize
+        )
+        let white: AVMutableCompositionTrack?
+        if needsWhite {
+            white = await insertSolidVideoTrack(
+                color: .white,
+                colorKey: "white",
+                in: composition,
+                duration: duration,
+                renderSize: renderSize
+            )
+        } else {
+            white = nil
+        }
+        return BackgroundVideoTracks(black: black, white: white)
+    }
+
+    private static func insertSolidVideoTrack(
+        color: UIColor,
+        colorKey: String,
+        in composition: AVMutableComposition,
+        duration: CMTime,
+        renderSize: CGSize
+    ) async -> AVMutableCompositionTrack? {
+        guard
+            let url = await solidVideoURL(color: color, colorKey: colorKey, renderSize: renderSize),
+            let track = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            )
+        else { return nil }
+
+        let asset = AVURLAsset(url: url)
+        guard
+            let sourceTrack = try? await asset.loadTracks(withMediaType: .video).first,
+            let sourceDuration = try? await asset.load(.duration),
+            sourceDuration.seconds > 0
+        else { return nil }
+
+        let sourceRange = CMTimeRange(start: .zero, duration: sourceDuration)
+        do {
+            try track.insertTimeRange(sourceRange, of: sourceTrack, at: .zero)
+            track.scaleTimeRange(sourceRange, toDuration: duration)
+            return track
+        } catch {
+            composition.removeTrack(track)
+            return nil
+        }
+    }
+
+    private static func transitionTransform(
+        for kind: EditorTransitionKind,
+        base: CGAffineTransform,
+        renderSize: CGSize,
+        entering: Bool
+    ) -> CGAffineTransform {
+        switch kind {
+        case .zoomIn:
+            let scale: CGFloat = entering ? 1.35 : 0.72
+            return base.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        case .zoomOut:
+            let scale: CGFloat = entering ? 0.68 : 1.42
+            return base.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        case .shrink:
+            return base.concatenating(CGAffineTransform(scaleX: 0.35, y: 0.35))
+        case .expand:
+            return base.concatenating(CGAffineTransform(scaleX: 1.65, y: 1.65))
+        case .flashZoom, .glare:
+            let scale: CGFloat = entering ? 1.5 : 0.65
+            return base.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        case .snapBack:
+            let scale: CGFloat = entering ? 0.48 : 1.55
+            return base
+                .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: entering ? -renderSize.width * 0.08 : renderSize.width * 0.08,
+                        y: 0
+                    )
+                )
+        case .clapAndPull:
+            let horizontalScale: CGFloat = entering ? 0.15 : 1.8
+            return base.concatenating(
+                CGAffineTransform(scaleX: horizontalScale, y: 1.12)
+            )
+        case .diveAndBounce:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.72, y: 0.72))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: 0,
+                        y: entering ? renderSize.height * 0.45 : -renderSize.height * 0.45
+                    )
+                )
+        case .dofWiggle:
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.16, y: 1.16))
+                .concatenating(CGAffineTransform(rotationAngle: direction * 0.12))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: direction * renderSize.width * 0.14,
+                        y: -direction * renderSize.height * 0.05
+                    )
+                )
+        case .tiltLeft:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.18, y: 1.18))
+                .concatenating(CGAffineTransform(rotationAngle: entering ? 0.20 : -0.20))
+        case .tiltRight:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.18, y: 1.18))
+                .concatenating(CGAffineTransform(rotationAngle: entering ? -0.20 : 0.20))
+        case .swingLeft, .swingRight:
+            let side: CGFloat = kind == .swingLeft ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.12, y: 1.12))
+                .concatenating(CGAffineTransform(rotationAngle: side * direction * 0.32))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: side * direction * renderSize.width * 0.35,
+                        y: renderSize.height * 0.08
+                    )
+                )
+        case .orbitLeft, .orbitRight:
+            let side: CGFloat = kind == .orbitLeft ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.52, y: 0.52))
+                .concatenating(CGAffineTransform(rotationAngle: side * direction * .pi * 0.85))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: side * direction * renderSize.width * 0.52,
+                        y: renderSize.height * 0.2
+                    )
+                )
+        case .flipZoomIn:
+            let scale: CGFloat = entering ? 0.38 : 1.5
+            return base.concatenating(CGAffineTransform(scaleX: 0.05, y: scale))
+        case .flipZoomOut:
+            let scale: CGFloat = entering ? 1.5 : 0.38
+            return base.concatenating(CGAffineTransform(scaleX: scale, y: 0.05))
+        case .bounceIn:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.42, y: 0.42))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: 0,
+                        y: entering ? renderSize.height * 0.5 : -renderSize.height * 0.5
+                    )
+                )
+        case .bounceOut:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.55, y: 1.55))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: 0,
+                        y: entering ? -renderSize.height * 0.34 : renderSize.height * 0.34
+                    )
+                )
+        case .slideLeft:
+            let x = entering ? renderSize.width : -renderSize.width
+            return base.concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .slideRight:
+            let x = entering ? -renderSize.width : renderSize.width
+            return base.concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .slideUp:
+            let y = entering ? renderSize.height : -renderSize.height
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .slideDown:
+            let y = entering ? -renderSize.height : renderSize.height
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .pushLeft:
+            let x = entering ? renderSize.width * 0.78 : -renderSize.width * 0.78
+            return base.concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .pushRight:
+            let x = entering ? -renderSize.width * 0.78 : renderSize.width * 0.78
+            return base.concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .pushUp:
+            let y = entering ? renderSize.height * 0.78 : -renderSize.height * 0.78
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .pushDown:
+            let y = entering ? -renderSize.height * 0.78 : renderSize.height * 0.78
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .driftLeft:
+            let x = entering ? renderSize.width * 0.32 : -renderSize.width * 0.32
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.08, y: 1.08))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .driftRight:
+            let x = entering ? -renderSize.width * 0.32 : renderSize.width * 0.32
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.08, y: 1.08))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .diagonalUpLeft:
+            let direction: CGFloat = entering ? 1 : -1
+            return base.concatenating(
+                CGAffineTransform(
+                    translationX: direction * renderSize.width,
+                    y: direction * renderSize.height
+                )
+            )
+        case .diagonalUpRight:
+            let direction: CGFloat = entering ? -1 : 1
+            return base.concatenating(
+                CGAffineTransform(
+                    translationX: direction * renderSize.width,
+                    y: -direction * renderSize.height
+                )
+            )
+        case .diagonalDownLeft:
+            let direction: CGFloat = entering ? 1 : -1
+            return base.concatenating(
+                CGAffineTransform(
+                    translationX: direction * renderSize.width,
+                    y: -direction * renderSize.height
+                )
+            )
+        case .diagonalDownRight:
+            let direction: CGFloat = entering ? -1 : 1
+            return base.concatenating(
+                CGAffineTransform(
+                    translationX: direction * renderSize.width,
+                    y: direction * renderSize.height
+                )
+            )
+        case .whipLeft:
+            let x = (entering ? 1.35 : -1.35) * renderSize.width
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.12, y: 0.92))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .whipRight:
+            let x = (entering ? -1.35 : 1.35) * renderSize.width
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.12, y: 0.92))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .elasticLeft:
+            let x = (entering ? 0.72 : -0.72) * renderSize.width
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.32, y: 0.88))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .elasticRight:
+            let x = (entering ? -0.72 : 0.72) * renderSize.width
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.32, y: 0.88))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .compressLeft, .compressRight:
+            let side: CGFloat = kind == .compressLeft ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.24, y: 1.08))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: side * direction * renderSize.width * 0.62,
+                        y: 0
+                    )
+                )
+        case .stretchUp, .stretchDown:
+            let side: CGFloat = kind == .stretchUp ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.82, y: 1.85))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: 0,
+                        y: side * direction * renderSize.height * 0.42
+                    )
+                )
+        case .panLeftZoom, .panRightZoom:
+            let side: CGFloat = kind == .panLeftZoom ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.48, y: 1.48))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: side * direction * renderSize.width * 0.38,
+                        y: renderSize.height * 0.06
+                    )
+                )
+        case .skewLeft, .skewRight:
+            let side: CGFloat = kind == .skewLeft ? -1 : 1
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(
+                    CGAffineTransform(
+                        a: 1,
+                        b: 0,
+                        c: side * direction * 0.42,
+                        d: 1,
+                        tx: side * direction * renderSize.width * 0.34,
+                        ty: 0
+                    )
+                )
+        case .spinLeft:
+            let angle: CGFloat = entering ? .pi / 2 : -.pi / 2
+            return base.concatenating(CGAffineTransform(rotationAngle: angle))
+        case .spinRight:
+            let angle: CGFloat = entering ? -.pi / 2 : .pi / 2
+            return base.concatenating(CGAffineTransform(rotationAngle: angle))
+        case .spinZoom:
+            let angle: CGFloat = entering ? -.pi * 0.75 : .pi * 0.75
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.45, y: 0.45))
+                .concatenating(CGAffineTransform(rotationAngle: angle))
+        case .rollLeft:
+            let angle: CGFloat = entering ? .pi : -.pi
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.58, y: 0.58))
+                .concatenating(CGAffineTransform(rotationAngle: angle))
+        case .rollRight:
+            let angle: CGFloat = entering ? -.pi : .pi
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.58, y: 0.58))
+                .concatenating(CGAffineTransform(rotationAngle: angle))
+        case .flipHorizontal:
+            return base.concatenating(CGAffineTransform(scaleX: 0.04, y: 1))
+        case .flipVertical:
+            return base.concatenating(CGAffineTransform(scaleX: 1, y: 0.04))
+        case .squeezeHorizontal:
+            return base.concatenating(CGAffineTransform(scaleX: 0.12, y: 1.18))
+        case .squeezeVertical:
+            return base.concatenating(CGAffineTransform(scaleX: 1.18, y: 0.12))
+        case .stretchLeft:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.75, y: 0.72))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: entering ? renderSize.width * 0.48 : -renderSize.width * 0.48,
+                        y: 0
+                    )
+                )
+        case .stretchRight:
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.75, y: 0.72))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: entering ? -renderSize.width * 0.48 : renderSize.width * 0.48,
+                        y: 0
+                    )
+                )
+        case .dragSwitch:
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(scaleX: 0.72, y: 1.22))
+                .concatenating(CGAffineTransform(rotationAngle: direction * 0.08))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: direction * renderSize.width * 0.65,
+                        y: renderSize.height * 0.08
+                    )
+                )
+        case .cameraShake:
+            let direction: CGFloat = entering ? -1 : 1
+            return base
+                .concatenating(CGAffineTransform(rotationAngle: direction * 0.08))
+                .concatenating(
+                    CGAffineTransform(
+                        translationX: direction * renderSize.width * 0.12,
+                        y: renderSize.height * 0.04
+                    )
+                )
+        case .fadeLift:
+            let y = entering ? renderSize.height * 0.22 : -renderSize.height * 0.22
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .fadeDrop:
+            let y = entering ? -renderSize.height * 0.22 : renderSize.height * 0.22
+            return base.concatenating(CGAffineTransform(translationX: 0, y: y))
+        case .lightSweep:
+            let x = entering ? renderSize.width * 0.28 : -renderSize.width * 0.28
+            return base
+                .concatenating(CGAffineTransform(scaleX: 1.08, y: 1.08))
+                .concatenating(CGAffineTransform(translationX: x, y: 0))
+        case .none, .fade, .mix, .dipToBlack, .dipToWhite, .blink,
+             .flash, .strobe, .motionBlurLeft, .motionBlurRight,
+             .motionBlurUp, .motionBlurDown, .zoomBlur, .gaussianBlur,
+             .radialBlur, .pixelDissolve, .crystallize, .rgbSplit, .glitch,
+             .ripple, .fisheye, .kaleidoscope, .bumpPulse, .pinchPulse,
+             .vortexLeft, .vortexRight, .glassWarp, .triangleMirror,
+             .torusLens, .comicFlash, .bloom, .vignettePulse, .hueSpin,
+             .colorInvert, .posterize, .noirFlash, .sepiaFlash, .chromeFlash,
+             .processFlash, .falseColor, .edgeGlow, .circleReveal, .radialWipe:
+            return base
         }
     }
 
@@ -520,6 +1325,101 @@ enum EditorCompositionBuilder {
         }
     }
 
+    private static func solidVideoURL(
+        color: UIColor,
+        colorKey: String,
+        renderSize: CGSize
+    ) async -> URL? {
+        let width = max(2, Int(renderSize.width.rounded()))
+        let height = max(2, Int(renderSize.height.rounded()))
+        let key = "\(colorKey)-\(width)x\(height)"
+        if let cached = solidVideoCache[key],
+           FileManager.default.fileExists(atPath: cached.path) {
+            return cached
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mixtape-\(key)-\(UUID().uuidString).mov")
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else {
+            return nil
+        }
+
+        let settings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height
+            ]
+        )
+
+        guard writer.canAdd(input) else { return nil }
+        writer.add(input)
+        guard writer.startWriting() else { return nil }
+        writer.startSession(atSourceTime: .zero)
+
+        guard let buffer = solidColorPixelBuffer(color: color, width: width, height: height) else {
+            writer.cancelWriting()
+            return nil
+        }
+
+        let didAppend = adaptor.append(buffer, withPresentationTime: .zero)
+        input.markAsFinished()
+        writer.endSession(atSourceTime: CMTime(seconds: 1, preferredTimescale: timescale))
+
+        let outputURL = url
+        let completedURL: URL? = await withCheckedContinuation { continuation in
+            writer.finishWriting {
+                let fileSize = try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                continuation.resume(
+                    returning: didAppend && (fileSize ?? 0) > 0 ? outputURL : nil
+                )
+            }
+        }
+        if let completedURL {
+            solidVideoCache[key] = completedURL
+        }
+        return completedURL
+    }
+
+    private static func solidColorPixelBuffer(
+        color: UIColor,
+        width: Int,
+        height: Int
+    ) -> CVPixelBuffer? {
+        guard let pool = createPixelBufferPool(width: width, height: height) else {
+            return nil
+        }
+
+        var pixelBuffer: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer)
+        guard let pixelBuffer else { return nil }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(pixelBuffer),
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return pixelBuffer
+    }
+
     private static func normalizedPortraitImage(_ image: UIImage) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -578,6 +1478,7 @@ enum EditorCompositionBuilder {
     static func clearCaches() {
         assetCache.removeAll()
         photoVideoCache.removeAll()
+        solidVideoCache.removeAll()
         warmedPlayerItem = nil
         warmedFingerprint = nil
     }

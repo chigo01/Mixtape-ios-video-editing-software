@@ -17,6 +17,8 @@ enum ProjectListRoute: Hashable {
 struct ProjectListScreen: View {
     @State private var listVM = ProjectListViewModel()
     @State private var projectToDelete: EditorProject?
+    @State private var projectToRename: EditorProject?
+    @State private var renameText = ""
     @State private var path: [ProjectListRoute] = []
 
     var body: some View {
@@ -72,6 +74,13 @@ struct ProjectListScreen: View {
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
+                                    Button {
+                                        renameText = project.title
+                                        projectToRename = project
+                                    } label: {
+                                        Label("Rename Project", systemImage: "pencil")
+                                    }
+
                                     Button(role: .destructive) {
                                         projectToDelete = project
                                     } label: {
@@ -110,6 +119,26 @@ struct ProjectListScreen: View {
                     Button("Cancel", role: .cancel) {}
                 } message: { project in
                     Text("“\(project.title)” will be removed. This can’t be undone.")
+                }
+                .alert(
+                    "Rename Project",
+                    isPresented: Binding(
+                        get: { projectToRename != nil },
+                        set: { if !$0 { projectToRename = nil } }
+                    ),
+                    presenting: projectToRename
+                ) { project in
+                    TextField("Project name", text: $renameText)
+                    Button("Save") {
+                        listVM.renameProject(project, to: renameText)
+                        projectToRename = nil
+                    }
+                    .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Cancel", role: .cancel) {
+                        projectToRename = nil
+                    }
+                } message: { project in
+                    Text("Choose a new name for “\(project.title)”.")
                 }
             }
             .padding(.horizontal)

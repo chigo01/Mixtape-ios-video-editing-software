@@ -23,6 +23,7 @@
 		B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5180642B1AC3288A6921DE /* MixtapeApp.swift */; };
 		BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */; };
 		BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */; };
+		BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */; };
 		BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */; };
 		BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */; };
 		BA0EDF00DEAFB001CAFE0105 /* EditorAudioActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001A /* EditorAudioActionBar.swift */; };
@@ -34,6 +35,7 @@
 		BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */; };
 		BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */; };
 		BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */; };
+		BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */; };
 		BA0EDF00DEAFB001CAFE0110 /* EditorTimelineSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */; };
 		BA0EDF00DEAFB001CAFE0111 /* EditorUndoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */; };
 		BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */; };
@@ -79,6 +81,7 @@
 		B7FA166B3D2D812B47B67F76 /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTool.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClip.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransition.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlay.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioClip.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE001A /* EditorAudioActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioActionBar.swift; sourceTree = "<group>"; };
@@ -90,6 +93,7 @@
 		BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScreen.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipTrimHandleView.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCompositionBuilder.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransitionCompositor.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimelineSnapshot.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorUndoManager.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportService.swift; sourceTree = "<group>"; };
@@ -208,6 +212,7 @@
 			children = (
 				BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */,
 				BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */,
+				BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
 				BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */,
@@ -249,6 +254,7 @@
 			isa = PBXGroup;
 			children = (
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
+				BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */,
 				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
 				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
@@ -476,11 +482,13 @@
 				A0B0F00DDEAFB001CAFE0108 /* MediaPreviewView.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */,
+				BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0105 /* EditorAudioActionBar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011A /* EditorViewModel.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */,
+				BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */,
