@@ -141,6 +141,9 @@ struct ProjectListScreen: View {
                     Text("Choose a new name for “\(project.title)”.")
                 }
             }
+            .background(Color.appColors.backgroundColor)
+            .toolbarBackground(Color.appColors.backgroundColor, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .padding(.horizontal)
             .onAppear { listVM.reload() }
             .onChange(of: path) { _, newPath in

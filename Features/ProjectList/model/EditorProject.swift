@@ -16,6 +16,15 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var trimEnd: TimeInterval
     var speed: Float
     var volume: Float
+    var cropAspect: EditorCropAspect
+    var reframeMode: EditorReframeMode
+    var rotationQuarterTurns: Int
+    var straightenDegrees: Double
+    var isFlippedHorizontally: Bool
+    var isFlippedVertically: Bool
+    var reframeScale: CGFloat
+    var reframeXOffset: CGFloat
+    var reframeYOffset: CGFloat
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
 
@@ -27,6 +36,15 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimEnd = clip.trimEnd
         speed = clip.speed
         volume = clip.volume
+        cropAspect = clip.cropAspect
+        reframeMode = clip.reframeMode
+        rotationQuarterTurns = clip.rotationQuarterTurns
+        straightenDegrees = clip.straightenDegrees
+        isFlippedHorizontally = clip.isFlippedHorizontally
+        isFlippedVertically = clip.isFlippedVertically
+        reframeScale = clip.reframeScale
+        reframeXOffset = clip.reframeXOffset
+        reframeYOffset = clip.reframeYOffset
         transitionKind = clip.transitionKind
         transitionDuration = clip.transitionDuration
     }
@@ -40,6 +58,15 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
         speed = try c.decode(Float.self, forKey: .speed)
         volume = try c.decode(Float.self, forKey: .volume)
+        cropAspect = try c.decodeIfPresent(EditorCropAspect.self, forKey: .cropAspect) ?? .original
+        reframeMode = try c.decodeIfPresent(EditorReframeMode.self, forKey: .reframeMode) ?? .fit
+        rotationQuarterTurns = try c.decodeIfPresent(Int.self, forKey: .rotationQuarterTurns) ?? 0
+        straightenDegrees = try c.decodeIfPresent(Double.self, forKey: .straightenDegrees) ?? 0
+        isFlippedHorizontally = try c.decodeIfPresent(Bool.self, forKey: .isFlippedHorizontally) ?? false
+        isFlippedVertically = try c.decodeIfPresent(Bool.self, forKey: .isFlippedVertically) ?? false
+        reframeScale = try c.decodeIfPresent(CGFloat.self, forKey: .reframeScale) ?? 1
+        reframeXOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeXOffset) ?? 0
+        reframeYOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeYOffset) ?? 0
         transitionDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .transitionDuration) ?? 0
         if let rawKind = try c.decodeIfPresent(String.self, forKey: .transitionKind) {
             // `zoom` was shipped briefly before the catalog split it into Zoom In/Out.
@@ -179,6 +206,55 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     }
 }
 
+struct SavedOverlayClip: Codable, Identifiable, Hashable {
+    let id: UUID
+    let assetLocalIdentifier: String
+    let originalDuration: TimeInterval
+    var trimStart: TimeInterval
+    var trimEnd: TimeInterval
+    var timelineStart: TimeInterval
+    var laneIndex: Int
+    var speed: Float
+    var scale: CGFloat
+    var xOffset: CGFloat
+    var yOffset: CGFloat
+    var opacity: Double
+    var volume: Float
+
+    init(from clip: EditorOverlayClip) {
+        id = clip.id
+        assetLocalIdentifier = clip.asset.localIdentifier
+        originalDuration = clip.originalDuration
+        trimStart = clip.trimStart
+        trimEnd = clip.trimEnd
+        timelineStart = clip.timelineStart
+        laneIndex = clip.laneIndex
+        speed = clip.speed
+        scale = clip.scale
+        xOffset = clip.xOffset
+        yOffset = clip.yOffset
+        opacity = clip.opacity
+        volume = clip.volume
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        assetLocalIdentifier = try c.decode(String.self, forKey: .assetLocalIdentifier)
+        originalDuration = try c.decode(TimeInterval.self, forKey: .originalDuration)
+        trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
+        trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
+        timelineStart = try c.decode(TimeInterval.self, forKey: .timelineStart)
+        laneIndex = try c.decodeIfPresent(Int.self, forKey: .laneIndex) ?? -1
+        speed = try c.decodeIfPresent(Float.self, forKey: .speed) ?? 1
+        scale = try c.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 0.55
+        xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0
+        yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+    }
+}
+
 /// Legacy single-track format — migrated to `audioClips` on load.
 struct SavedAudioTrack: Codable, Identifiable, Hashable {
     let id: UUID
@@ -213,6 +289,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var clips: [SavedEditorClip]
     var textOverlays: [SavedTextOverlay]
     var audioClips: [SavedAudioClip]
+    var overlayClips: [SavedOverlayClip]
     var openingTransitionKind: EditorTransitionKind
     var openingTransitionDuration: TimeInterval
     var closingTransitionKind: EditorTransitionKind
@@ -220,10 +297,12 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
     var selectedAudioClipID: UUID?
+    var selectedOverlayClipID: UUID?
 
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
-        case audioClips, audioTrack, timelinePosition, selectedClipID, selectedAudioClipID
+        case audioClips, audioTrack, overlayClips, timelinePosition
+        case selectedClipID, selectedAudioClipID, selectedOverlayClipID
         case openingTransitionKind, openingTransitionDuration
         case closingTransitionKind, closingTransitionDuration
     }
@@ -236,13 +315,15 @@ struct EditorProject: Codable, Identifiable, Hashable {
         clips: [SavedEditorClip],
         textOverlays: [SavedTextOverlay],
         audioClips: [SavedAudioClip],
+        overlayClips: [SavedOverlayClip] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
         closingTransitionDuration: TimeInterval = 0,
         timelinePosition: TimeInterval,
         selectedClipID: UUID?,
-        selectedAudioClipID: UUID? = nil
+        selectedAudioClipID: UUID? = nil,
+        selectedOverlayClipID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -251,6 +332,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.clips = clips
         self.textOverlays = textOverlays
         self.audioClips = audioClips
+        self.overlayClips = overlayClips
         self.openingTransitionKind = openingTransitionKind
         self.openingTransitionDuration = openingTransitionKind == .none
             ? 0
@@ -262,6 +344,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.timelinePosition = timelinePosition
         self.selectedClipID = selectedClipID
         self.selectedAudioClipID = selectedAudioClipID
+        self.selectedOverlayClipID = selectedOverlayClipID
     }
 
     init(from decoder: Decoder) throws {
@@ -307,6 +390,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
         timelinePosition = try c.decodeIfPresent(TimeInterval.self, forKey: .timelinePosition) ?? 0
         selectedClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedClipID)
         selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
+        selectedOverlayClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedOverlayClipID)
+        overlayClips = try c.decodeIfPresent([SavedOverlayClip].self, forKey: .overlayClips) ?? []
 
         if let saved = try c.decodeIfPresent([SavedAudioClip].self, forKey: .audioClips) {
             audioClips = saved
@@ -327,6 +412,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(clips, forKey: .clips)
         try c.encode(textOverlays, forKey: .textOverlays)
         try c.encode(audioClips, forKey: .audioClips)
+        try c.encode(overlayClips, forKey: .overlayClips)
         try c.encode(openingTransitionKind, forKey: .openingTransitionKind)
         try c.encode(openingTransitionDuration, forKey: .openingTransitionDuration)
         try c.encode(closingTransitionKind, forKey: .closingTransitionKind)
@@ -334,6 +420,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(timelinePosition, forKey: .timelinePosition)
         try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
         try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
+        try c.encodeIfPresent(selectedOverlayClipID, forKey: .selectedOverlayClipID)
     }
 
     var formattedDuration: String {
@@ -356,13 +443,15 @@ struct EditorProject: Codable, Identifiable, Hashable {
             clips: savedClips,
             textOverlays: [],
             audioClips: [],
+            overlayClips: [],
             openingTransitionKind: .none,
             openingTransitionDuration: 0,
             closingTransitionKind: .none,
             closingTransitionDuration: 0,
             timelinePosition: 0,
             selectedClipID: savedClips.first?.id,
-            selectedAudioClipID: nil
+            selectedAudioClipID: nil,
+            selectedOverlayClipID: nil
         )
     }
 
@@ -396,8 +485,48 @@ enum EditorProjectResolver {
                 trimEnd: item.trimEnd,
                 speed: item.speed,
                 volume: item.volume,
+                cropAspect: item.cropAspect,
+                reframeMode: item.reframeMode,
+                rotationQuarterTurns: item.rotationQuarterTurns,
+                straightenDegrees: item.straightenDegrees,
+                isFlippedHorizontally: item.isFlippedHorizontally,
+                isFlippedVertically: item.isFlippedVertically,
+                reframeScale: item.reframeScale,
+                reframeXOffset: item.reframeXOffset,
+                reframeYOffset: item.reframeYOffset,
                 transitionKind: item.transitionKind,
                 transitionDuration: item.transitionDuration
+            )
+        }
+    }
+
+    static func overlayClips(from saved: [SavedOverlayClip]) -> [EditorOverlayClip] {
+        guard !saved.isEmpty else { return [] }
+        let ids = saved.map(\.assetLocalIdentifier)
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        var lookup: [String: PHAsset] = [:]
+        fetch.enumerateObjects { asset, _, _ in
+            lookup[asset.localIdentifier] = asset
+        }
+
+        return saved.compactMap { item in
+            guard let asset = lookup[item.assetLocalIdentifier], asset.mediaType == .video else {
+                return nil
+            }
+            return EditorOverlayClip(
+                id: item.id,
+                asset: asset,
+                originalDuration: item.originalDuration,
+                trimStart: item.trimStart,
+                trimEnd: item.trimEnd,
+                timelineStart: item.timelineStart,
+                laneIndex: item.laneIndex,
+                speed: item.speed,
+                scale: item.scale,
+                xOffset: item.xOffset,
+                yOffset: item.yOffset,
+                opacity: item.opacity,
+                volume: item.volume
             )
         }
     }

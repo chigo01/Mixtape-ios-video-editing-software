@@ -10,13 +10,21 @@ import UIKit
 import Photos
 import AVFoundation
 
+private struct OverlayLanePlacement: Identifiable {
+    let clip: EditorOverlayClip
+    let lane: Int
+    var id: UUID { clip.id }
+}
+
 struct EditorTimeline: View {
     let vm: EditorViewModel
+    @Binding var isOverlayTracksExpanded: Bool
     var onInsertAfterClip: (Int) -> Void = { _ in }
     var onSelectOpeningTransition: () -> Void = {}
     var onSelectClosingTransition: () -> Void = {}
     var onSelectTransition: (Int) -> Void = { _ in }
     var onAddAudioClip: (Int?) -> Void = { _ in }
+    var onAddOverlayClip: () -> Void = {}
 
     private let pixelsPerSecond: CGFloat = 18
     private let rulerLabelHeight: CGFloat = 14
@@ -24,6 +32,8 @@ struct EditorTimeline: View {
     private let scrubRailHeight: CGFloat = 24
     private let clipsLaneHeight: CGFloat = 52
     private let audioLaneHeight: CGFloat = 28
+    private let overlayLaneHeight: CGFloat = 40
+    private let overlayLaneSpacing: CGFloat = 6
     /// Require this much drag on filmstrips before scrubbing claims the gesture (keeps horizontal scroll natural).
     private let clipScrubMinimumDistance: CGFloat = 18
     private let audioScrubMinimumDistance: CGFloat = 18
@@ -35,15 +45,55 @@ struct EditorTimeline: View {
     @State private var isAudioMoving = false
     @State private var isTextTrimming = false
     @State private var isTextMoving = false
+    @State private var isOverlayTrimming = false
+    @State private var isOverlayMoving = false
     @State private var playheadDragBaselineContentX: CGFloat?
     @State private var reorderState = ClipReorderState()
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 36 }
+    private var overlayLanePlacements: [OverlayLanePlacement] {
+        let logicalLanes = Array(Set(vm.overlayClips.map(\.laneIndex))).sorted()
+        let displayLaneByLogicalLane = Dictionary(
+            uniqueKeysWithValues: logicalLanes.enumerated().map { ($0.element, $0.offset) }
+        )
+        return vm.overlayClips
+            .sorted {
+                if $0.laneIndex == $1.laneIndex {
+                    return $0.timelineStart < $1.timelineStart
+                }
+                return $0.laneIndex < $1.laneIndex
+            }
+            .map { clip in
+                OverlayLanePlacement(
+                    clip: clip,
+                    lane: displayLaneByLogicalLane[clip.laneIndex] ?? 0
+                )
+        }
+    }
+
+    private var overlayLaneCount: Int {
+        (overlayLanePlacements.map(\.lane).max() ?? -1) + 1
+    }
+
+    private var overlayLaneResolvedHeight: CGFloat {
+        guard overlayLaneCount > 0 else { return 0 }
+        return CGFloat(overlayLaneCount) * overlayLaneHeight
+            + CGFloat(max(0, overlayLaneCount - 1)) * overlayLaneSpacing
+    }
+    private var expandedOverlayViewportHeight: CGFloat {
+        min(overlayLaneResolvedHeight, overlayLaneHeight * 2 + overlayLaneSpacing)
+    }
+    private var overlayDisplayHeight: CGFloat {
+        guard !vm.overlayClips.isEmpty else { return 0 }
+        return isOverlayTracksExpanded ? expandedOverlayViewportHeight : overlayLaneHeight
+    }
     private var audioLaneResolvedHeight: CGFloat { audioLaneHeight }
 
     private var playheadStackHeight: CGFloat {
-        4 + rulerLabelHeight + scrubRailHeight + 8 + textOverlayLaneHeight + 8 + clipsLaneHeight
-            + 8 + audioLaneResolvedHeight
+        4 + rulerLabelHeight + scrubRailHeight
+            + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
+            + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
+            + (isOverlayTracksExpanded ? 0 : 8 + audioLaneResolvedHeight)
     }
 
     private var layout: TimelineLayout {
@@ -69,7 +119,7 @@ struct EditorTimeline: View {
                         rulerAndScrubStrip(totalWidth: totalWidth, layout: layout)
                             .padding(.top, 4)
 
-                        if !vm.textOverlays.isEmpty {
+                        if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
                             textOverlayRow(totalWidth: totalWidth, layout: layout)
                                 .frame(height: textOverlayLaneHeight, alignment: .leading)
                         }
@@ -77,8 +127,15 @@ struct EditorTimeline: View {
                         clipsRow(layout: layout)
                             .frame(height: clipsLaneHeight, alignment: .leading)
 
-                        audioRow(totalWidth: totalWidth, layout: layout)
-                            .frame(height: audioLaneResolvedHeight, alignment: .leading)
+                        if !vm.overlayClips.isEmpty {
+                            overlayRow(totalWidth: totalWidth, layout: layout)
+                                .frame(height: overlayDisplayHeight, alignment: .leading)
+                        }
+
+                        if !isOverlayTracksExpanded {
+                            audioRow(totalWidth: totalWidth, layout: layout)
+                                .frame(height: audioLaneResolvedHeight, alignment: .leading)
+                        }
 
                         // Fills space below tracks (and future overlay lanes) so horizontal pan works
                         // on the whole timeline stack, not only on the thin overlay/clip rows.
@@ -102,9 +159,156 @@ struct EditorTimeline: View {
                 .frame(width: totalWidth + 32, height: paddedMinHeight, alignment: .topLeading)
                 .clipped()
             }
-            .scrollDisabled(isScrubbing || isAudioTrimming || isAudioMoving || isTextTrimming || isTextMoving || reorderState.isDragging)
+            .scrollDisabled(
+                isScrubbing || isAudioTrimming || isAudioMoving || isTextTrimming
+                    || isTextMoving || isOverlayTrimming || isOverlayMoving || reorderState.isDragging
+            )
             .frame(width: geo.size.width, height: geo.size.height)
         }
+    }
+
+    // MARK: Video overlays
+
+    private func overlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        Group {
+            if isOverlayTracksExpanded {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        expandedOverlayRows(totalWidth: totalWidth, layout: layout)
+                    }
+                    .onAppear {
+                        revealSelectedOverlayRow(using: proxy, animated: false)
+                    }
+                    .onChange(of: overlayLaneCount) { _, _ in
+                        revealSelectedOverlayRow(using: proxy, animated: true)
+                    }
+                    .onChange(of: vm.selectedOverlayClipID) { _, _ in
+                        revealSelectedOverlayRow(using: proxy, animated: true)
+                    }
+                }
+                .frame(
+                    width: totalWidth,
+                    height: expandedOverlayViewportHeight,
+                    alignment: .topLeading
+                )
+                .contentShape(Rectangle())
+                .clipped()
+            } else {
+                collapsedOverlaySummary(totalWidth: totalWidth, layout: layout)
+            }
+        }
+        .frame(width: totalWidth, height: overlayDisplayHeight, alignment: .topLeading)
+        .clipped()
+    }
+
+    private func revealSelectedOverlayRow(using proxy: ScrollViewProxy, animated: Bool) {
+        guard let selectedID = vm.selectedOverlayClipID,
+              let lane = overlayLanePlacements.first(where: { $0.clip.id == selectedID })?.lane
+        else { return }
+
+        if animated {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(lane, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(lane, anchor: .center)
+        }
+    }
+
+    private func expandedOverlayRows(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        LazyVStack(alignment: .leading, spacing: overlayLaneSpacing) {
+            ForEach(0..<overlayLaneCount, id: \.self) { lane in
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+
+                    ForEach(overlayLanePlacements.filter { $0.lane == lane }) { placement in
+                        OverlayClipThumb(
+                            clip: placement.clip,
+                            laneNumber: placement.lane + 1,
+                            layout: layout,
+                            laneHeight: overlayLaneHeight,
+                            isSelected: vm.selectedOverlayClipID == placement.clip.id,
+                            isTrimming: $isOverlayTrimming,
+                            isMoving: $isOverlayMoving,
+                            onSelect: { vm.selectOverlayClip(placement.clip.id) },
+                            onTrimChanged: { start, end in
+                                vm.setOverlayTrim(
+                                    clipID: placement.clip.id,
+                                    trimStart: start,
+                                    trimEnd: end
+                                )
+                            },
+                            onTrimEnded: { vm.commitOverlayTrim(clipID: placement.clip.id) },
+                            onMove: { start in
+                                vm.setOverlayTimelineStart(
+                                    clipID: placement.clip.id,
+                                    timelineStart: start
+                                )
+                            },
+                            onMoveEnded: { vm.commitOverlayMove() }
+                        )
+                        .zIndex(vm.selectedOverlayClipID == placement.clip.id ? 10 : 1)
+                    }
+
+                    if lane == 0 {
+                        Button(action: onAddOverlayClip) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.black)
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(Color.appColors.primaryColor))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: max(0, totalWidth - 26), y: 9)
+                        .zIndex(20)
+                        .accessibilityLabel("Add video overlay")
+                    }
+                }
+                .frame(width: totalWidth, height: overlayLaneHeight)
+                .id(lane)
+            }
+        }
+        .frame(width: totalWidth, height: overlayLaneResolvedHeight, alignment: .leading)
+    }
+
+    private func collapsedOverlaySummary(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        let start = vm.overlayClips.map(\.timelineStart).min() ?? 0
+        let end = vm.overlayClips.map(\.timelineEnd).max() ?? start
+        let startX = layout.contentX(forTime: start)
+        let endX = layout.contentX(forTime: end)
+        let width = max(64, endX - startX)
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isOverlayTracksExpanded = true
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "rectangle.3.group")
+                    .font(.system(size: 11, weight: .bold))
+                Text("\(vm.overlayClips.count) Overlay\(vm.overlayClips.count == 1 ? "" : "s")")
+                    .font(.system(size: 10, weight: .semibold))
+                Spacer(minLength: 2)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 9)
+            .frame(width: width, height: overlayLaneHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.appColors.primaryColor.opacity(0.26))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.appColors.primaryColor.opacity(0.75), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .offset(x: startX)
+        .frame(width: totalWidth, height: overlayLaneHeight, alignment: .leading)
+        .accessibilityLabel("Show \(vm.overlayClips.count) overlay tracks")
     }
 
     // MARK: Ruler + scrub
@@ -385,6 +589,124 @@ struct EditorTimeline: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add audio")
+    }
+}
+
+// MARK: - Video overlay thumb
+
+private struct OverlayClipThumb: View {
+    let clip: EditorOverlayClip
+    let laneNumber: Int
+    let layout: TimelineLayout
+    let laneHeight: CGFloat
+    let isSelected: Bool
+    @Binding var isTrimming: Bool
+    @Binding var isMoving: Bool
+    let onSelect: () -> Void
+    let onTrimChanged: (TimeInterval, TimeInterval) -> Void
+    let onTrimEnded: () -> Void
+    let onMove: (TimeInterval) -> Void
+    let onMoveEnded: () -> Void
+
+    @State private var trimBaseline: (timelineStart: TimeInterval, trimStart: TimeInterval)?
+    @State private var moveBaselineTimelineStart: TimeInterval?
+
+    private var displayTimelineStart: TimeInterval {
+        if let baseline = trimBaseline {
+            return max(
+                0,
+                baseline.timelineStart
+                    + (clip.trimStart - baseline.trimStart) / TimeInterval(max(clip.speed, 0.001))
+            )
+        }
+        return clip.timelineStart
+    }
+
+    private var startX: CGFloat { layout.contentX(forTime: displayTimelineStart) }
+    private var endX: CGFloat { layout.contentX(forTime: displayTimelineStart + clip.duration) }
+    private var width: CGFloat { max(44, endX - startX) }
+
+    var body: some View {
+        let content = ZStack(alignment: .bottomLeading) {
+            ClipFilmstripView(clip: clip.thumbnailClip, width: width, height: laneHeight)
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.on.rectangle")
+                Text("Overlay \(laneNumber)")
+            }
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.black.opacity(0.6)))
+            .padding(4)
+        }
+        .frame(width: width, height: laneHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(
+                    isSelected ? Color.appColors.primaryColor : Color.white.opacity(0.32),
+                    lineWidth: isSelected ? 2 : 1
+                )
+        )
+        .overlay {
+            if isSelected {
+                ClipTrimHandleRepresentable(
+                    clipID: clip.id,
+                    trimStart: clip.trimStart,
+                    trimEnd: clip.trimEnd,
+                    originalDuration: clip.originalDuration,
+                    allowsDurationExtension: false,
+                    speed: clip.speed,
+                    pixelsPerSecond: layout.pixelsPerSecond,
+                    onTrimChanged: { _, start, end in
+                        if trimBaseline == nil {
+                            trimBaseline = (clip.timelineStart, clip.trimStart)
+                        }
+                        isTrimming = true
+                        onTrimChanged(start, end)
+                    },
+                    onTrimEnded: {
+                        isTrimming = false
+                        trimBaseline = nil
+                        onTrimEnded()
+                    }
+                )
+                .allowsHitTesting(true)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isTrimming, !isMoving else { return }
+            onSelect()
+        }
+        .offset(x: startX)
+
+        if isSelected {
+            content.simultaneousGesture(moveGesture)
+        } else {
+            content
+        }
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged { value in
+                guard !isTrimming else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                if moveBaselineTimelineStart == nil {
+                    moveBaselineTimelineStart = clip.timelineStart
+                }
+                isMoving = true
+                let baseX = layout.contentX(forTime: moveBaselineTimelineStart ?? clip.timelineStart)
+                onMove(layout.time(atContentX: max(0, baseX + value.translation.width)))
+            }
+            .onEnded { _ in
+                guard moveBaselineTimelineStart != nil else { return }
+                isMoving = false
+                moveBaselineTimelineStart = nil
+                onMoveEnded()
+            }
     }
 }
 

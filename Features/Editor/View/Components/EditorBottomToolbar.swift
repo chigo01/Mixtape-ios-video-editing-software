@@ -9,16 +9,22 @@ import SwiftUI
 
 struct EditorBottomToolbar: View {
     let vm: EditorViewModel
+    var isOverlayMode = false
+    var onAddOverlay: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(EditorTool.mainTools) { tool in
                 ToolButton(
                     tool: tool,
-                    isSelected: vm.selectedTool == tool
+                    isSelected: vm.selectedTool == tool || (tool == .overlay && isOverlayMode)
                 ) {
                     withAnimation(.easeInOut(duration: 0.15)) {
-                        vm.performToolAction(tool)
+                        if tool == .overlay {
+                            onAddOverlay()
+                        } else {
+                            vm.performToolAction(tool)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity)

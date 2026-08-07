@@ -28,7 +28,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -67,6 +67,13 @@ enum EditorCompositionBuilder {
         let fadeOutDuration: TimeInterval
     }
 
+    private struct OverlayVideoSegment {
+        let track: AVMutableCompositionTrack
+        let timeRange: CMTimeRange
+        let transform: CGAffineTransform
+        let opacity: Float
+    }
+
     private struct BackgroundVideoTracks {
         let black: AVMutableCompositionTrack?
         let white: AVMutableCompositionTrack?
@@ -79,6 +86,7 @@ enum EditorCompositionBuilder {
         from clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
         audioClips: [EditorAudioClip] = [],
+        overlayClips: [EditorOverlayClip] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
@@ -140,7 +148,11 @@ enum EditorCompositionBuilder {
                         on: compositionVideoTrack,
                         at: cursor
                     )
-                    let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    let transform = await reframeTransform(
+                        for: sourceVideo,
+                        clip: clip,
+                        renderSize: renderSize
+                    )
                     videoSegments.append(
                         videoSegment(
                             timeRange: segmentRange,
@@ -176,7 +188,11 @@ enum EditorCompositionBuilder {
                 if let sourceVideo = try? await photoAsset.loadTracks(withMediaType: .video).first {
                     let fullRange = CMTimeRange(start: .zero, duration: segmentDuration)
                     try? compositionVideoTrack.insertTimeRange(fullRange, of: sourceVideo, at: cursor)
-                    let transform = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    let transform = await reframeTransform(
+                        for: sourceVideo,
+                        clip: clip,
+                        renderSize: renderSize
+                    )
                     videoSegments.append(
                         videoSegment(
                             timeRange: segmentRange,
@@ -204,6 +220,78 @@ enum EditorCompositionBuilder {
         }
         for overlay in textOverlays {
             timelineExtent = max(timelineExtent, overlay.endTime)
+        }
+        for overlay in overlayClips {
+            timelineExtent = max(timelineExtent, overlay.timelineEnd)
+        }
+
+        var overlayVideoSegments: [OverlayVideoSegment] = []
+        var overlayAudioTracks: [(track: AVMutableCompositionTrack, clip: EditorOverlayClip)] = []
+        for overlay in overlayClips {
+            guard overlay.duration > 0,
+                  let asset = await loadVideoAsset(for: overlay.asset) else { continue }
+
+            let timelineStart = CMTime(seconds: overlay.timelineStart, preferredTimescale: timescale)
+            let sourceStart = CMTime(seconds: overlay.trimStart, preferredTimescale: timescale)
+            let sourceDuration = CMTime(
+                seconds: overlay.trimEnd - overlay.trimStart,
+                preferredTimescale: timescale
+            )
+            let timelineDuration = CMTime(seconds: overlay.duration, preferredTimescale: timescale)
+            let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
+            let timelineRange = CMTimeRange(start: timelineStart, duration: timelineDuration)
+
+            if let sourceVideo = try? await asset.loadTracks(withMediaType: .video).first,
+               let overlayTrack = composition.addMutableTrack(
+                    withMediaType: .video,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+               ) {
+                do {
+                    try overlayTrack.insertTimeRange(sourceRange, of: sourceVideo, at: timelineStart)
+                    applySpeed(
+                        overlay.speed,
+                        sourceDuration: sourceDuration,
+                        timelineDuration: timelineDuration,
+                        on: overlayTrack,
+                        at: timelineStart
+                    )
+                    let base = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    overlayVideoSegments.append(
+                        OverlayVideoSegment(
+                            track: overlayTrack,
+                            timeRange: timelineRange,
+                            transform: overlayTransform(
+                                base: base,
+                                clip: overlay,
+                                renderSize: renderSize
+                            ),
+                            opacity: Float(overlay.opacity)
+                        )
+                    )
+                } catch {
+                    composition.removeTrack(overlayTrack)
+                }
+            }
+
+            if let sourceAudio = try? await asset.loadTracks(withMediaType: .audio).first,
+               let overlayAudioTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+               ) {
+                do {
+                    try overlayAudioTrack.insertTimeRange(sourceRange, of: sourceAudio, at: timelineStart)
+                    applySpeed(
+                        overlay.speed,
+                        sourceDuration: sourceDuration,
+                        timelineDuration: timelineDuration,
+                        on: overlayAudioTrack,
+                        at: timelineStart
+                    )
+                    overlayAudioTracks.append((overlayAudioTrack, overlay))
+                } catch {
+                    composition.removeTrack(overlayAudioTrack)
+                }
+            }
         }
 
         var segmentsSnapshot = videoSegments
@@ -264,6 +352,18 @@ enum EditorCompositionBuilder {
 
         // Background music clips (inserted before extending video track / instructions).
         var mixParams: [AVMutableAudioMixInputParameters] = []
+
+        for overlayAudio in overlayAudioTracks {
+            let params = AVMutableAudioMixInputParameters(track: overlayAudio.track)
+            params.setVolume(
+                overlayAudio.clip.volume,
+                at: CMTime(
+                    seconds: overlayAudio.clip.timelineStart,
+                    preferredTimescale: timescale
+                )
+            )
+            mixParams.append(params)
+        }
 
         // Per-clip volume
         if let clipAudioTrack = compositionAudioTrack, !audioVolumeSegments.isEmpty {
@@ -366,6 +466,7 @@ enum EditorCompositionBuilder {
                 compositionTrack: compositionVideoTrack,
                 backgroundTracks: backgroundTracks,
                 segments: segmentsSnapshot,
+                overlaySegments: overlayVideoSegments,
                 frameRate: frameRate,
                 renderSize: renderSize,
                 animationTool: animationTool
@@ -393,6 +494,7 @@ enum EditorCompositionBuilder {
     static func makePlayerItem(
         from clips: [EditorClip],
         audioClips: [EditorAudioClip] = [],
+        overlayClips: [EditorOverlayClip] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
@@ -401,6 +503,7 @@ enum EditorCompositionBuilder {
         guard let built = await build(
             from: clips,
             audioClips: audioClips,
+            overlayClips: overlayClips,
             openingTransitionKind: openingTransitionKind,
             openingTransitionDuration: openingTransitionDuration,
             closingTransitionKind: closingTransitionKind,
@@ -498,6 +601,7 @@ enum EditorCompositionBuilder {
         compositionTrack: AVMutableCompositionTrack,
         backgroundTracks: BackgroundVideoTracks,
         segments: [VideoSegment],
+        overlaySegments: [OverlayVideoSegment],
         frameRate: Int32,
         renderSize: CGSize,
         animationTool: AVVideoCompositionCoreAnimationTool? = nil
@@ -525,6 +629,14 @@ enum EditorCompositionBuilder {
                     timeRange: segment.timeRange,
                     foregroundTrackID: compositionTrack.trackID,
                     backgroundTrackID: backgroundTrack?.trackID,
+                    overlayLayers: overlaySegments.map {
+                        EditorOverlayRenderLayer(
+                            trackID: $0.track.trackID,
+                            timeRange: $0.timeRange,
+                            transform: $0.transform,
+                            opacity: $0.opacity
+                        )
+                    },
                     baseTransform: segment.transform,
                     incomingKind: segment.transitionIn,
                     outgoingKind: segment.transitionOut,
@@ -595,7 +707,24 @@ enum EditorCompositionBuilder {
                 )
             }
 
-            var layerInstructions: [AVVideoCompositionLayerInstruction] = [layer]
+            var layerInstructions: [AVVideoCompositionLayerInstruction] = overlaySegments
+                .reversed()
+                .filter {
+                    CMTimeRangeGetIntersection(
+                        $0.timeRange,
+                        otherRange: segment.timeRange
+                    ).duration > .zero
+                }
+                .map { overlay in
+                    let overlayLayer = AVMutableVideoCompositionLayerInstruction(
+                        assetTrack: overlay.track
+                    )
+                    let activeStart = max(overlay.timeRange.start, segment.timeRange.start)
+                    overlayLayer.setTransform(overlay.transform, at: activeStart)
+                    overlayLayer.setOpacity(overlay.opacity, at: activeStart)
+                    return overlayLayer
+                }
+            layerInstructions.append(layer)
             let backgroundTrack = usesWhiteBackground
                 ? (backgroundTracks.white ?? backgroundTracks.black)
                 : backgroundTracks.black
@@ -611,6 +740,23 @@ enum EditorCompositionBuilder {
         }
 
         return composition
+    }
+
+    private static func overlayTransform(
+        base: CGAffineTransform,
+        clip: EditorOverlayClip,
+        renderSize: CGSize
+    ) -> CGAffineTransform {
+        let scale = min(max(clip.scale, 0.15), 1.5)
+        let destinationTransform = CGAffineTransform(
+            a: scale,
+            b: 0,
+            c: 0,
+            d: scale,
+            tx: (1 - scale) * renderSize.width / 2 + clip.xOffset * renderSize.width,
+            ty: (1 - scale) * renderSize.height / 2 + clip.yOffset * renderSize.height
+        )
+        return base.concatenating(destinationTransform)
     }
 
     private static func transitionMotionCurve(
@@ -1225,6 +1371,79 @@ enum EditorCompositionBuilder {
         var transform = preferred.concatenating(CGAffineTransform(scaleX: scale, y: scale))
         transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
         return transform
+    }
+
+    /// Builds the persistent per-clip crop/reframe transform used by both preview and export.
+    private static func reframeTransform(
+        for track: AVAssetTrack,
+        clip: EditorClip,
+        renderSize: CGSize
+    ) async -> CGAffineTransform {
+        let naturalSize = (try? await track.load(.naturalSize)) ?? .zero
+        let preferred = (try? await track.load(.preferredTransform)) ?? .identity
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        let sourceWidth = abs(orientedRect.width)
+        let sourceHeight = abs(orientedRect.height)
+        guard sourceWidth > 0, sourceHeight > 0 else { return preferred }
+
+        var framingWidth = sourceWidth
+        var framingHeight = sourceHeight
+        if let ratio = clip.cropAspect.ratio {
+            let sourceRatio = sourceWidth / sourceHeight
+            if sourceRatio > ratio {
+                framingWidth = sourceHeight * ratio
+            } else {
+                framingHeight = sourceWidth / ratio
+            }
+        }
+
+        let horizontalCrop = (sourceWidth - framingWidth) / 2
+        let verticalCrop = (sourceHeight - framingHeight) / 2
+        let widthScale = renderSize.width / framingWidth
+        let heightScale = renderSize.height / framingHeight
+        let framingScale = clip.reframeMode == .fill
+            ? max(widthScale, heightScale)
+            : min(widthScale, heightScale)
+
+        let scaledWidth = framingWidth * framingScale
+        let scaledHeight = framingHeight * framingScale
+        let tx = (renderSize.width - scaledWidth) / 2
+            - (orientedRect.origin.x + horizontalCrop) * framingScale
+        let ty = (renderSize.height - scaledHeight) / 2
+            - (orientedRect.origin.y + verticalCrop) * framingScale
+
+        var base = preferred.concatenating(
+            CGAffineTransform(scaleX: framingScale, y: framingScale)
+        )
+        base = base.concatenating(CGAffineTransform(translationX: tx, y: ty))
+
+        let radians = (
+            Double(clip.rotationQuarterTurns) * 90 + clip.straightenDegrees
+        ) * .pi / 180
+        let horizontalFlip: CGFloat = clip.isFlippedHorizontally ? -1 : 1
+        let verticalFlip: CGFloat = clip.isFlippedVertically ? -1 : 1
+        let scaleX = clip.reframeScale * horizontalFlip
+        let scaleY = clip.reframeScale * verticalFlip
+        let cosine = CGFloat(cos(radians))
+        let sine = CGFloat(sin(radians))
+        let a = cosine * scaleX
+        let b = sine * scaleX
+        let c = -sine * scaleY
+        let d = cosine * scaleY
+        let center = CGPoint(x: renderSize.width / 2, y: renderSize.height / 2)
+        let destinationCenter = CGPoint(
+            x: center.x + clip.reframeXOffset * renderSize.width,
+            y: center.y + clip.reframeYOffset * renderSize.height
+        )
+        let adjustment = CGAffineTransform(
+            a: a,
+            b: b,
+            c: c,
+            d: d,
+            tx: destinationCenter.x - a * center.x - c * center.y,
+            ty: destinationCenter.y - b * center.x - d * center.y
+        )
+        return base.concatenating(adjustment)
     }
 
     // MARK: - Asset loading

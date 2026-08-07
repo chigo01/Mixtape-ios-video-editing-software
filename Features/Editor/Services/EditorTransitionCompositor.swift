@@ -49,6 +49,13 @@ struct EditorTransitionMotionCurve {
     }
 }
 
+struct EditorOverlayRenderLayer {
+    let trackID: CMPersistentTrackID
+    let timeRange: CMTimeRange
+    let transform: CGAffineTransform
+    let opacity: Float
+}
+
 /// Instruction consumed by `EditorTransitionCompositor`.
 /// It intentionally contains values only—no mutable composition or UI state.
 final class EditorTransitionRenderInstruction:
@@ -64,6 +71,7 @@ final class EditorTransitionRenderInstruction:
 
     let foregroundTrackID: CMPersistentTrackID
     let backgroundTrackID: CMPersistentTrackID?
+    let overlayLayers: [EditorOverlayRenderLayer]
     let baseTransform: CGAffineTransform
     let incomingKind: EditorTransitionKind
     let outgoingKind: EditorTransitionKind
@@ -77,6 +85,7 @@ final class EditorTransitionRenderInstruction:
         timeRange: CMTimeRange,
         foregroundTrackID: CMPersistentTrackID,
         backgroundTrackID: CMPersistentTrackID?,
+        overlayLayers: [EditorOverlayRenderLayer],
         baseTransform: CGAffineTransform,
         incomingKind: EditorTransitionKind,
         outgoingKind: EditorTransitionKind,
@@ -90,6 +99,7 @@ final class EditorTransitionRenderInstruction:
         self.timeRange = timeRange
         self.foregroundTrackID = foregroundTrackID
         self.backgroundTrackID = backgroundTrackID
+        self.overlayLayers = overlayLayers
         self.baseTransform = baseTransform
         self.incomingKind = incomingKind
         self.outgoingKind = outgoingKind
@@ -105,6 +115,7 @@ final class EditorTransitionRenderInstruction:
         if let backgroundTrackID {
             trackIDs.append(NSNumber(value: backgroundTrackID))
         }
+        trackIDs.append(contentsOf: overlayLayers.map { NSNumber(value: $0.trackID) })
         self.requiredSourceTrackIDs = trackIDs
         super.init()
     }
@@ -273,47 +284,64 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                 extent: extent
             )
 
-            guard let foregroundBuffer = request.sourceFrame(
+            var composed = background
+            if let foregroundBuffer = request.sourceFrame(
                 byTrackID: instruction.foregroundTrackID
-            ) else {
-                ciContext.render(
-                    background,
-                    to: output,
-                    bounds: extent,
-                    colorSpace: colorSpace
+            ) {
+                let sourceSize = CGSize(
+                    width: CVPixelBufferGetWidth(foregroundBuffer),
+                    height: CVPixelBufferGetHeight(foregroundBuffer)
                 )
-                request.finish(withComposedVideoFrame: output)
-                return
+                let imageTransform = coreImageTransform(
+                    from: state.transform,
+                    sourceSize: sourceSize,
+                    renderSize: instruction.renderSize
+                )
+
+                var foreground = CIImage(cvPixelBuffer: foregroundBuffer)
+                    .transformed(by: imageTransform)
+                    .cropped(to: extent)
+
+                foreground = EditorTransitionEffectRenderer.apply(
+                    state: state,
+                    to: foreground,
+                    background: background,
+                    extent: extent
+                )
+                foreground = foreground.applyingOpacity(state.visibility)
+                composed = foreground
+                    .applyingFilter(
+                        "CISourceOverCompositing",
+                        parameters: [kCIInputBackgroundImageKey: background]
+                    )
+                    .cropped(to: extent)
             }
 
-            let sourceSize = CGSize(
-                width: CVPixelBufferGetWidth(foregroundBuffer),
-                height: CVPixelBufferGetHeight(foregroundBuffer)
-            )
-            let imageTransform = coreImageTransform(
-                from: state.transform,
-                sourceSize: sourceSize,
-                renderSize: instruction.renderSize
-            )
-
-            var foreground = CIImage(cvPixelBuffer: foregroundBuffer)
-                .transformed(by: imageTransform)
-                .cropped(to: extent)
-
-            foreground = EditorTransitionEffectRenderer.apply(
-                state: state,
-                to: foreground,
-                background: background,
-                extent: extent
-            )
-            foreground = foreground.applyingOpacity(state.visibility)
-
-            let composed = foreground
-                .applyingFilter(
-                    "CISourceOverCompositing",
-                    parameters: [kCIInputBackgroundImageKey: background]
+            for overlay in instruction.overlayLayers
+            where CMTimeRangeContainsTime(overlay.timeRange, time: request.compositionTime) {
+                guard let overlayBuffer = request.sourceFrame(byTrackID: overlay.trackID) else {
+                    continue
+                }
+                let sourceSize = CGSize(
+                    width: CVPixelBufferGetWidth(overlayBuffer),
+                    height: CVPixelBufferGetHeight(overlayBuffer)
                 )
-                .cropped(to: extent)
+                let imageTransform = coreImageTransform(
+                    from: overlay.transform,
+                    sourceSize: sourceSize,
+                    renderSize: instruction.renderSize
+                )
+                let overlayImage = CIImage(cvPixelBuffer: overlayBuffer)
+                    .transformed(by: imageTransform)
+                    .cropped(to: extent)
+                    .applyingOpacity(CGFloat(overlay.opacity))
+                composed = overlayImage
+                    .applyingFilter(
+                        "CISourceOverCompositing",
+                        parameters: [kCIInputBackgroundImageKey: composed]
+                    )
+                    .cropped(to: extent)
+            }
 
             ciContext.render(
                 composed,

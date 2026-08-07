@@ -14,9 +14,11 @@ configurable video export.
 
 - Continuous multi-clip preview backed by one `AVMutableComposition` and `AVPlayer`.
 - Video and photo clips with trim, split, reorder, speed, volume, and deletion.
+- Per-clip crop and reframe with rotation, flips, straighten, aspect presets,
+  fit/fill framing, preview drag/pinch gestures, and safe-area guides.
 - Adjustable photo duration and media insertion at any clip boundary.
-- Global timeline with filmstrip thumbnails, text lane, audio lane, scrubbing,
-  undo/redo, and extended audio/text tails.
+- Global timeline with primary-video, video-overlay, text, and audio lanes, scrubbing,
+  undo/redo, and extended overlay/audio/text tails.
 - Autosaved projects that restore clip order, edits, playhead, selections, and title.
 
 ### Transitions and creative tools
@@ -29,6 +31,10 @@ configurable video export.
 - Orientation-safe portrait, landscape, rotated, video, and generated-photo rendering.
 - Text overlays with fonts, color, size, opacity, alignment, position, timeline trim,
   timeline movement, and direct preview dragging.
+- CapCut-style video overlays with PhotoKit import, picture-in-picture compositing,
+  timeline trim/move/split/delete, speed, volume, opacity, direct preview positioning,
+  pinch resize, automatic stacked lanes for overlapping overlays, persistence,
+  undo/redo, and preview/export parity.
 
 ### Audio
 
@@ -107,8 +113,7 @@ pipeline, feature guide, and engineering notes, see
 
 - The Filter button does not yet provide a complete color/filter workflow.
 - Editing is single-selection and uses one primary video lane.
-- There are no crop/reframe, keyframe, speed-ramp, reverse, stabilization, or
-  chroma-key tools yet.
+- There are no keyframe, speed-ramp, reverse, stabilization, or chroma-key tools yet.
 - Embedded video audio does not yet display a waveform.
 - Projects are local-only and do not yet support packaged media relinking or iCloud sync.
 - Automated render-regression and performance test coverage is still limited.
@@ -118,7 +123,7 @@ pipeline, feature guide, and engineering notes, see
 The next professional milestones are:
 
 1. Color filters, manual color correction, LUT import, and scopes.
-2. Crop, rotate, flip, reframe, canvas ratios, and background controls.
+2. Canvas backgrounds and reusable output presets.
 3. Keyframes for transform, opacity, volume, text, and effects.
 4. Speed ramps, reverse playback, freeze frames, and optical-flow options.
 5. Multi-layer video/overlay tracks, blend modes, masks, and chroma key.

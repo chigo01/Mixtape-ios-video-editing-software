@@ -12,6 +12,7 @@ struct MediaLibraryPickerScreen: View {
     let title: String
     let confirmButtonTitle: String
     var isConfirmLoading: Bool = false
+    var allowedMediaType: PHAssetMediaType?
     var onCancel: () -> Void
     var onConfirm: ([MediaItem]) -> Void
 
@@ -58,7 +59,7 @@ struct MediaLibraryPickerScreen: View {
     }
 
     private func confirmSelection() {
-        let picked = vm.selectedItems
+        let picked = vm.selectedItems.filter(isAllowed)
         guard !picked.isEmpty, !isConfirmLoading else { return }
         onConfirm(picked)
     }
@@ -202,7 +203,7 @@ struct MediaLibraryPickerScreen: View {
     }
 
     private var grid: some View {
-        let visible = vm.filteredItems
+        let visible = vm.filteredItems.filter(isAllowed)
         return ScrollView {
             if visible.isEmpty && !vm.isLoading {
                 emptyState
@@ -232,6 +233,11 @@ struct MediaLibraryPickerScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func isAllowed(_ item: MediaItem) -> Bool {
+        guard let allowedMediaType else { return true }
+        return item.asset.mediaType == allowedMediaType
     }
 
     private var emptyState: some View {

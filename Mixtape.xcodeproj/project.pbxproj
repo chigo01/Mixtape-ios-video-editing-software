@@ -23,11 +23,9 @@
 		B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5180642B1AC3288A6921DE /* MixtapeApp.swift */; };
 		BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */; };
 		BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */; };
-		BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */; };
 		BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */; };
 		BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */; };
 		BA0EDF00DEAFB001CAFE0105 /* EditorAudioActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001A /* EditorAudioActionBar.swift */; };
-		BA0EDF00DEAFB001CAFE011A /* EditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */; };
 		BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */; };
 		BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */; };
 		BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */; };
@@ -35,7 +33,6 @@
 		BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */; };
 		BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */; };
 		BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */; };
-		BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */; };
 		BA0EDF00DEAFB001CAFE0110 /* EditorTimelineSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */; };
 		BA0EDF00DEAFB001CAFE0111 /* EditorUndoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */; };
 		BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */; };
@@ -46,6 +43,9 @@
 		BA0EDF00DEAFB001CAFE0117 /* EditorExportScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */; };
 		BA0EDF00DEAFB001CAFE0118 /* EditorClipActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0018 /* EditorClipActionBar.swift */; };
 		BA0EDF00DEAFB001CAFE0119 /* ClipReorderGestureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0019 /* ClipReorderGestureView.swift */; };
+		BA0EDF00DEAFB001CAFE011A /* EditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */; };
+		BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */; };
+		BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */; };
 		C0505206B7B237C572F82EFF /* AudioPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80BD65BF4472826A783449A0 /* AudioPickerView.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
@@ -81,10 +81,8 @@
 		B7FA166B3D2D812B47B67F76 /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTool.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClip.swift; sourceTree = "<group>"; };
-		BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransition.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlay.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioClip.swift; sourceTree = "<group>"; };
-		BA0EDF00DEAFB001CAFE001A /* EditorAudioActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioActionBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorViewModel.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTopBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPreviewPlayer.swift; sourceTree = "<group>"; };
@@ -93,7 +91,6 @@
 		BA0EDF00DEAFB001CAFE000A /* EditorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorScreen.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE000B /* ClipTrimHandleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipTrimHandleView.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCompositionBuilder.swift; sourceTree = "<group>"; };
-		BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransitionCompositor.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimelineSnapshot.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorUndoManager.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportService.swift; sourceTree = "<group>"; };
@@ -104,6 +101,9 @@
 		BA0EDF00DEAFB001CAFE0017 /* EditorExportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorExportScreen.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0018 /* EditorClipActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClipActionBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0019 /* ClipReorderGestureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipReorderGestureView.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE001A /* EditorAudioActionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioActionBar.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransitionCompositor.swift; sourceTree = "<group>"; };
+		BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransition.swift; sourceTree = "<group>"; };
 		BF5180642B1AC3288A6921DE /* MixtapeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixtapeApp.swift; sourceTree = "<group>"; };
 		CED677962FACE5BD00531EBF /* ProjectListScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListScreen.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
@@ -165,7 +165,7 @@
 			isa = PBXGroup;
 			children = (
 				CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */,
-				D4BAA6CF3F4204D0B19A1276 /*  */,
+				D4BAA6CF3F4204D0B19A1276,
 				6D159F361021D92BC3E10E55 /* Products */,
 				BF174851CFE65A0CEB3B9109 /* Features */,
 			);
@@ -367,7 +367,7 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		D4BAA6CF3F4204D0B19A1276 /*  */ = {
+		D4BAA6CF3F4204D0B19A1276 = {
 			isa = PBXGroup;
 			children = (
 				FD381624E89BEA467A3F6BF0 /* Assets.xcassets */,
@@ -525,7 +525,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				DEVELOPMENT_TEAM = D577Y99AN6;
+				DEVELOPMENT_TEAM = TTJL7FNUXQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
@@ -575,7 +575,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				DEVELOPMENT_TEAM = D577Y99AN6;
+				DEVELOPMENT_TEAM = TTJL7FNUXQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";

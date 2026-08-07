@@ -18,12 +18,13 @@ struct VolumeToolPanel: View {
 
     private var activeVolume: Float? {
         if let audio = vm.selectedAudioClip { return audio.volume }
+        if let overlay = vm.selectedOverlayClip { return overlay.volume }
         if let clip = vm.selectedClip { return clip.volume }
         return nil
     }
 
     private var hasSelection: Bool {
-        vm.selectedAudioClip != nil || vm.selectedClip != nil
+        vm.selectedAudioClip != nil || vm.selectedOverlayClip != nil || vm.selectedClip != nil
     }
 
     private var selectedAudio: EditorAudioClip? { vm.selectedAudioClip }
@@ -137,6 +138,12 @@ struct VolumeToolPanel: View {
             } else {
                 vm.setAudioVolume(clipID: id, volume: volume)
             }
+        } else if let id = vm.selectedOverlayClipID {
+            if commit {
+                vm.commitOverlayVolume(clipID: id, volume: volume)
+            } else {
+                vm.setOverlayVolume(clipID: id, volume: volume)
+            }
         } else if let id = vm.selectedClipID {
             if commit {
                 vm.commitVolume(clipID: id, volume: volume)
@@ -190,5 +197,41 @@ struct VolumeToolPanel: View {
         } else {
             vm.setAudioFades(clipID: audio.id, fadeIn: fadeIn, fadeOut: fadeOut)
         }
+    }
+}
+
+struct OverlayOpacityToolPanel: View {
+    let vm: EditorViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Overlay opacity")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Text("\(Int((vm.selectedOverlayClip?.opacity ?? 1) * 100))%")
+                    .font(.system(size: 13, weight: .bold).monospacedDigit())
+                    .foregroundColor(Color.appColors.primaryColor)
+            }
+
+            Slider(
+                value: Binding(
+                    get: { vm.selectedOverlayClip?.opacity ?? 1 },
+                    set: { value in
+                        guard let id = vm.selectedOverlayClipID else { return }
+                        vm.setOverlayOpacity(id: id, opacity: value)
+                    }
+                ),
+                in: 0.05...1,
+                step: 0.01,
+                onEditingChanged: { editing in
+                    if !editing { vm.commitOverlayTransform() }
+                }
+            )
+            .tint(Color.appColors.primaryColor)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
     }
 }

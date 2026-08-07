@@ -14,6 +14,8 @@ struct EditorScreen: View {
     @State private var isFullscreenPreview = false
     @State private var isMediaPickerPresented = false
     @State private var isAudioPickerPresented = false
+    @State private var isOverlayPickerPresented = false
+    @State private var isOverlayTracksExpanded = false
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioIndex: Int?
@@ -25,6 +27,7 @@ struct EditorScreen: View {
 
     init(project: EditorProject) {
         _vm = State(initialValue: EditorViewModel(project: project))
+        _isOverlayTracksExpanded = State(initialValue: project.selectedOverlayClipID != nil)
     }
 
     var body: some View {
@@ -66,6 +69,7 @@ struct EditorScreen: View {
 
                     EditorTimeline(
                         vm: vm,
+                        isOverlayTracksExpanded: $isOverlayTracksExpanded,
                         onInsertAfterClip: { clipIndex in
                             insertAfterClipIndex = clipIndex
                             isMediaPickerPresented = true
@@ -85,19 +89,38 @@ struct EditorScreen: View {
                         onAddAudioClip: { audioIndex in
                             insertAfterAudioIndex = audioIndex
                             isAudioPickerPresented = true
+                        },
+                        onAddOverlayClip: {
+                            isOverlayPickerPresented = true
                         }
                     )
                     .frame(maxHeight: .infinity, alignment: .top)
 
                     Group {
-                        if vm.selectedAudioClipID != nil {
+                        if vm.selectedOverlayClipID != nil {
+                            EditorOverlayActionBar(
+                                vm: vm,
+                                onAddOverlay: { isOverlayPickerPresented = true },
+                                onBack: { isOverlayTracksExpanded = false }
+                            )
+                        } else if vm.selectedAudioClipID != nil {
                             EditorAudioActionBar(vm: vm)
                         } else if vm.selectedClipID != nil {
                             EditorClipActionBar(vm: vm)
                         } else if vm.selectedTextOverlayID != nil {
                             EditorTextActionBar(vm: vm)
                         } else {
-                            EditorBottomToolbar(vm: vm)
+                            EditorBottomToolbar(
+                                vm: vm,
+                                isOverlayMode: isOverlayTracksExpanded,
+                                onAddOverlay: {
+                                    if vm.overlayClips.isEmpty {
+                                        isOverlayPickerPresented = true
+                                    } else {
+                                        isOverlayTracksExpanded.toggle()
+                                    }
+                                }
+                            )
                         }
                     }
                     .animation(
@@ -105,6 +128,7 @@ struct EditorScreen: View {
                         value: vm.selectedClipID != nil
                             || vm.selectedTextOverlayID != nil
                             || vm.selectedAudioClipID != nil
+                            || vm.selectedOverlayClipID != nil
                     )
                 }
             }
@@ -127,6 +151,19 @@ struct EditorScreen: View {
                 onConfirm: { items in
                     vm.insertClips(from: items, afterIndex: insertAfterClipIndex)
                     isMediaPickerPresented = false
+                }
+            )
+        }
+        .fullScreenCover(isPresented: $isOverlayPickerPresented) {
+            MediaLibraryPickerScreen(
+                title: "Add Video Overlay",
+                confirmButtonTitle: "Add Overlay",
+                allowedMediaType: .video,
+                onCancel: { isOverlayPickerPresented = false },
+                onConfirm: { items in
+                    vm.addOverlayClips(from: items)
+                    isOverlayPickerPresented = false
+                    isOverlayTracksExpanded = true
                 }
             )
         }
@@ -192,6 +229,41 @@ struct EditorScreen: View {
         ) {
             VolumeToolPanel(vm: vm)
                 .presentationDetents([.height(vm.selectedAudioClip == nil ? 180 : 300)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .crop && vm.selectedClipID != nil },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .crop {
+                        vm.commitSelectedClipReframe()
+                        vm.showsReframeSafeAreaGuides = false
+                        vm.selectedTool = nil
+                    }
+                }
+            )
+        ) {
+            CropReframeToolPanel(vm: vm)
+                .presentationDetents([.height(430), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .opacity && vm.selectedOverlayClipID != nil },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .opacity {
+                        vm.commitOverlayTransform()
+                        vm.selectedTool = nil
+                    }
+                }
+            )
+        ) {
+            OverlayOpacityToolPanel(vm: vm)
+                .presentationDetents([.height(180)])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
@@ -519,6 +591,8 @@ private struct EditorFullscreenPreviewSheet: View {
             // Text overlays rendered on top of video/poster
             EditorTextOverlayLayerView(vm: vm)
 
+            EditorOverlaySelectionLayer(vm: vm)
+
             VStack(spacing: 0) {
                 HStack {
                     Button(action: onClose) {
@@ -537,7 +611,7 @@ private struct EditorFullscreenPreviewSheet: View {
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
 
-                fullscreenHUD
+                fullscreenControls
                     .padding(.bottom, 28)
             }
         }
@@ -548,12 +622,41 @@ private struct EditorFullscreenPreviewSheet: View {
         }
     }
 
+    private var fullscreenControls: some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 4) {
+                Slider(
+                    value: fullscreenScrubberBinding,
+                    in: 0...max(vm.totalDuration, 0.01),
+                    onEditingChanged: { isEditing in
+                        if !isEditing {
+                            vm.commitTimelineAfterScrub()
+                        }
+                    }
+                )
+                .tint(Color.appColors.primaryColor)
+                .disabled(vm.totalDuration <= 0)
+                .accessibilityLabel("Video position")
+                .accessibilityValue(
+                    "\(vm.currentTimeString) of \(vm.formatPlaybackTime(vm.totalDuration))"
+                )
+
+                HStack {
+                    Text(vm.currentTimeString)
+                    Spacer(minLength: 12)
+                    Text(vm.formatPlaybackTime(vm.totalDuration))
+                }
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundColor(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 20)
+
+            fullscreenHUD
+        }
+    }
+
     private var fullscreenHUD: some View {
         HStack(spacing: 14) {
-            Text(vm.currentTimeString)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                .foregroundColor(.white)
-
             Button(action: { vm.togglePlay() }) {
                 Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 16, weight: .heavy))
@@ -567,6 +670,13 @@ private struct EditorFullscreenPreviewSheet: View {
         .padding(.vertical, 10)
         .background(Capsule().fill(Color.black.opacity(0.55)))
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private var fullscreenScrubberBinding: Binding<Double> {
+        Binding(
+            get: { min(max(0, vm.timelinePosition), vm.totalDuration) },
+            set: { vm.setTimelinePositionForScrub($0) }
+        )
     }
 
     private func loadPoster() {
