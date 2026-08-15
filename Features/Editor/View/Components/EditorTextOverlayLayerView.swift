@@ -13,7 +13,9 @@ struct EditorTextOverlayLayerView: View {
     @State private var isPositionDragging = false
 
     private var visibleOverlays: [EditorTextOverlay] {
-        vm.textOverlays.filter { $0.isVisible(at: vm.timelinePosition) }
+        vm.textOverlays
+            .filter { $0.isVisible(at: vm.timelinePosition) }
+            .map { $0.resolved(at: vm.timelinePosition) }
     }
 
     var body: some View {
@@ -56,6 +58,15 @@ struct EditorTextOverlayLayerView: View {
     @ViewBuilder
     private func draggableTextContent(_ overlay: EditorTextOverlay, isSelected: Bool) -> some View {
         let content = styledTextView(overlay)
+            .rotationEffect(
+                .degrees(
+                    overlay.keyframes.value(
+                        for: .textRotation,
+                        at: max(0, vm.timelinePosition - overlay.startTime),
+                        default: 0
+                    )
+                )
+            )
             .offset(x: overlay.xOffset, y: overlay.yOffset)
             .overlay(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)

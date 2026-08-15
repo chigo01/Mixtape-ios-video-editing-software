@@ -54,6 +54,67 @@ struct EditorOverlayRenderLayer {
     let timeRange: CMTimeRange
     let transform: CGAffineTransform
     let opacity: Float
+    let animation: EditorRenderKeyframeAnimation?
+}
+
+/// Immutable adapter between reusable editor tracks and frame rendering.
+struct EditorRenderKeyframeAnimation {
+    let tracks: EditorKeyframeTracks
+    let basePositionX: Double
+    let basePositionY: Double
+    let baseScale: Double
+    let baseRotation: Double
+    let baseOpacity: Double
+    let baseFilterIntensity: Double
+
+    var hasVisualAnimation: Bool {
+        let visual: Set<EditorKeyframeProperty> = [
+            .positionX, .positionY, .scale, .rotation, .opacity,
+            .cropX, .cropY, .cropScale, .filterIntensity, .effectAmount
+        ]
+        return tracks.tracks.contains { visual.contains($0.property) && !$0.isEmpty }
+    }
+
+    func transform(
+        base: CGAffineTransform,
+        at localTime: TimeInterval,
+        renderSize: CGSize
+    ) -> CGAffineTransform {
+        let x = tracks.value(for: .positionX, at: localTime, default: basePositionX)
+        let y = tracks.value(for: .positionY, at: localTime, default: basePositionY)
+        let scale = tracks.value(for: .scale, at: localTime, default: baseScale)
+        let rotation = tracks.value(for: .rotation, at: localTime, default: baseRotation)
+        let cropX = tracks.value(for: .cropX, at: localTime, default: basePositionX)
+        let cropY = tracks.value(for: .cropY, at: localTime, default: basePositionY)
+        let cropScale = tracks.value(for: .cropScale, at: localTime, default: baseScale)
+
+        let scaleRatio = CGFloat(
+            (scale / max(baseScale, 0.000_001))
+                * (cropScale / max(baseScale, 0.000_001))
+        )
+        let rotationDelta = CGFloat((rotation - baseRotation) * .pi / 180)
+        let xDelta = CGFloat((x - basePositionX) + (cropX - basePositionX)) * renderSize.width
+        let yDelta = CGFloat((y - basePositionY) + (cropY - basePositionY)) * renderSize.height
+        let center = CGPoint(x: renderSize.width / 2, y: renderSize.height / 2)
+
+        let destination = CGAffineTransform(translationX: center.x + xDelta, y: center.y + yDelta)
+            .rotated(by: rotationDelta)
+            .scaledBy(x: scaleRatio, y: scaleRatio)
+            .translatedBy(x: -center.x, y: -center.y)
+        return base.concatenating(destination)
+    }
+
+    func opacity(at localTime: TimeInterval) -> CGFloat {
+        CGFloat(tracks.value(for: .opacity, at: localTime, default: baseOpacity))
+    }
+
+    func filterIntensity(at localTime: TimeInterval) -> Double {
+        tracks.value(
+            for: .filterIntensity,
+            at: localTime,
+            default: baseFilterIntensity
+        )
+    }
 }
 
 /// Instruction consumed by `EditorTransitionCompositor`.
@@ -73,6 +134,7 @@ final class EditorTransitionRenderInstruction:
     let backgroundTrackID: CMPersistentTrackID?
     let overlayLayers: [EditorOverlayRenderLayer]
     let baseTransform: CGAffineTransform
+    let animation: EditorRenderKeyframeAnimation?
     let colorAdjustment: EditorColorAdjustment
     let incomingKind: EditorTransitionKind
     let outgoingKind: EditorTransitionKind
@@ -81,6 +143,7 @@ final class EditorTransitionRenderInstruction:
     let incomingMotion: EditorTransitionMotionCurve?
     let outgoingMotion: EditorTransitionMotionCurve?
     let renderSize: CGSize
+    let canvasBackgroundKind: EditorCanvasBackgroundKind
 
     init(
         timeRange: CMTimeRange,
@@ -88,6 +151,7 @@ final class EditorTransitionRenderInstruction:
         backgroundTrackID: CMPersistentTrackID?,
         overlayLayers: [EditorOverlayRenderLayer],
         baseTransform: CGAffineTransform,
+        animation: EditorRenderKeyframeAnimation?,
         colorAdjustment: EditorColorAdjustment,
         incomingKind: EditorTransitionKind,
         outgoingKind: EditorTransitionKind,
@@ -96,6 +160,7 @@ final class EditorTransitionRenderInstruction:
         incomingMotion: EditorTransitionMotionCurve?,
         outgoingMotion: EditorTransitionMotionCurve?,
         renderSize: CGSize,
+        canvasBackgroundKind: EditorCanvasBackgroundKind,
         enablePostProcessing: Bool
     ) {
         self.timeRange = timeRange
@@ -103,6 +168,7 @@ final class EditorTransitionRenderInstruction:
         self.backgroundTrackID = backgroundTrackID
         self.overlayLayers = overlayLayers
         self.baseTransform = baseTransform
+        self.animation = animation
         self.colorAdjustment = colorAdjustment
         self.incomingKind = incomingKind
         self.outgoingKind = outgoingKind
@@ -111,8 +177,12 @@ final class EditorTransitionRenderInstruction:
         self.incomingMotion = incomingMotion
         self.outgoingMotion = outgoingMotion
         self.renderSize = renderSize
+        self.canvasBackgroundKind = canvasBackgroundKind
         self.enablePostProcessing = enablePostProcessing
-        self.containsTweening = incomingDuration > 0 || outgoingDuration > 0
+        self.containsTweening = incomingDuration > 0
+            || outgoingDuration > 0
+            || animation?.hasVisualAnimation == true
+            || overlayLayers.contains { $0.animation?.hasVisualAnimation == true }
 
         var trackIDs = [NSNumber(value: foregroundTrackID)]
         if let backgroundTrackID {
@@ -129,34 +199,57 @@ final class EditorTransitionRenderInstruction:
 
         if incomingDuration > 0, localTime < incomingDuration {
             let progress = min(max(localTime / incomingDuration, 0), 1)
-            return EditorTransitionRenderState(
+            return animatedState(EditorTransitionRenderState(
                 kind: incomingKind,
                 progress: progress,
                 intensity: 1 - progress,
                 visibility: incomingKind.usesShaderMask ? 1 : incomingOpacity(progress),
                 transform: incomingMotion?.transform(at: progress) ?? baseTransform
-            )
+            ), localTime: localTime)
         }
 
         let outgoingStart = duration - outgoingDuration
         if outgoingDuration > 0, localTime >= outgoingStart {
             let progress = min(max((localTime - outgoingStart) / outgoingDuration, 0), 1)
-            return EditorTransitionRenderState(
+            return animatedState(EditorTransitionRenderState(
                 kind: outgoingKind,
                 progress: progress,
                 intensity: progress,
                 visibility: outgoingKind.usesShaderMask ? 1 : outgoingOpacity(progress),
                 transform: outgoingMotion?.transform(at: progress) ?? baseTransform
-            )
+            ), localTime: localTime)
         }
 
-        return EditorTransitionRenderState(
+        return animatedState(EditorTransitionRenderState(
             kind: .none,
             progress: 1,
             intensity: 0,
             visibility: 1,
             transform: baseTransform
+        ), localTime: localTime)
+    }
+
+    private func animatedState(
+        _ state: EditorTransitionRenderState,
+        localTime: TimeInterval
+    ) -> EditorTransitionRenderState {
+        guard let animation else { return state }
+        return EditorTransitionRenderState(
+            kind: state.kind,
+            progress: state.progress,
+            intensity: state.intensity,
+            visibility: state.visibility * animation.opacity(at: localTime),
+            transform: animation.transform(
+                base: state.transform,
+                at: localTime,
+                renderSize: renderSize
+            )
         )
+    }
+
+    func clipProgress(at compositionTime: CMTime) -> Double {
+        let duration = max(timeRange.duration.seconds, 0.000_001)
+        return min(max((compositionTime - timeRange.start).seconds / duration, 0), 1)
     }
 
     private func incomingOpacity(_ progress: Double) -> CGFloat {
@@ -281,6 +374,10 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
 
             let extent = CGRect(origin: .zero, size: instruction.renderSize)
             let state = instruction.state(at: request.compositionTime)
+            let instructionLocalTime = max(
+                0,
+                (request.compositionTime - instruction.timeRange.start).seconds
+            )
             let background = backgroundImage(
                 for: request,
                 instruction: instruction,
@@ -301,12 +398,24 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     renderSize: instruction.renderSize
                 )
 
-                var foreground = EditorColorGradeRenderer.apply(
-                    instruction.colorAdjustment,
+                var animatedColor = instruction.colorAdjustment
+                if let animation = instruction.animation {
+                    animatedColor.presetIntensity = animation.filterIntensity(at: instructionLocalTime)
+                }
+                var foreground = EditorColorGradeRenderer.applyBase(
+                    animatedColor,
                     to: CIImage(cvPixelBuffer: foregroundBuffer)
                 )
                     .transformed(by: imageTransform)
                     .cropped(to: extent)
+
+                if animatedColor.masks.contains(where: \.isEffective) {
+                    foreground = EditorColorGradeRenderer.applyMasks(
+                        animatedColor.masks,
+                        to: foreground,
+                        clipProgress: instruction.clipProgress(at: request.compositionTime)
+                    )
+                }
 
                 foreground = EditorTransitionEffectRenderer.apply(
                     state: state,
@@ -333,14 +442,22 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     height: CVPixelBufferGetHeight(overlayBuffer)
                 )
                 let imageTransform = coreImageTransform(
-                    from: overlay.transform,
+                    from: overlay.animation?.transform(
+                        base: overlay.transform,
+                        at: max(0, (request.compositionTime - overlay.timeRange.start).seconds),
+                        renderSize: instruction.renderSize
+                    ) ?? overlay.transform,
                     sourceSize: sourceSize,
                     renderSize: instruction.renderSize
                 )
                 let overlayImage = CIImage(cvPixelBuffer: overlayBuffer)
                     .transformed(by: imageTransform)
                     .cropped(to: extent)
-                    .applyingOpacity(CGFloat(overlay.opacity))
+                    .applyingOpacity(
+                        overlay.animation?.opacity(
+                            at: max(0, (request.compositionTime - overlay.timeRange.start).seconds)
+                        ) ?? CGFloat(overlay.opacity)
+                    )
                 composed = overlayImage
                     .applyingFilter(
                         "CISourceOverCompositing",
@@ -366,6 +483,22 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
         instruction: EditorTransitionRenderInstruction,
         extent: CGRect
     ) -> CIImage {
+        if instruction.canvasBackgroundKind == .blur,
+           let foreground = request.sourceFrame(byTrackID: instruction.foregroundTrackID) {
+            let source = CIImage(cvPixelBuffer: foreground)
+            let sx = extent.width / max(source.extent.width, 1)
+            let sy = extent.height / max(source.extent.height, 1)
+            let scale = max(sx, sy)
+            let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let centered = scaled.transformed(by: CGAffineTransform(
+                translationX: extent.midX - scaled.extent.midX,
+                y: extent.midY - scaled.extent.midY
+            ))
+            return centered
+                .clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 36])
+                .cropped(to: extent)
+        }
         if let trackID = instruction.backgroundTrackID,
            let buffer = request.sourceFrame(byTrackID: trackID) {
             return CIImage(cvPixelBuffer: buffer).cropped(to: extent)

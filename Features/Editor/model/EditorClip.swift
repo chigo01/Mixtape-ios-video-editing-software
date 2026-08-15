@@ -10,8 +10,77 @@ import Photos
 
 /// Fixed preview stage (width ÷ height). All assets are letterboxed/pillarboxed inside this frame.
 enum EditorPreviewLayout {
-    /// Vertical phone-style stage (e.g. 9×16). Change here to lock a different editor canvas.
-    static let aspectWidthOverHeight: CGFloat = 9 / 16
+    static let defaultAspectWidthOverHeight: CGFloat = 9 / 16
+}
+
+enum EditorCanvasFormat: String, Codable, CaseIterable, Identifiable, Hashable {
+    case vertical, landscape, square, portrait, custom
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .vertical: return "9:16"
+        case .landscape: return "16:9"
+        case .square: return "1:1"
+        case .portrait: return "4:5"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+enum EditorCanvasBackgroundKind: String, Codable, CaseIterable, Identifiable, Hashable {
+    case color, blur, image
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
+/// Project-level canvas configuration shared by preview and offline export.
+struct EditorCanvasSettings: Codable, Hashable {
+    var format: EditorCanvasFormat
+    var customWidth: Int
+    var customHeight: Int
+    var backgroundKind: EditorCanvasBackgroundKind
+    /// sRGB in 0xRRGGBB form.
+    var backgroundColorRGB: UInt32
+    /// App-owned image file, copied from the photo picker.
+    var backgroundImagePath: String?
+
+    static let `default` = EditorCanvasSettings(
+        format: .vertical,
+        customWidth: 1080,
+        customHeight: 1920,
+        backgroundKind: .color,
+        backgroundColorRGB: 0x000000,
+        backgroundImagePath: nil
+    )
+
+    var aspectRatio: CGFloat {
+        switch format {
+        case .vertical: return 9 / 16
+        case .landscape: return 16 / 9
+        case .square: return 1
+        case .portrait: return 4 / 5
+        case .custom: return CGFloat(max(1, customWidth)) / CGFloat(max(1, customHeight))
+        }
+    }
+
+    func renderSize(longEdge: CGFloat) -> CGSize {
+        if format == .custom {
+            return CGSize(
+                width: max(2, (customWidth / 2) * 2),
+                height: max(2, (customHeight / 2) * 2)
+            )
+        }
+        let ratio = aspectRatio
+        let raw: CGSize = ratio >= 1
+            ? CGSize(width: longEdge, height: longEdge / ratio)
+            : CGSize(width: longEdge * ratio, height: longEdge)
+        // Video encoders require even dimensions.
+        return CGSize(
+            width: max(2, (Int(raw.width.rounded()) / 2) * 2),
+            height: max(2, (Int(raw.height.rounded()) / 2) * 2)
+        )
+    }
 }
 
 enum EditorReframeMode: String, Codable, CaseIterable, Identifiable {
@@ -77,6 +146,7 @@ struct EditorClip: Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var keyframes: EditorKeyframeTracks
     /// Transition rendered at the cut after this clip.
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
@@ -109,6 +179,7 @@ struct EditorClip: Identifiable, Hashable {
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
         colorAdjustment: EditorColorAdjustment = .neutral,
+        keyframes: EditorKeyframeTracks = .empty,
         transitionKind: EditorTransitionKind = .none,
         transitionDuration: TimeInterval = 0
     ) {
@@ -129,6 +200,7 @@ struct EditorClip: Identifiable, Hashable {
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
         self.colorAdjustment = colorAdjustment
+        self.keyframes = keyframes
         self.transitionKind = transitionDuration > 0 ? transitionKind : .none
         self.transitionDuration = max(0, transitionDuration)
     }
@@ -142,6 +214,9 @@ struct EditorClip: Identifiable, Hashable {
     func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorClip, right: EditorClip)? {
         let minSpan = Self.minimumSourceSpan(speed: speed)
         guard sourceTime >= trimStart + minSpan, sourceTime <= trimEnd - minSpan else { return nil }
+
+        let splitLocalTime = (sourceTime - trimStart) / TimeInterval(max(speed, 0.001))
+        let splitKeyframes = keyframes.split(at: splitLocalTime)
 
         let left = EditorClip(
             asset: asset,
@@ -160,6 +235,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            keyframes: splitKeyframes.left,
             transitionKind: .none,
             transitionDuration: 0
         )
@@ -180,6 +256,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            keyframes: splitKeyframes.right,
             transitionKind: transitionKind,
             transitionDuration: transitionDuration
         )
@@ -220,6 +297,7 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
             && lhs.colorAdjustment == rhs.colorAdjustment
+            && lhs.keyframes == rhs.keyframes
             && lhs.transitionKind == rhs.transitionKind
             && lhs.transitionDuration == rhs.transitionDuration
     }
@@ -241,12 +319,15 @@ struct EditorOverlayClip: Identifiable, Hashable {
     var timelineStart: TimeInterval
     /// Persistent logical timeline row. Split pieces retain their parent's row.
     var laneIndex: Int
+    /// Back-to-front compositing order. Split pieces retain their parent's layer.
+    var zIndex: Int
     var speed: Float
     var scale: CGFloat
     var xOffset: CGFloat
     var yOffset: CGFloat
     var opacity: Double
     var volume: Float
+    var keyframes: EditorKeyframeTracks
 
     init(
         id: UUID = UUID(),
@@ -256,12 +337,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
         trimEnd: TimeInterval? = nil,
         timelineStart: TimeInterval = 0,
         laneIndex: Int = 0,
+        zIndex: Int? = nil,
         speed: Float = 1,
         scale: CGFloat = 0.55,
         xOffset: CGFloat = 0,
         yOffset: CGFloat = 0,
         opacity: Double = 1,
-        volume: Float = 1
+        volume: Float = 1,
+        keyframes: EditorKeyframeTracks = .empty
     ) {
         let duration = originalDuration ?? asset.duration
         self.id = id
@@ -271,12 +354,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
         self.trimEnd = min(max(trimEnd ?? duration, self.trimStart), duration)
         self.timelineStart = max(0, timelineStart)
         self.laneIndex = laneIndex
+        self.zIndex = max(0, zIndex ?? laneIndex)
         self.speed = min(max(speed, 0.25), 3)
         self.scale = min(max(scale, 0.15), 1.5)
         self.xOffset = min(max(xOffset, -0.75), 0.75)
         self.yOffset = min(max(yOffset, -0.75), 0.75)
         self.opacity = min(max(opacity, 0.05), 1)
         self.volume = min(max(volume, 0), 1)
+        self.keyframes = keyframes
     }
 
     var duration: TimeInterval {
@@ -301,9 +386,30 @@ struct EditorOverlayClip: Identifiable, Hashable {
         min(max(trimStart + local * TimeInterval(speed), trimStart), trimEnd)
     }
 
+    func resolved(at timelineTime: TimeInterval) -> EditorOverlayClip {
+        var result = self
+        let localTime = min(max(0, timelineTime - timelineStart), duration)
+        result.xOffset = CGFloat(keyframes.value(
+            for: .positionX, at: localTime, default: Double(xOffset)
+        ))
+        result.yOffset = CGFloat(keyframes.value(
+            for: .positionY, at: localTime, default: Double(yOffset)
+        ))
+        result.scale = CGFloat(keyframes.value(
+            for: .scale, at: localTime, default: Double(scale)
+        ))
+        result.opacity = keyframes.value(
+            for: .opacity, at: localTime, default: opacity
+        )
+        return result
+    }
+
     func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorOverlayClip, right: EditorOverlayClip)? {
         guard sourceTime >= trimStart + Self.minimumSpan,
               sourceTime <= trimEnd - Self.minimumSpan else { return nil }
+
+        let splitLocalTime = (sourceTime - trimStart) / TimeInterval(max(speed, 0.001))
+        let splitKeyframes = keyframes.split(at: splitLocalTime)
 
         let left = EditorOverlayClip(
             id: id,
@@ -313,12 +419,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             trimEnd: sourceTime,
             timelineStart: timelineStart,
             laneIndex: laneIndex,
+            zIndex: zIndex,
             speed: speed,
             scale: scale,
             xOffset: xOffset,
             yOffset: yOffset,
             opacity: opacity,
-            volume: volume
+            volume: volume,
+            keyframes: splitKeyframes.left
         )
         let right = EditorOverlayClip(
             asset: asset,
@@ -327,12 +435,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             trimEnd: trimEnd,
             timelineStart: timelineStart + left.duration,
             laneIndex: laneIndex,
+            zIndex: zIndex,
             speed: speed,
             scale: scale,
             xOffset: xOffset,
             yOffset: yOffset,
             opacity: opacity,
-            volume: volume
+            volume: volume,
+            keyframes: splitKeyframes.right
         )
         return (left, right)
     }
@@ -344,12 +454,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             && lhs.trimEnd == rhs.trimEnd
             && lhs.timelineStart == rhs.timelineStart
             && lhs.laneIndex == rhs.laneIndex
+            && lhs.zIndex == rhs.zIndex
             && lhs.speed == rhs.speed
             && lhs.scale == rhs.scale
             && lhs.xOffset == rhs.xOffset
             && lhs.yOffset == rhs.yOffset
             && lhs.opacity == rhs.opacity
             && lhs.volume == rhs.volume
+            && lhs.keyframes == rhs.keyframes
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

@@ -36,7 +36,7 @@ struct EditorPreviewPlayer: View {
             } else {
                 previewSurface
                     .frame(maxWidth: .infinity)
-                    .aspectRatio(EditorPreviewLayout.aspectWidthOverHeight, contentMode: .fit)
+                    .aspectRatio(vm.canvasSettings.aspectRatio, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
         }
@@ -66,6 +66,7 @@ struct EditorPreviewPlayer: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
+            EditorColorMaskSelectionLayer(vm: vm)
             EditorReframeSelectionLayer(vm: vm)
             EditorOverlaySelectionLayer(vm: vm)
 
@@ -97,7 +98,22 @@ struct EditorPreviewPlayer: View {
     }
 
     private var background: some View {
-        Color.black
+        Group {
+            if vm.canvasSettings.backgroundKind == .image,
+               let path = vm.canvasSettings.backgroundImagePath,
+               let image = UIImage(contentsOfFile: path) {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else if vm.canvasSettings.backgroundKind == .blur, let posterImage {
+                Image(uiImage: posterImage).resizable().scaledToFill().blur(radius: 24).scaleEffect(1.12)
+            } else {
+                let rgb = vm.canvasSettings.backgroundColorRGB
+                Color(
+                    red: Double((rgb >> 16) & 0xff) / 255,
+                    green: Double((rgb >> 8) & 0xff) / 255,
+                    blue: Double(rgb & 0xff) / 255
+                )
+            }
+        }
     }
 
     private var controlsHUD: some View {
@@ -259,7 +275,7 @@ struct EditorOverlaySelectionLayer: View {
         guard let clip = vm.selectedOverlayClip,
               vm.timelinePosition >= clip.timelineStart,
               vm.timelinePosition < clip.timelineEnd else { return nil }
-        return clip
+        return clip.resolved(at: vm.timelinePosition)
     }
 
     var body: some View {

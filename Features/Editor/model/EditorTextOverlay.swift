@@ -213,6 +213,7 @@ struct EditorTextOverlay: Identifiable, Hashable {
     var verticalAlignment: TextOverlayVAlignment
     var xOffset: CGFloat
     var yOffset: CGFloat
+    var keyframes: EditorKeyframeTracks
 
     init(
         id: UUID = UUID(),
@@ -227,7 +228,8 @@ struct EditorTextOverlay: Identifiable, Hashable {
         horizontalAlignment: TextOverlayHAlignment = .center,
         verticalAlignment: TextOverlayVAlignment = .center,
         xOffset: CGFloat = 0,
-        yOffset: CGFloat = 0
+        yOffset: CGFloat = 0,
+        keyframes: EditorKeyframeTracks = .empty
     ) {
         self.id = id
         self.text = text
@@ -242,6 +244,7 @@ struct EditorTextOverlay: Identifiable, Hashable {
         self.verticalAlignment = verticalAlignment
         self.xOffset = xOffset
         self.yOffset = yOffset
+        self.keyframes = keyframes
     }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
@@ -268,5 +271,23 @@ struct EditorTextOverlay: Identifiable, Hashable {
     /// Whether this overlay is visible at the given global timeline position.
     func isVisible(at time: TimeInterval) -> Bool {
         time >= startTime && time < endTime
+    }
+
+    func resolved(at timelineTime: TimeInterval) -> EditorTextOverlay {
+        var result = self
+        let localTime = min(max(0, timelineTime - startTime), duration)
+        result.xOffset = CGFloat(keyframes.value(
+            for: .textPositionX, at: localTime, default: Double(xOffset)
+        ))
+        result.yOffset = CGFloat(keyframes.value(
+            for: .textPositionY, at: localTime, default: Double(yOffset)
+        ))
+        result.opacity = keyframes.value(
+            for: .opacity, at: localTime, default: opacity
+        )
+        result.fontSize = fontSize * CGFloat(keyframes.value(
+            for: .textScale, at: localTime, default: 1
+        ))
+        return result
     }
 }

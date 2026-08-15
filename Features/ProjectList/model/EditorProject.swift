@@ -26,6 +26,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var keyframes: EditorKeyframeTracks
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
 
@@ -47,6 +48,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
         colorAdjustment = clip.colorAdjustment
+        keyframes = clip.keyframes
         transitionKind = clip.transitionKind
         transitionDuration = clip.transitionDuration
     }
@@ -73,6 +75,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
             EditorColorAdjustment.self,
             forKey: .colorAdjustment
         ) ?? .neutral
+        keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
         transitionDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .transitionDuration) ?? 0
         if let rawKind = try c.decodeIfPresent(String.self, forKey: .transitionKind) {
             // `zoom` was shipped briefly before the catalog split it into Zoom In/Out.
@@ -101,6 +104,7 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
     var verticalAlignment: TextOverlayVAlignment
     var xOffset: CGFloat
     var yOffset: CGFloat
+    var keyframes: EditorKeyframeTracks
 
     init(from overlay: EditorTextOverlay) {
         id = overlay.id
@@ -116,6 +120,7 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         verticalAlignment = overlay.verticalAlignment
         xOffset = overlay.xOffset
         yOffset = overlay.yOffset
+        keyframes = overlay.keyframes
     }
 
     func toOverlay() -> EditorTextOverlay {
@@ -132,7 +137,8 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
             horizontalAlignment: horizontalAlignment,
             verticalAlignment: verticalAlignment,
             xOffset: xOffset,
-            yOffset: yOffset
+            yOffset: yOffset,
+            keyframes: keyframes
         )
     }
 
@@ -152,6 +158,7 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         verticalAlignment = try c.decodeIfPresent(TextOverlayVAlignment.self, forKey: .verticalAlignment) ?? .center
         xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0.0
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0.0
+        keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
     }
 }
 
@@ -166,6 +173,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     var volume: Float
     var fadeInDuration: TimeInterval
     var fadeOutDuration: TimeInterval
+    var keyframes: EditorKeyframeTracks
 
     init(from clip: EditorAudioClip) {
         id = clip.id
@@ -178,6 +186,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         volume = clip.volume
         fadeInDuration = clip.fadeInDuration
         fadeOutDuration = clip.fadeOutDuration
+        keyframes = clip.keyframes
     }
 
     init(from decoder: Decoder) throws {
@@ -192,6 +201,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         volume = try c.decode(Float.self, forKey: .volume)
         fadeInDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeInDuration) ?? 0
         fadeOutDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeOutDuration) ?? 0
+        keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
     }
 
     func toAudioClip() -> EditorAudioClip? {
@@ -207,7 +217,8 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
             timelineStart: timelineStart,
             volume: volume,
             fadeInDuration: fadeInDuration,
-            fadeOutDuration: fadeOutDuration
+            fadeOutDuration: fadeOutDuration,
+            keyframes: keyframes
         )
     }
 }
@@ -220,12 +231,14 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
     var laneIndex: Int
+    var zIndex: Int
     var speed: Float
     var scale: CGFloat
     var xOffset: CGFloat
     var yOffset: CGFloat
     var opacity: Double
     var volume: Float
+    var keyframes: EditorKeyframeTracks
 
     init(from clip: EditorOverlayClip) {
         id = clip.id
@@ -235,12 +248,14 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         trimEnd = clip.trimEnd
         timelineStart = clip.timelineStart
         laneIndex = clip.laneIndex
+        zIndex = clip.zIndex
         speed = clip.speed
         scale = clip.scale
         xOffset = clip.xOffset
         yOffset = clip.yOffset
         opacity = clip.opacity
         volume = clip.volume
+        keyframes = clip.keyframes
     }
 
     init(from decoder: Decoder) throws {
@@ -252,12 +267,14 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
         timelineStart = try c.decode(TimeInterval.self, forKey: .timelineStart)
         laneIndex = try c.decodeIfPresent(Int.self, forKey: .laneIndex) ?? -1
+        zIndex = try c.decodeIfPresent(Int.self, forKey: .zIndex) ?? laneIndex
         speed = try c.decodeIfPresent(Float.self, forKey: .speed) ?? 1
         scale = try c.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 0.55
         xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0
         opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
         volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+        keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
     }
 }
 
@@ -304,6 +321,9 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var selectedClipID: UUID?
     var selectedAudioClipID: UUID?
     var selectedOverlayClipID: UUID?
+    var canvasSettings: EditorCanvasSettings
+    var exportInPoint: TimeInterval?
+    var exportOutPoint: TimeInterval?
 
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
@@ -311,6 +331,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         case selectedClipID, selectedAudioClipID, selectedOverlayClipID
         case openingTransitionKind, openingTransitionDuration
         case closingTransitionKind, closingTransitionDuration
+        case canvasSettings, exportInPoint, exportOutPoint
     }
 
     init(
@@ -329,7 +350,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
         timelinePosition: TimeInterval,
         selectedClipID: UUID?,
         selectedAudioClipID: UUID? = nil,
-        selectedOverlayClipID: UUID? = nil
+        selectedOverlayClipID: UUID? = nil,
+        canvasSettings: EditorCanvasSettings = .default,
+        exportInPoint: TimeInterval? = nil,
+        exportOutPoint: TimeInterval? = nil
     ) {
         self.id = id
         self.title = title
@@ -351,6 +375,9 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.selectedClipID = selectedClipID
         self.selectedAudioClipID = selectedAudioClipID
         self.selectedOverlayClipID = selectedOverlayClipID
+        self.canvasSettings = canvasSettings
+        self.exportInPoint = exportInPoint
+        self.exportOutPoint = exportOutPoint
     }
 
     init(from decoder: Decoder) throws {
@@ -398,6 +425,9 @@ struct EditorProject: Codable, Identifiable, Hashable {
         selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
         selectedOverlayClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedOverlayClipID)
         overlayClips = try c.decodeIfPresent([SavedOverlayClip].self, forKey: .overlayClips) ?? []
+        canvasSettings = try c.decodeIfPresent(EditorCanvasSettings.self, forKey: .canvasSettings) ?? .default
+        exportInPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportInPoint)
+        exportOutPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportOutPoint)
 
         if let saved = try c.decodeIfPresent([SavedAudioClip].self, forKey: .audioClips) {
             audioClips = saved
@@ -427,6 +457,9 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
         try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
         try c.encodeIfPresent(selectedOverlayClipID, forKey: .selectedOverlayClipID)
+        try c.encode(canvasSettings, forKey: .canvasSettings)
+        try c.encodeIfPresent(exportInPoint, forKey: .exportInPoint)
+        try c.encodeIfPresent(exportOutPoint, forKey: .exportOutPoint)
     }
 
     var formattedDuration: String {
@@ -501,6 +534,7 @@ enum EditorProjectResolver {
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
                 colorAdjustment: item.colorAdjustment,
+                keyframes: item.keyframes,
                 transitionKind: item.transitionKind,
                 transitionDuration: item.transitionDuration
             )
@@ -528,12 +562,14 @@ enum EditorProjectResolver {
                 trimEnd: item.trimEnd,
                 timelineStart: item.timelineStart,
                 laneIndex: item.laneIndex,
+                zIndex: item.zIndex,
                 speed: item.speed,
                 scale: item.scale,
                 xOffset: item.xOffset,
                 yOffset: item.yOffset,
                 opacity: item.opacity,
-                volume: item.volume
+                volume: item.volume,
+                keyframes: item.keyframes
             )
         }
     }

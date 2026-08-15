@@ -20,6 +20,7 @@ struct EditorExportScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     EditorExportPreviewSection(vm: vm)
+                    rangeSection
                     resolutionSection
                     frameRateSection
                     qualitySection
@@ -97,6 +98,39 @@ struct EditorExportScreen: View {
             .padding(4)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
         }
+    }
+
+    private var rangeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                sectionTitle("EXPORT RANGE")
+                Spacer()
+                Text(vm.exportRange == nil ? "Entire project" : vm.formatDuration(vm.exportDuration))
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Color.appColors.primaryColor)
+            }
+            HStack(spacing: 8) {
+                rangeButton("SET IN", systemImage: "arrow.right.to.line") { vm.setExportInPoint() }
+                rangeButton("SET OUT", systemImage: "arrow.left.to.line") { vm.setExportOutPoint() }
+                if vm.exportInPoint != nil || vm.exportOutPoint != nil {
+                    rangeButton("CLEAR", systemImage: "xmark") { vm.clearExportRange() }
+                }
+            }
+            Text("Move the preview playhead, then set In and Out. A complete pair exports only that section.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+    }
+
+    private func rangeButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 11, weight: .bold))
+                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain).disabled(vm.isExporting)
     }
 
     private var frameRateSection: some View {
@@ -180,7 +214,7 @@ struct EditorExportScreen: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("FILE SIZE")
-                Text("~ \(settings.estimatedFileSizeMB(duration: vm.totalDuration)) MB")
+                Text("~ \(settings.estimatedFileSizeMB(duration: vm.exportDuration)) MB")
                     .font(.system(size: 22, weight: .bold).monospacedDigit())
                     .foregroundColor(Color.appColors.primaryColor)
                     .frame(maxWidth: .infinity, alignment: .leading)

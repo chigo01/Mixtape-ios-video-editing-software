@@ -19,6 +19,10 @@ configurable video export.
 - Adjustable photo duration and media insertion at any clip boundary.
 - Global timeline with primary-video, video-overlay, text, and audio lanes, scrubbing,
   undo/redo, and extended overlay/audio/text tails.
+- Magnetic playhead and clip/overlay-edge snapping with visible alignment guides,
+  zoom-aware thresholds, and haptic feedback.
+- One-step duplication for video, audio, and text, plus media replacement that keeps
+  compatible trim, timing, transform, color, volume, and transition settings.
 - Autosaved projects that restore clip order, edits, playhead, selections, and title.
 
 ### Transitions and creative tools
@@ -35,6 +39,11 @@ configurable video export.
   timeline trim/move/split/delete, speed, volume, opacity, direct preview positioning,
   pinch resize, automatic stacked lanes for overlapping overlays, persistence,
   undo/redo, and preview/export parity.
+- Project-level 9:16, 16:9, 1:1, 4:5, and custom canvases with solid-color,
+  GPU-blurred, or imported-image backgrounds in both preview and export.
+- Forty categorized looks, twenty primary color controls, selective HSL, RGB/master
+  curves, lift/gamma/gain/offset wheels, and waveform, parade, vectorscope, and
+  histogram monitoring with copy/paste and apply-to-all workflows.
 
 ### Audio
 
@@ -53,6 +62,8 @@ configurable video export.
 - 720p, 1080p, and 4K export; frame-rate, bitrate-quality, format, and optional
   HDR/HEVC settings.
 - Explicit `AVAssetReader`/`AVAssetWriter` export pipeline with sharing and Photos save.
+- Persistent In/Out markers and selected-range export with range-aware duration and
+  file-size estimates; video, mixed audio, text, and overlays are trimmed together.
 
 ## Requirements
 
@@ -111,27 +122,25 @@ pipeline, feature guide, and engineering notes, see
 
 ## Current limitations
 
-- The Filter button does not yet provide a complete color/filter workflow.
-- Editing is single-selection and uses one primary video lane.
-- There are no keyframe, speed-ramp, reverse, stabilization, or chroma-key tools yet.
+- Color scopes currently analyze a representative selected-clip frame rather than
+  continuously sampling every frame during playback.
+- Editing is single-selection, with one primary video lane plus multiple independently ordered video-overlay layers.
+- There are no speed-ramp, reverse, stabilization, or chroma-key tools yet.
 - Embedded video audio does not yet display a waveform.
 - Projects are local-only and do not yet support packaged media relinking or iCloud sync.
 - Automated render-regression and performance test coverage is still limited.
 
 ## Roadmap
 
-The next professional milestones are:
+Phase 1, the Phase 2 keyframe engine, and multi-layer video are complete. The next professional milestones are:
 
-1. Color filters, manual color correction, LUT import, and scopes.
-2. Canvas backgrounds and reusable output presets.
-3. Keyframes for transform, opacity, volume, text, and effects.
-4. Speed ramps, reverse playback, freeze frames, and optical-flow options.
-5. Multi-layer video/overlay tracks, blend modes, masks, and chroma key.
-6. Audio waveforms, meters, ducking, voiceover recording, EQ, and noise reduction.
-7. Captions, stickers, text animation, and reusable title/template systems.
-8. Proxy media, render caching, background export, and memory/performance budgets.
-9. Project packaging, media relinking, schema migration, recovery, and iCloud sync.
-10. Unit, UI, golden-frame, orientation, export, and long-project stress tests.
+1. Speed ramps, reverse playback, freeze frames, and optical-flow options.
+2. Blend modes, masks, chroma key, stabilization, and tracking.
+3. Audio waveforms, meters, ducking, voiceover recording, EQ, and noise reduction.
+4. Captions, stickers, text animation, and reusable title/template systems.
+5. Proxy media, render caching, background export, and memory/performance budgets.
+6. Project packaging, media relinking, schema migration, recovery, and iCloud sync.
+7. Unit, UI, golden-frame, orientation, export, and long-project stress tests.
 
 The detailed, prioritized backlog is maintained in
 [Features/Editor/README.md#13-professional-editor-roadmap](Features/Editor/README.md#13-professional-editor-roadmap).

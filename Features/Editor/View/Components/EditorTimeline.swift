@@ -146,6 +146,20 @@ struct EditorTimeline: View {
                     .clipped()
 
                     TimelinePlayheadLine(vm: vm, layout: layout, stackHeight: playheadStackHeight)
+                    if let inPoint = vm.exportInPoint {
+                        rangeMarker(time: inPoint, label: "IN", color: .green, layout: layout)
+                    }
+                    if let outPoint = vm.exportOutPoint {
+                        rangeMarker(time: outPoint, label: "OUT", color: .orange, layout: layout)
+                    }
+                    if let snapTime = vm.snapGuideTime {
+                        Rectangle()
+                            .fill(Color.appColors.primaryColor.opacity(0.9))
+                            .frame(width: 1.5, height: playheadStackHeight)
+                            .offset(x: layout.contentX(forTime: snapTime), y: 4)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                     TimelinePlayheadKnob(
                         vm: vm,
                         layout: layout,
@@ -165,6 +179,25 @@ struct EditorTimeline: View {
             )
             .frame(width: geo.size.width, height: geo.size.height)
         }
+    }
+
+    private func rangeMarker(
+        time: TimeInterval,
+        label: String,
+        color: Color,
+        layout: TimelineLayout
+    ) -> some View {
+        VStack(spacing: 0) {
+            Text(label)
+                .font(.system(size: 8, weight: .black))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 4).padding(.vertical, 2)
+                .background(Capsule().fill(color))
+            Rectangle().fill(color.opacity(0.8)).frame(width: 1, height: playheadStackHeight - 14)
+        }
+        .offset(x: layout.contentX(forTime: time) - 8, y: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     // MARK: Video overlays
@@ -631,7 +664,7 @@ private struct OverlayClipThumb: View {
             ClipFilmstripView(clip: clip.thumbnailClip, width: width, height: laneHeight)
             HStack(spacing: 4) {
                 Image(systemName: "rectangle.on.rectangle")
-                Text("Overlay \(laneNumber)")
+                Text("Overlay \(laneNumber) · Layer \(clip.zIndex + 1)")
             }
             .font(.system(size: 9, weight: .semibold))
             .foregroundColor(.white)

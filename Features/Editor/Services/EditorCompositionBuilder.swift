@@ -22,13 +22,14 @@ enum EditorCompositionBuilder {
     private static var assetCache: [String: AVAsset] = [:]
     private static var photoVideoCache: [String: URL] = [:]
     private static var solidVideoCache: [String: URL] = [:]
+    private static var canvasImageVideoCache: [String: URL] = [:]
     private static var warmedPlayerItem: AVPlayerItem?
     private static var warmedFingerprint: String?
 
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -56,12 +57,14 @@ enum EditorCompositionBuilder {
     private struct AudioVolumeSegment {
         let timeRange: CMTimeRange
         let volume: Float
+        let keyframes: EditorKeyframeTracks
     }
 
     private struct VideoSegment {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
         let colorAdjustment: EditorColorAdjustment
+        let animation: EditorRenderKeyframeAnimation?
         let transitionIn: EditorTransitionKind
         let transitionOut: EditorTransitionKind
         let fadeInDuration: TimeInterval
@@ -73,6 +76,7 @@ enum EditorCompositionBuilder {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
         let opacity: Float
+        let animation: EditorRenderKeyframeAnimation?
     }
 
     private struct BackgroundVideoTracks {
@@ -92,6 +96,7 @@ enum EditorCompositionBuilder {
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
         closingTransitionDuration: TimeInterval = 0,
+        canvasSettings: EditorCanvasSettings = .default,
         frameRate: Int32 = 30,
         canvasSize: CGSize? = nil,
         isOfflineRender: Bool = false
@@ -182,7 +187,13 @@ enum EditorCompositionBuilder {
                         on: compositionAudioTrack,
                         at: cursor
                     )
-                    audioVolumeSegments.append(AudioVolumeSegment(timeRange: segmentRange, volume: clip.volume))
+                    audioVolumeSegments.append(
+                        AudioVolumeSegment(
+                            timeRange: segmentRange,
+                            volume: clip.volume,
+                            keyframes: clip.keyframes
+                        )
+                    )
                 }
             } else if let photoURL = await photoVideoURL(for: clip.asset, duration: clip.duration) {
                 let photoAsset = AVURLAsset(url: photoURL)
@@ -228,7 +239,11 @@ enum EditorCompositionBuilder {
 
         var overlayVideoSegments: [OverlayVideoSegment] = []
         var overlayAudioTracks: [(track: AVMutableCompositionTrack, clip: EditorOverlayClip)] = []
-        for overlay in overlayClips {
+        let orderedOverlayClips = overlayClips.sorted {
+            if $0.zIndex == $1.zIndex { return $0.laneIndex < $1.laneIndex }
+            return $0.zIndex < $1.zIndex
+        }
+        for overlay in orderedOverlayClips {
             guard overlay.duration > 0,
                   let asset = await loadVideoAsset(for: overlay.asset) else { continue }
 
@@ -266,7 +281,8 @@ enum EditorCompositionBuilder {
                                 clip: overlay,
                                 renderSize: renderSize
                             ),
-                            opacity: Float(overlay.opacity)
+                            opacity: Float(overlay.opacity),
+                            animation: renderAnimation(for: overlay)
                         )
                     )
                 } catch {
@@ -321,26 +337,12 @@ enum EditorCompositionBuilder {
                     textLayer.frame = CGRect(origin: .zero, size: renderSize)
                     textLayer.opacity = 0
 
-                    let anim = CAKeyframeAnimation(keyPath: "opacity")
-                    anim.duration = totalDuration
-                    anim.beginTime = AVCoreAnimationBeginTimeAtZero
-                    anim.isRemovedOnCompletion = false
-                    anim.fillMode = .forwards
-
-                    let startRatio = max(0, overlay.startTime / totalDuration)
-                    let endRatio = min(1.0, overlay.endTime / totalDuration)
-
-                    anim.values = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0]
-                    anim.keyTimes = [
-                        0.0,
-                        NSNumber(value: startRatio),
-                        NSNumber(value: startRatio),
-                        NSNumber(value: endRatio),
-                        NSNumber(value: endRatio),
-                        1.0
-                    ]
-
-                    textLayer.add(anim, forKey: "opacityAnim")
+                    addTextAnimations(
+                        to: textLayer,
+                        overlay: overlay,
+                        totalDuration: totalDuration,
+                        renderSize: renderSize
+                    )
                     parentLayer.addSublayer(textLayer)
                 }
             }
@@ -356,23 +358,39 @@ enum EditorCompositionBuilder {
 
         for overlayAudio in overlayAudioTracks {
             let params = AVMutableAudioMixInputParameters(track: overlayAudio.track)
-            params.setVolume(
-                overlayAudio.clip.volume,
-                at: CMTime(
-                    seconds: overlayAudio.clip.timelineStart,
-                    preferredTimescale: timescale
-                )
+            applyVolumeAutomation(
+                to: params,
+                timeRange: CMTimeRange(
+                    start: CMTime(
+                        seconds: overlayAudio.clip.timelineStart,
+                        preferredTimescale: timescale
+                    ),
+                    duration: CMTime(
+                        seconds: overlayAudio.clip.duration,
+                        preferredTimescale: timescale
+                    )
+                ),
+                baseVolume: overlayAudio.clip.volume,
+                keyframes: overlayAudio.clip.keyframes
             )
             mixParams.append(params)
         }
 
         // Per-clip volume
         if let clipAudioTrack = compositionAudioTrack, !audioVolumeSegments.isEmpty {
-            let needsClipMix = audioVolumeSegments.contains(where: { abs($0.volume - 1.0) > 0.001 })
+            let needsClipMix = audioVolumeSegments.contains {
+                abs($0.volume - 1.0) > 0.001
+                    || !$0.keyframes.track(for: .volume).isEmpty
+            }
             if needsClipMix {
                 let params = AVMutableAudioMixInputParameters(track: clipAudioTrack)
                 for seg in audioVolumeSegments {
-                    params.setVolume(seg.volume, at: seg.timeRange.start)
+                    applyVolumeAutomation(
+                        to: params,
+                        timeRange: seg.timeRange,
+                        baseVolume: seg.volume,
+                        keyframes: seg.keyframes
+                    )
                 }
                 mixParams.append(params)
             }
@@ -405,32 +423,14 @@ enum EditorCompositionBuilder {
                 max(0, audioClip.duration - fadeIn)
             )
 
-            if fadeIn > 0 {
-                bgParams.setVolume(0, at: timelineStart)
-                bgParams.setVolumeRamp(
-                    fromStartVolume: 0,
-                    toEndVolume: audioClip.volume,
-                    timeRange: CMTimeRange(
-                        start: timelineStart,
-                        duration: CMTime(seconds: fadeIn, preferredTimescale: timescale)
-                    )
-                )
-            } else {
-                bgParams.setVolume(audioClip.volume, at: timelineStart)
-            }
-
-            if fadeOut > 0 {
-                let fadeOutStart = timelineStart
-                    + CMTime(seconds: audioClip.duration - fadeOut, preferredTimescale: timescale)
-                bgParams.setVolumeRamp(
-                    fromStartVolume: audioClip.volume,
-                    toEndVolume: 0,
-                    timeRange: CMTimeRange(
-                        start: fadeOutStart,
-                        duration: CMTime(seconds: fadeOut, preferredTimescale: timescale)
-                    )
-                )
-            }
+            applyVolumeAutomation(
+                to: bgParams,
+                timeRange: CMTimeRange(start: timelineStart, duration: sourceDuration),
+                baseVolume: audioClip.volume,
+                keyframes: audioClip.keyframes,
+                fadeIn: fadeIn,
+                fadeOut: fadeOut
+            )
             mixParams.append(bgParams)
         }
 
@@ -456,6 +456,7 @@ enum EditorCompositionBuilder {
             in: composition,
             duration: CMTime(seconds: timelineExtent, preferredTimescale: timescale),
             renderSize: renderSize,
+            canvasSettings: canvasSettings,
             needsWhite: segmentsSnapshot.contains {
                 usesWhiteCanvas($0.transitionIn) || usesWhiteCanvas($0.transitionOut)
             }
@@ -470,6 +471,7 @@ enum EditorCompositionBuilder {
                 overlaySegments: overlayVideoSegments,
                 frameRate: frameRate,
                 renderSize: renderSize,
+                canvasSettings: canvasSettings,
                 animationTool: animationTool
             )
         }()
@@ -491,6 +493,138 @@ enum EditorCompositionBuilder {
         )
     }
 
+    private static func applyVolumeAutomation(
+        to parameters: AVMutableAudioMixInputParameters,
+        timeRange: CMTimeRange,
+        baseVolume: Float,
+        keyframes: EditorKeyframeTracks,
+        fadeIn: TimeInterval = 0,
+        fadeOut: TimeInterval = 0
+    ) {
+        let duration = max(0, timeRange.duration.seconds)
+        guard duration > 0 else { return }
+        let volumeTrack = keyframes.track(for: .volume)
+        let hasAutomation = !volumeTrack.isEmpty || fadeIn > 0 || fadeOut > 0
+        guard hasAutomation else {
+            parameters.setVolume(baseVolume, at: timeRange.start)
+            return
+        }
+
+        let sampleCount = min(600, max(1, Int(ceil(duration * 12))))
+        func value(at localTime: TimeInterval) -> Float {
+            let automated = volumeTrack.value(
+                at: localTime,
+                default: Double(baseVolume)
+            )
+            let fadeInGain = fadeIn > 0 ? min(max(localTime / fadeIn, 0), 1) : 1
+            let remaining = duration - localTime
+            let fadeOutGain = fadeOut > 0 ? min(max(remaining / fadeOut, 0), 1) : 1
+            return Float(min(max(automated * fadeInGain * fadeOutGain, 0), 1))
+        }
+
+        for index in 0..<sampleCount {
+            let startLocal = duration * Double(index) / Double(sampleCount)
+            let endLocal = duration * Double(index + 1) / Double(sampleCount)
+            let range = CMTimeRange(
+                start: timeRange.start + CMTime(seconds: startLocal, preferredTimescale: timescale),
+                duration: CMTime(seconds: endLocal - startLocal, preferredTimescale: timescale)
+            )
+            parameters.setVolumeRamp(
+                fromStartVolume: value(at: startLocal),
+                toEndVolume: value(at: endLocal),
+                timeRange: range
+            )
+        }
+    }
+
+    private static func addTextAnimations(
+        to layer: CALayer,
+        overlay: EditorTextOverlay,
+        totalDuration: TimeInterval,
+        renderSize: CGSize
+    ) {
+        guard totalDuration > 0 else { return }
+        let sampleCount = min(1_800, max(2, Int(ceil(totalDuration * 30))))
+        var keyTimes: [NSNumber] = []
+        var opacities: [NSNumber] = []
+        var transforms: [NSValue] = []
+        let screenScale = renderSize.width / max(UIScreen.main.bounds.width, 1)
+
+        for index in 0...sampleCount {
+            let globalTime = totalDuration * Double(index) / Double(sampleCount)
+            let localTime = min(max(0, globalTime - overlay.startTime), overlay.duration)
+            let visible = globalTime >= overlay.startTime && globalTime < overlay.endTime
+            let opacity = visible
+                ? overlay.keyframes.value(
+                    for: .opacity,
+                    at: localTime,
+                    default: overlay.opacity
+                )
+                : 0
+            let x = overlay.keyframes.value(
+                for: .textPositionX,
+                at: localTime,
+                default: Double(overlay.xOffset)
+            )
+            let y = overlay.keyframes.value(
+                for: .textPositionY,
+                at: localTime,
+                default: Double(overlay.yOffset)
+            )
+            let scale = overlay.keyframes.value(
+                for: .textScale,
+                at: localTime,
+                default: 1
+            )
+            let rotation = overlay.keyframes.value(
+                for: .textRotation,
+                at: localTime,
+                default: 0
+            )
+            var transform = CATransform3DMakeTranslation(
+                CGFloat(x - Double(overlay.xOffset)) * screenScale,
+                CGFloat(y - Double(overlay.yOffset)) * screenScale,
+                0
+            )
+            transform = CATransform3DScale(transform, CGFloat(scale), CGFloat(scale), 1)
+            transform = CATransform3DRotate(
+                transform,
+                CGFloat(rotation * .pi / 180),
+                0,
+                0,
+                1
+            )
+
+            keyTimes.append(NSNumber(value: Double(index) / Double(sampleCount)))
+            opacities.append(NSNumber(value: opacity))
+            transforms.append(NSValue(caTransform3D: transform))
+        }
+
+        let opacityAnimation = CAKeyframeAnimation(keyPath: "opacity")
+        opacityAnimation.values = opacities
+        opacityAnimation.keyTimes = keyTimes
+        opacityAnimation.calculationMode = .linear
+        configureTextAnimation(opacityAnimation, duration: totalDuration)
+        layer.add(opacityAnimation, forKey: "keyframedOpacity")
+
+        let transformAnimation = CAKeyframeAnimation(keyPath: "transform")
+        transformAnimation.values = transforms
+        transformAnimation.keyTimes = keyTimes
+        transformAnimation.calculationMode = .linear
+        configureTextAnimation(transformAnimation, duration: totalDuration)
+        layer.add(transformAnimation, forKey: "keyframedTransform")
+    }
+
+    private static func configureTextAnimation(
+        _ animation: CAPropertyAnimation,
+        duration: TimeInterval
+    ) {
+        animation.duration = duration
+        animation.beginTime = AVCoreAnimationBeginTimeAtZero
+        animation.isRemovedOnCompletion = false
+        animation.fillMode = .forwards
+    }
+
     /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
     static func makePlayerItem(
         from clips: [EditorClip],
@@ -499,7 +633,8 @@ enum EditorCompositionBuilder {
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
-        closingTransitionDuration: TimeInterval = 0
+        closingTransitionDuration: TimeInterval = 0,
+        canvasSettings: EditorCanvasSettings = .default
     ) async -> AVPlayerItem? {
         guard let built = await build(
             from: clips,
@@ -508,7 +643,9 @@ enum EditorCompositionBuilder {
             openingTransitionKind: openingTransitionKind,
             openingTransitionDuration: openingTransitionDuration,
             closingTransitionKind: closingTransitionKind,
-            closingTransitionDuration: closingTransitionDuration
+            closingTransitionDuration: closingTransitionDuration,
+            canvasSettings: canvasSettings,
+            canvasSize: canvasSettings.renderSize(longEdge: 1920)
         ) else { return nil }
 
         let item = await AVPlayerItem(asset: built.composition)
@@ -550,6 +687,7 @@ enum EditorCompositionBuilder {
                 timeRange: holdRange,
                 transform: last.transform,
                 colorAdjustment: last.colorAdjustment,
+                animation: nil,
                 transitionIn: .none,
                 transitionOut: .none,
                 fadeInDuration: 0,
@@ -587,6 +725,7 @@ enum EditorCompositionBuilder {
             timeRange: timeRange,
             transform: transform,
             colorAdjustment: clips[clipIndex].colorAdjustment,
+            animation: renderAnimation(for: clips[clipIndex]),
             transitionIn: transitionIn,
             transitionOut: transitionOut,
             fadeInDuration: clipIndex == 0
@@ -607,6 +746,7 @@ enum EditorCompositionBuilder {
         overlaySegments: [OverlayVideoSegment],
         frameRate: Int32,
         renderSize: CGSize,
+        canvasSettings: EditorCanvasSettings,
         animationTool: AVVideoCompositionCoreAnimationTool? = nil
     ) -> AVVideoComposition {
         let frameDuration = CMTime(value: 1, timescale: frameRate)
@@ -620,7 +760,10 @@ enum EditorCompositionBuilder {
             !$0.colorAdjustment.isNeutral
                 || $0.transitionIn.usesGPUCompositor
                 || $0.transitionOut.usesGPUCompositor
-        }
+                || $0.animation?.hasVisualAnimation == true
+        } || overlaySegments.contains {
+            $0.animation?.hasVisualAnimation == true
+        } || canvasSettings.backgroundKind == .blur
         if needsGPUCompositor {
             composition.customVideoCompositorClass = EditorTransitionCompositor.self
             composition.instructions = segments.map { segment in
@@ -639,10 +782,12 @@ enum EditorCompositionBuilder {
                             trackID: $0.track.trackID,
                             timeRange: $0.timeRange,
                             transform: $0.transform,
-                            opacity: $0.opacity
+                            opacity: $0.opacity,
+                            animation: $0.animation
                         )
                     },
                     baseTransform: segment.transform,
+                    animation: segment.animation,
                     colorAdjustment: segment.colorAdjustment,
                     incomingKind: segment.transitionIn,
                     outgoingKind: segment.transitionOut,
@@ -661,6 +806,7 @@ enum EditorCompositionBuilder {
                         entering: false
                     ),
                     renderSize: renderSize,
+                    canvasBackgroundKind: canvasSettings.backgroundKind,
                     enablePostProcessing: animationTool != nil
                 )
             }
@@ -763,6 +909,34 @@ enum EditorCompositionBuilder {
             ty: (1 - scale) * renderSize.height / 2 + clip.yOffset * renderSize.height
         )
         return base.concatenating(destinationTransform)
+    }
+
+    private static func renderAnimation(for clip: EditorClip) -> EditorRenderKeyframeAnimation? {
+        guard !clip.keyframes.isEmpty else { return nil }
+        return EditorRenderKeyframeAnimation(
+            tracks: clip.keyframes,
+            basePositionX: Double(clip.reframeXOffset),
+            basePositionY: Double(clip.reframeYOffset),
+            baseScale: Double(clip.reframeScale),
+            baseRotation: clip.straightenDegrees,
+            baseOpacity: 1,
+            baseFilterIntensity: clip.colorAdjustment.presetIntensity
+        )
+    }
+
+    private static func renderAnimation(
+        for clip: EditorOverlayClip
+    ) -> EditorRenderKeyframeAnimation? {
+        guard !clip.keyframes.isEmpty else { return nil }
+        return EditorRenderKeyframeAnimation(
+            tracks: clip.keyframes,
+            basePositionX: Double(clip.xOffset),
+            basePositionY: Double(clip.yOffset),
+            baseScale: Double(clip.scale),
+            baseRotation: 0,
+            baseOpacity: clip.opacity,
+            baseFilterIntensity: 1
+        )
     }
 
     private static func transitionMotionCurve(
@@ -961,19 +1135,34 @@ enum EditorCompositionBuilder {
         in composition: AVMutableComposition,
         duration: CMTime,
         renderSize: CGSize,
+        canvasSettings: EditorCanvasSettings,
         needsWhite: Bool
     ) async -> BackgroundVideoTracks {
         guard duration.seconds > 0 else {
             return BackgroundVideoTracks(black: nil, white: nil)
         }
 
-        let black = await insertSolidVideoTrack(
-            color: .black,
-            colorKey: "black",
-            in: composition,
-            duration: duration,
-            renderSize: renderSize
+        let primaryColor = UIColor(
+            red: CGFloat((canvasSettings.backgroundColorRGB >> 16) & 0xff) / 255,
+            green: CGFloat((canvasSettings.backgroundColorRGB >> 8) & 0xff) / 255,
+            blue: CGFloat(canvasSettings.backgroundColorRGB & 0xff) / 255,
+            alpha: 1
         )
+        let primary: AVMutableCompositionTrack?
+        if canvasSettings.backgroundKind == .image,
+           let path = canvasSettings.backgroundImagePath {
+            primary = await insertCanvasImageTrack(
+                path: path, in: composition, duration: duration, renderSize: renderSize
+            )
+        } else {
+            primary = await insertSolidVideoTrack(
+                color: primaryColor,
+                colorKey: String(format: "canvas-%06x", canvasSettings.backgroundColorRGB),
+                in: composition,
+                duration: duration,
+                renderSize: renderSize
+            )
+        }
         let white: AVMutableCompositionTrack?
         if needsWhite {
             white = await insertSolidVideoTrack(
@@ -986,7 +1175,7 @@ enum EditorCompositionBuilder {
         } else {
             white = nil
         }
-        return BackgroundVideoTracks(black: black, white: white)
+        return BackgroundVideoTracks(black: primary, white: white)
     }
 
     private static func insertSolidVideoTrack(
@@ -1015,6 +1204,31 @@ enum EditorCompositionBuilder {
         do {
             try track.insertTimeRange(sourceRange, of: sourceTrack, at: .zero)
             track.scaleTimeRange(sourceRange, toDuration: duration)
+            return track
+        } catch {
+            composition.removeTrack(track)
+            return nil
+        }
+    }
+
+    private static func insertCanvasImageTrack(
+        path: String,
+        in composition: AVMutableComposition,
+        duration: CMTime,
+        renderSize: CGSize
+    ) async -> AVMutableCompositionTrack? {
+        guard let image = UIImage(contentsOfFile: path),
+              let url = await canvasImageVideoURL(image: image, path: path, renderSize: renderSize),
+              let track = composition.addMutableTrack(
+                withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
+              ) else { return nil }
+        let asset = AVURLAsset(url: url)
+        guard let source = try? await asset.loadTracks(withMediaType: .video).first,
+              let sourceDuration = try? await asset.load(.duration) else { return nil }
+        let range = CMTimeRange(start: .zero, duration: sourceDuration)
+        do {
+            try track.insertTimeRange(range, of: source, at: .zero)
+            track.scaleTimeRange(range, toDuration: duration)
             return track
         } catch {
             composition.removeTrack(track)
@@ -1612,6 +1826,68 @@ enum EditorCompositionBuilder {
             solidVideoCache[key] = completedURL
         }
         return completedURL
+    }
+
+    private static func canvasImageVideoURL(
+        image: UIImage,
+        path: String,
+        renderSize: CGSize
+    ) async -> URL? {
+        let width = max(2, Int(renderSize.width.rounded()) / 2 * 2)
+        let height = max(2, Int(renderSize.height.rounded()) / 2 * 2)
+        let key = "\(path)-\(width)x\(height)"
+        if let cached = canvasImageVideoCache[key], FileManager.default.fileExists(atPath: cached.path) {
+            return cached
+        }
+
+        let size = CGSize(width: width, height: height)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            UIColor.black.setFill(); UIBezierPath(rect: CGRect(origin: .zero, size: size)).fill()
+            let scale = max(size.width / max(image.size.width, 1), size.height / max(image.size.height, 1))
+            let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            image.draw(in: CGRect(
+                x: (size.width - drawSize.width) / 2,
+                y: (size.height - drawSize.height) / 2,
+                width: drawSize.width,
+                height: drawSize.height
+            ))
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mixtape-canvas-\(UUID().uuidString).mov")
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else { return nil }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height
+            ]
+        )
+        guard writer.canAdd(input) else { return nil }
+        writer.add(input)
+        guard writer.startWriting() else { return nil }
+        writer.startSession(atSourceTime: .zero)
+        guard let buffer = pixelBuffer(from: rendered, width: width, height: height) else {
+            writer.cancelWriting(); return nil
+        }
+        let didAppend = adaptor.append(buffer, withPresentationTime: .zero)
+        input.markAsFinished()
+        writer.endSession(atSourceTime: CMTime(seconds: 1, preferredTimescale: timescale))
+        let result: URL? = await withCheckedContinuation { continuation in
+            writer.finishWriting {
+                let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                continuation.resume(returning: didAppend && (bytes ?? 0) > 0 ? url : nil)
+            }
+        }
+        if let result { canvasImageVideoCache[key] = result }
+        return result
     }
 
     private static func solidColorPixelBuffer(

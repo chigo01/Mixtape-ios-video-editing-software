@@ -120,7 +120,7 @@ EditorScreen
 └── EditorAudioActionBar     ← when an audio clip is selected: split, volume, delete
 
 VolumeToolPanel              ← bottom sheet when VOLUME tool active (primary, overlay, or audio)
-ColorAdjustmentToolPanel     ← Filters/Adjust/HSL/Curves/Wheels/Scopes with live GPU preview
+ColorAdjustmentToolPanel     ← Filters/Adjust/HSL/Curves/Wheels/Masks/Scopes with live GPU preview
 OverlayOpacityToolPanel      ← bottom sheet for selected-overlay transparency
 TextOverlayEditorSheet       ← bottom sheet (styles, fonts, position); live-syncs to preview
 AudioPickerView              ← sheet to import MP3/M4A etc. onto the audio lane
@@ -452,6 +452,8 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `Services/EditorTransitionCompositor.swift` | Metal-backed custom compositor; invokes color grading, transitions, and overlay composition. |
 | `Services/EditorColorGradeRenderer.swift` | Core Image primary controls, 40 filter recipes, cached 3D LUT HSL/RGB-curves/wheels, detail and grain effects. |
 | `Services/EditorColorScopeAnalyzer.swift` | Downsampled post-grade pixel analysis for waveform, parade, vectorscope, histogram, and clipping percentages. |
+| `Services/EditorFaceMaskDetector.swift` | Vision-assisted face detection that creates editable power-window suggestions from the current composed program frame. |
+| `Services/EditorColorMaskTracker.swift` | Bidirectional Vision object tracking that samples clip-relative power-window motion for preview and export. |
 | `Services/EditorExportService.swift` | Explicit `AVAssetReader`/`AVAssetWriter` encoding with bitrate/HDR settings, progress/cancel, sanitized project-title filename, and Photos save. |
 | `Services/EditorTextOverlayRenderer.swift` | SwiftUI text → `UIImage` for export (`ImageRenderer` + off-screen fallback). |
 | `Services/EditorUndoManager.swift` | Snapshot undo/redo stack. |
@@ -463,6 +465,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/ColorAdjustmentToolPanel.swift` | Categorized filter browser plus primary, HSL, curves, lift/gamma/gain/offset, and scope workspaces. |
 | `View/Components/ColorGradeControls.swift` | Reusable interactive tone-curve graph and DaVinci-style color-wheel controls. |
 | `View/Components/ColorScopeViews.swift` | SwiftUI Canvas scope plots, vectorscope guides, and shadow/highlight clipping readouts. |
+| `View/Components/ColorMaskControls.swift` | Resolve-inspired power windows drawn directly over the program preview, including draggable polygon vertices. |
 | `View/Components/AudioPickerView.swift` | Document picker for background music import. |
 | `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected. |
 | `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
@@ -695,6 +698,12 @@ Use this as a map of **what we built** and **why**, in learning order:
 - The grade is non-destructive and stored per clip. Splits inherit it; reset, copy, paste, Apply all, undo, autosave, reopen, preview, and export all use the same `EditorColorAdjustment` contract.
 - Primary controls and filter recipes stay in Core Image. Selective HSL, master/R/G/B curves, and four tonal wheels are fused into a cached 24³ color cube so advanced grades do not become a long per-frame filter chain.
 - The Offset wheel applies a global chroma/luminance bias after Lift/Gamma/Gain. Vibrance protects already-saturated colors; Dehaze uses restrained large-radius local contrast plus saturation/contrast compensation.
+- Up to eight secondary color masks can be stored per clip. Face, ellipse, rectangle, linear-gradient, and 3–12 point polygon windows support canvas-normalized geometry, feather, opacity, enable/bypass, inversion, reset, deletion, and a guide-only Hide/Show overlay control that never bypasses the local correction.
+- Each mask has an independent local grade: Exposure, Brightness, Contrast, Saturation, Vibrance, Temperature, Tint, Hue, and skin-focused Smoothness. Masks are applied sequentially after the base grade through Core Image mattes and `CIBlendWithMask`, so preview and export are identical.
+- Masks can be tracked forward or backward from the current playhead. Vision follows the selected subject at a mobile-conscious adaptive sample rate; normalized motion samples are persisted with the clip and smoothly interpolated on every preview/export frame. Tracking can be cancelled or cleared without deleting the window or its local grade.
+- Power windows are manipulated on the actual editor preview: drag to position, pinch to resize, rotate from the sheet, or drag individual polygon vertices around an arbitrary object. Window mattes are applied after the clip-to-canvas transform so the UI, preview, and export share exactly the same coordinates.
+- Detect faces samples the current composed program frame, runs Apple Vision off the main thread, expands each detection into a natural portrait ellipse, and places it on that same preview frame.
+- Tracking is bounding-box based and intentionally stops when confidence becomes unreliable. Heavy occlusion, extreme motion blur, scene cuts, or a mask with too little visual detail may require restarting from a clearer frame. Manual correction keyframes and planar/perspective tracking remain future work.
 - Scopes are monitoring-only. They analyze a maximum-256-pixel selected-clip frame off the main thread, then draw with SwiftUI Canvas. This keeps scope work out of the playback/export graph and avoids retaining full-resolution frame buffers.
 - Waveform plots Rec.709 luma by horizontal image position. RGB parade plots each channel independently. The vectorscope uses Rec.709 chroma projection with neutral, saturation, and skin-tone guides. Histogram overlays luma and RGB distributions.
 - Source/Graded toggles make clipping introduced by the grade easy to isolate. Shadow and highlight percentages are explicit measurements from the analyzed frame.
@@ -722,30 +731,45 @@ through project save/reopen, and has reasonable device-performance coverage.
 | **Video overlays** | Picture-in-picture video with trim/move/split/delete, preview drag/pinch transforms, audio, undo, persistence, and standard/GPU export parity. |
 | **Projects** | Autosaved JSON projects, resume, home rename, delete confirmation, PhotoKit rehydration, and modified-date ordering. |
 | **Export** | Preview, project filename, 720p/1080p/4K, 24–120 fps, bitrate tiers, MP4/MOV, optional HDR/HEVC, progress, cancellation, Photos, and Share. |
-| **Color** | 40 looks in seven categories; 20 primary controls; eight-band HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; waveform, RGB parade, vectorscope, and histogram monitoring; reset/copy/paste/apply-to-all, undo, backward-compatible persistence, and GPU preview/export parity. |
+| **Color** | 40 looks in seven categories; 20 primary controls; eight-band HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; up to eight face/manual secondary masks with independent skin/local corrections, clean-view overlay hiding, and bidirectional subject tracking; waveform, RGB parade, vectorscope, and histogram monitoring; reset/copy/paste/apply-to-all, undo, backward-compatible persistence, and GPU preview/export parity. |
 | **Rendering safety** | Orientation normalization, SDR GPU working space, and encoded black/white backing tracks that prevent green or uninitialized export frames. |
+| **Keyframes** | Reusable local-time scalar tracks with hold, linear, easing, and custom cubic Bézier curves; contextual graph editing for clip, overlay, audio, and text animation; undo, persistence, split handling, and shared preview/export sampling. |
 
 ### Phase 1 — complete the core editing toolkit
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 1 | **Color and filters — complete** | 40 categorized filters and intensity; 20 primary adjustments including Vibrance and Dehaze; selective HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; four professional scopes with clipping readouts and Source/Graded comparison; reset/copy/paste/apply-to-all; undo/persistence; identical GPU preview/export. |
+| 1 | **Color and filters — complete** | 40 categorized filters and intensity; 20 primary adjustments including Vibrance and Dehaze; selective HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; direct-preview Vision face, ellipse, rectangle, linear, and polygon power windows with independent local/skin corrections, overlay hiding, and forward/backward tracking; four professional scopes with clipping readouts and Source/Graded comparison; reset/copy/paste/apply-to-all; undo/persistence; identical GPU preview/export. |
 | 2 | **Crop and reframe — complete** | Per-clip crop, rotate, flip, scale, position, straighten, Original/9:16/16:9/1:1/4:5 presets, optional safe-area/rule-of-thirds guides, and Fit/Fill background framing. Preview, undo, persistence, reopen, GPU transitions, and export use the same transform. |
-| 3 | **Canvas formats** | 9:16, 16:9, 1:1, 4:5, and custom sizes with blur/color/image backgrounds and project-level persistence. |
-| 4 | **Timeline snapping** | Magnetic playhead and clip/overlay edge snapping, visible guides, zoom-aware thresholds, and haptic feedback. |
-| 5 | **Duplicate and replace** | Duplicate video/audio/text; replace a clip while preserving compatible trim, timing, transform, filters, and transitions. |
-| 6 | **Export range** | In/out markers, selected-range export, range duration/size estimate, and correct audio/text trimming. |
+| 3 | **Canvas formats — complete** | 9:16, 16:9, 1:1, 4:5, and encoder-safe custom pixel sizes; color, GPU-blurred, and app-owned image backgrounds; project persistence, undo, preview, and export parity. |
+| 4 | **Timeline snapping — complete** | Magnetic playhead and movable audio/text/video-overlay edges snap to all meaningful timeline edges and range markers using a point-based, zoom-aware threshold, with visible guides and latched haptic feedback. |
+| 5 | **Duplicate and replace — complete** | Video, audio, and text duplication creates independent timeline items in one undoable operation. Video/photo replacement retains compatible trim span, speed, volume, crop/reframe transform, color grade, and transitions. |
+| 6 | **Export range — complete** | Persistent, undoable In/Out markers appear on the timeline; the export screen reports selected duration and bitrate-based size; AVAssetReader crops the composed video, mixed audio, overlays, and timed text to the exact selected range. |
 
 ### Phase 2 — motion and advanced compositing
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 7 | **Keyframe engine** | A reusable time/value model and curve editor for transform, opacity, volume, crop, filters, text, and effects. |
+| 7 | **Keyframe engine — complete** | Reusable local-time scalar tracks and a graph/curve editor cover transform, opacity, volume, crop/reframe, filter intensity, text motion, and effect parameters. Hold, linear, ease-in, ease-out, ease-in/out, and editable cubic Bézier segments share one deterministic sampler. Clip/overlay GPU rendering, audio mix ramps, SwiftUI text preview, offline text burn-in, split/duplicate/replace, undo, autosave, reopen, and export consume the same persisted tracks. |
 | 8 | **Speed ramps** | Multiple speed points, curve presets, source/timeline remapping, pitch options, and transition-safe rendering. |
 | 9 | **Reverse and freeze frame** | Cached reverse media generation, cancellable progress, freeze insertion, audio policy, and project relinking. |
-| 10 | **Multi-layer video** | Additional video/overlay tracks with z-order, independent trim/move, opacity, transforms, and audio handling. |
-| 11 | **Blend, mask, and chroma key** | Blend modes, shape/feather/invert masks, green-screen keying, spill suppression, and GPU export parity. |
-| 12 | **Stabilization and motion tracking** | Vision-based subject/point tracking, transform smoothing, tracked text/stickers, and adjustable stabilization crop. |
+| 10 | **Multi-layer video — complete** | Multiple video-overlay tracks render in a persistent back-to-front stack. Each layer has independent trim/move, opacity, transforms, keyframes, and audio controls; contextual Send Back/Bring Front actions are undoable and export matches preview ordering. |
+| 11 | **Blend, mask, and chroma key** | Per-clip color masks, local corrections, bidirectional tracked motion samples, interpolation, and GPU export parity are complete. Remaining: manual tracking-correction keyframes, overlay/effect masks, blend modes, green-screen keying, and spill suppression. |
+| 12 | **Stabilization and motion tracking** | Color-mask subject tracking is complete. Remaining: reusable point/planar tracking, transform smoothing, tracked text/stickers, and adjustable stabilization crop. |
+
+#### Keyframe engine
+
+- **Model:** `EditorKeyframe`, `EditorKeyframeCurve`, `EditorKeyframeTrack`, and `EditorKeyframeTracks` store item-local seconds, scalar values, and each point's outgoing curve. Complex transforms are composed from reusable position, scale, rotation, crop, and opacity channels.
+- **Editor:** contextual **KEYFRAME** actions open one graph editor for primary clips, video overlays, imported audio, and text. Dragging the graph scrubs the playhead and magnetically snaps to nearby diamonds without changing values; previous/next buttons jump between points. Values change only through the slider or numeric field. Points can be added, selected, deleted, and assigned preset or custom cubic Bézier curves, with undo/redo available inside the sheet.
+- **Rendering:** the transition compositor samples clip and overlay transform/opacity/filter tracks per frame; `AVAudioMix` receives sampled volume ramps; text uses the same tracks in live SwiftUI preview and offline Core Animation burn-in.
+- **Project integrity:** keyframes participate in value equality, snapshot undo/redo, composition fingerprints, autosave, backward-compatible decoding, duplication/replacement, and split operations. Projects created before Priority 7 decode with empty tracks.
+
+#### Multi-layer video
+
+- **Layer model:** every video-overlay lane owns a persistent `zIndex`. Older projects derive their initial stack from lane order, while split clips remain on the same logical layer and newly imported overlays start at the front.
+- **Editing:** expanded overlay rows retain independent trim and timeline movement. The contextual action bar exposes **SEND BACK** and **BRING FRONT**, disables impossible moves, and records each reorder in the shared undo/redo history.
+- **Rendering:** the composition builder sorts overlay lanes back-to-front before creating render segments and audio tracks. Both the GPU compositor and standard AVFoundation fallback consume that deterministic order, keeping preview and export consistent.
+- **Project integrity:** layer order is included in saved project data, clip equality, composition invalidation fingerprints, autosave, and backward-compatible decoding.
 
 ### Phase 3 — professional audio
 

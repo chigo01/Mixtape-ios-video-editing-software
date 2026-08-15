@@ -17,11 +17,15 @@ enum EditorTool: String, CaseIterable, Identifiable {
     case text
     case overlay
     case opacity
+    case canvas
+    case keyframe
 
     var id: String { rawValue }
 
     static var mainTools: [EditorTool] {
-        allCases.filter { $0 != .duration && $0 != .opacity && $0 != .filter }
+        allCases.filter {
+            $0 != .duration && $0 != .opacity && $0 != .filter && $0 != .keyframe
+        }
     }
 
     var title: String {
@@ -35,6 +39,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .text: return "TEXT"
         case .overlay: return "OVERLAY"
         case .opacity: return "OPACITY"
+        case .canvas: return "CANVAS"
+        case .keyframe: return "KEYFRAME"
         }
     }
 
@@ -49,6 +55,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .text: return "textformat"
         case .overlay: return "rectangle.on.rectangle"
         case .opacity: return "circle.lefthalf.filled"
+        case .canvas: return "rectangle.ratio.16.to.9"
+        case .keyframe: return "diamond.fill"
         }
     }
 }

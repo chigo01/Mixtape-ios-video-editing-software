@@ -45,7 +45,6 @@ struct EditorTextOverlayExportView: View {
         let baseText = Text(overlay.text)
             .font(overlay.resolvedFont())
             .multilineTextAlignment(overlay.horizontalAlignment.alignment)
-            .opacity(overlay.opacity)
 
         switch overlay.fontStyle {
         case .plain, .bold, .italic:

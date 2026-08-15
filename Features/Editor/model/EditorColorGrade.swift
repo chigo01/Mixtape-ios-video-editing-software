@@ -310,6 +310,191 @@ struct EditorColorWheels: Codable, Hashable {
     }
 }
 
+enum EditorColorMaskShape: String, Codable, CaseIterable, Identifiable {
+    case face
+    case ellipse
+    case rectangle
+    case linear
+    case polygon
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .face: return "Face"
+        case .ellipse: return "Ellipse"
+        case .rectangle: return "Rectangle"
+        case .linear: return "Gradient"
+        case .polygon: return "Polygon"
+        }
+    }
+}
+
+struct EditorColorMaskPoint: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var x: Double
+    var y: Double
+}
+
+/// A compact, clip-relative sample produced by the object tracker. Geometry uses
+/// the same normalized top-left coordinate space as the interactive power window.
+struct EditorColorMaskTrackingKeyframe: Codable, Hashable, Identifiable {
+    var progress: Double
+    var centerX: Double
+    var centerY: Double
+    var width: Double
+    var height: Double
+    var confidence: Double
+
+    var id: Double { progress }
+}
+
+/// A focused set of controls for secondary corrections inside a mask.
+/// Keeping this separate prevents recursive grades and makes the render order explicit.
+struct EditorMaskedColorAdjustment: Codable, Hashable {
+    var exposure: Double = 0
+    var brightness: Double = 0
+    var contrast: Double = 0
+    var saturation: Double = 0
+    var vibrance: Double = 0
+    var temperature: Double = 0
+    var tint: Double = 0
+    var hue: Double = 0
+    var smoothness: Double = 0
+
+    var isNeutral: Bool {
+        abs(exposure) < 0.0001
+            && abs(brightness) < 0.0001
+            && abs(contrast) < 0.0001
+            && abs(saturation) < 0.0001
+            && abs(vibrance) < 0.0001
+            && abs(temperature) < 0.0001
+            && abs(tint) < 0.0001
+            && abs(hue) < 0.0001
+            && abs(smoothness) < 0.0001
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case exposure, brightness, contrast, saturation, vibrance
+        case temperature, tint, hue, smoothness
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        exposure = try c.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+        brightness = try c.decodeIfPresent(Double.self, forKey: .brightness) ?? 0
+        contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 0
+        saturation = try c.decodeIfPresent(Double.self, forKey: .saturation) ?? 0
+        vibrance = try c.decodeIfPresent(Double.self, forKey: .vibrance) ?? 0
+        temperature = try c.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
+        tint = try c.decodeIfPresent(Double.self, forKey: .tint) ?? 0
+        hue = try c.decodeIfPresent(Double.self, forKey: .hue) ?? 0
+        smoothness = try c.decodeIfPresent(Double.self, forKey: .smoothness) ?? 0
+    }
+}
+
+struct EditorColorMask: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var name: String
+    var shape: EditorColorMaskShape
+    /// Geometry is normalized in top-left image coordinates.
+    var centerX: Double = 0.5
+    var centerY: Double = 0.5
+    var width: Double = 0.45
+    var height: Double = 0.45
+    var rotation: Double = 0
+    var feather: Double = 0.25
+    var opacity: Double = 1
+    var isInverted = false
+    var isEnabled = true
+    var adjustment = EditorMaskedColorAdjustment()
+    var points: [EditorColorMaskPoint] = []
+    var trackingKeyframes: [EditorColorMaskTrackingKeyframe] = []
+
+    init(name: String, shape: EditorColorMaskShape) {
+        self.name = name
+        self.shape = shape
+        if shape == .polygon {
+            points = [
+                EditorColorMaskPoint(x: 0.32, y: 0.32),
+                EditorColorMaskPoint(x: 0.68, y: 0.32),
+                EditorColorMaskPoint(x: 0.72, y: 0.68),
+                EditorColorMaskPoint(x: 0.28, y: 0.68)
+            ]
+        }
+    }
+
+    var isEffective: Bool { isEnabled && opacity > 0.0001 && !adjustment.isNeutral }
+    var isTracked: Bool { trackingKeyframes.count > 1 }
+
+    /// Resolves sampled tracking into smooth per-frame geometry for preview/export.
+    func resolved(at clipProgress: Double) -> EditorColorMask {
+        let samples = trackingKeyframes.sorted { $0.progress < $1.progress }
+        guard let first = samples.first else { return self }
+        let progress = min(max(clipProgress, 0), 1)
+        let lower = samples.last(where: { $0.progress <= progress }) ?? first
+        let upper = samples.first(where: { $0.progress >= progress }) ?? samples.last ?? first
+        let span = max(upper.progress - lower.progress, 0.000_001)
+        let amount = min(max((progress - lower.progress) / span, 0), 1)
+        func blend(_ a: Double, _ b: Double) -> Double { a + (b - a) * amount }
+
+        var result = self
+        result.centerX = blend(lower.centerX, upper.centerX)
+        result.centerY = blend(lower.centerY, upper.centerY)
+        result.width = blend(lower.width, upper.width)
+        result.height = blend(lower.height, upper.height)
+
+        // Polygon vertices follow the tracked bounding box while preserving their
+        // authored shape. This gives freeform windows the same tracker as ellipses.
+        if shape == .polygon, !points.isEmpty {
+            let minX = points.map(\.x).min() ?? 0
+            let maxX = points.map(\.x).max() ?? 1
+            let minY = points.map(\.y).min() ?? 0
+            let maxY = points.map(\.y).max() ?? 1
+            let sourceWidth = max(maxX - minX, 0.000_001)
+            let sourceHeight = max(maxY - minY, 0.000_001)
+            let targetMinX = result.centerX - result.width / 2
+            let targetMinY = result.centerY - result.height / 2
+            result.points = points.map { point in
+                var transformed = point
+                transformed.x = targetMinX + ((point.x - minX) / sourceWidth) * result.width
+                transformed.y = targetMinY + ((point.y - minY) / sourceHeight) * result.height
+                return transformed
+            }
+        }
+        return result
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, shape, centerX, centerY, width, height, rotation
+        case feather, opacity, isInverted, isEnabled, adjustment, points, trackingKeyframes
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Mask"
+        shape = try c.decodeIfPresent(EditorColorMaskShape.self, forKey: .shape) ?? .ellipse
+        centerX = try c.decodeIfPresent(Double.self, forKey: .centerX) ?? 0.5
+        centerY = try c.decodeIfPresent(Double.self, forKey: .centerY) ?? 0.5
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 0.45
+        height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 0.45
+        rotation = try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+        feather = try c.decodeIfPresent(Double.self, forKey: .feather) ?? 0.25
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        isInverted = try c.decodeIfPresent(Bool.self, forKey: .isInverted) ?? false
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        adjustment = try c.decodeIfPresent(EditorMaskedColorAdjustment.self, forKey: .adjustment) ?? .init()
+        points = try c.decodeIfPresent([EditorColorMaskPoint].self, forKey: .points) ?? []
+        trackingKeyframes = try c.decodeIfPresent(
+            [EditorColorMaskTrackingKeyframe].self,
+            forKey: .trackingKeyframes
+        ) ?? []
+    }
+}
+
 /// All values are intentionally normalized so the UI and renderer share one stable contract.
 struct EditorColorAdjustment: Codable, Hashable {
     var preset: EditorFilterPreset = .original
@@ -336,6 +521,7 @@ struct EditorColorAdjustment: Codable, Hashable {
     var hsl = EditorHSLAdjustments()
     var curves = EditorToneCurves()
     var wheels = EditorColorWheels()
+    var masks: [EditorColorMask] = []
 
     static let neutral = EditorColorAdjustment()
 
@@ -363,13 +549,14 @@ struct EditorColorAdjustment: Codable, Hashable {
             && hsl.isNeutral
             && curves.isNeutral
             && wheels.isNeutral
+            && !masks.contains(where: \.isEffective)
     }
 
     private enum CodingKeys: String, CodingKey {
         case preset, presetIntensity, brightness, exposure, contrast, saturation, brilliance
         case vibrance, dehaze
         case highlights, shadows, whites, blacks, temperature, tint, hue, fade
-        case sharpness, clarity, grain, vignette, hsl, curves, wheels
+        case sharpness, clarity, grain, vignette, hsl, curves, wheels, masks
     }
 
     init() {}
@@ -400,5 +587,6 @@ struct EditorColorAdjustment: Codable, Hashable {
         hsl = try c.decodeIfPresent(EditorHSLAdjustments.self, forKey: .hsl) ?? .init()
         curves = try c.decodeIfPresent(EditorToneCurves.self, forKey: .curves) ?? .init()
         wheels = try c.decodeIfPresent(EditorColorWheels.self, forKey: .wheels) ?? .init()
+        masks = try c.decodeIfPresent([EditorColorMask].self, forKey: .masks) ?? []
     }
 }

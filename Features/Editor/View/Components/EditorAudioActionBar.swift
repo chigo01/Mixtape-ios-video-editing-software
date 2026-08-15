@@ -10,6 +10,8 @@ import SwiftUI
 enum EditorAudioAction: String, CaseIterable, Identifiable {
     case split
     case volume
+    case keyframe
+    case duplicate
     case delete
 
     var id: String { rawValue }
@@ -18,6 +20,8 @@ enum EditorAudioAction: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "SPLIT"
         case .volume: return "VOLUME"
+        case .keyframe: return "KEYFRAME"
+        case .duplicate: return "DUPLICATE"
         case .delete: return "DELETE"
         }
     }
@@ -26,6 +30,8 @@ enum EditorAudioAction: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "scissors"
         case .volume: return "speaker.wave.2.fill"
+        case .keyframe: return "diamond.fill"
+        case .duplicate: return "plus.square.on.square"
         case .delete: return "trash"
         }
     }
@@ -57,7 +63,8 @@ struct EditorAudioActionBar: View {
                     ForEach(EditorAudioAction.allCases) { action in
                         AudioActionButton(
                             action: action,
-                            isSelected: action == .volume && vm.selectedTool == .volume,
+                            isSelected: (action == .volume && vm.selectedTool == .volume)
+                                || (action == .keyframe && vm.selectedTool == .keyframe),
                             isDisabled: action == .delete && vm.selectedAudioClip == nil
                         ) {
                             withAnimation(.easeInOut(duration: 0.15)) {

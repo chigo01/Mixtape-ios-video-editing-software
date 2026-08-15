@@ -18,6 +18,11 @@ enum EditorColorGradeRenderer {
         cache.countLimit = 48
         return cache
     }()
+    private static let polygonMaskCache: NSCache<NSString, CIImage> = {
+        let cache = NSCache<NSString, CIImage>()
+        cache.countLimit = 32
+        return cache
+    }()
     #if canImport(UIKit)
     private static let thumbnailCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
@@ -186,7 +191,243 @@ enum EditorColorGradeRenderer {
                 ]
             )
         }
+        if grade.masks.contains(where: \.isEffective) {
+            image = applyMasks(grade.masks, to: image)
+        }
         return image
+    }
+
+    /// Base correction before canvas transforms. Power windows are deliberately
+    /// excluded so their normalized geometry can match the visible program frame.
+    static func applyBase(_ grade: EditorColorAdjustment, to source: CIImage) -> CIImage {
+        var base = grade
+        base.masks = []
+        return apply(base, to: source)
+    }
+
+    static func applyMasks(
+        _ masks: [EditorColorMask],
+        to source: CIImage,
+        clipProgress: Double? = nil
+    ) -> CIImage {
+        masks.filter(\.isEffective).reduce(source) { image, authoredMask in
+            let mask = clipProgress.map { authoredMask.resolved(at: $0) } ?? authoredMask
+            let corrected = applyLocalAdjustment(mask.adjustment, to: image)
+                .cropped(to: image.extent)
+            let matte = makeMaskImage(mask, extent: image.extent)
+            return corrected.applyingFilter(
+                "CIBlendWithMask",
+                parameters: [
+                    kCIInputBackgroundImageKey: image,
+                    kCIInputMaskImageKey: matte
+                ]
+            )
+            .cropped(to: image.extent)
+        }
+    }
+
+    private static func applyLocalAdjustment(
+        _ adjustment: EditorMaskedColorAdjustment,
+        to source: CIImage
+    ) -> CIImage {
+        var image = source
+        if abs(adjustment.exposure) > 0.0001 {
+            image = image.applyingFilter(
+                "CIExposureAdjust",
+                parameters: [kCIInputEVKey: adjustment.exposure * 2]
+            )
+        }
+        if abs(adjustment.brightness) > 0.0001
+            || abs(adjustment.contrast) > 0.0001
+            || abs(adjustment.saturation) > 0.0001 {
+            image = image.applyingFilter(
+                "CIColorControls",
+                parameters: [
+                    kCIInputBrightnessKey: adjustment.brightness * 0.30,
+                    kCIInputContrastKey: max(0.2, 1 + adjustment.contrast * 0.65),
+                    kCIInputSaturationKey: max(0, 1 + adjustment.saturation)
+                ]
+            )
+        }
+        if abs(adjustment.vibrance) > 0.0001 {
+            image = image.applyingFilter(
+                "CIVibrance",
+                parameters: ["inputAmount": adjustment.vibrance]
+            )
+        }
+        if abs(adjustment.temperature) > 0.0001 || abs(adjustment.tint) > 0.0001 {
+            image = image.applyingFilter(
+                "CITemperatureAndTint",
+                parameters: [
+                    "inputNeutral": CIVector(x: 6500, y: 0),
+                    "inputTargetNeutral": CIVector(
+                        x: 6500 - adjustment.temperature * 1800,
+                        y: adjustment.tint * 100
+                    )
+                ]
+            )
+        }
+        if abs(adjustment.hue) > 0.0001 {
+            image = image.applyingFilter(
+                "CIHueAdjust",
+                parameters: [kCIInputAngleKey: adjustment.hue * .pi]
+            )
+        }
+        if adjustment.smoothness > 0.0001 {
+            image = image.applyingFilter(
+                "CINoiseReduction",
+                parameters: [
+                    "inputNoiseLevel": adjustment.smoothness * 0.05,
+                    "inputSharpness": max(0, 0.35 - adjustment.smoothness * 0.28)
+                ]
+            )
+        }
+        return image
+    }
+
+    private static func makeMaskImage(
+        _ mask: EditorColorMask,
+        extent: CGRect
+    ) -> CIImage {
+        let center = CGPoint(
+            x: extent.minX + extent.width * mask.centerX,
+            y: extent.maxY - extent.height * mask.centerY
+        )
+        let radiusX = max(extent.width * mask.width * 0.5, 1)
+        let radiusY = max(extent.height * mask.height * 0.5, 1)
+        let feather = min(max(mask.feather, 0), 1)
+        let white = CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let black = CIColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let blackBackground = CIImage(color: black).cropped(to: extent)
+        let matte: CIImage
+
+        switch mask.shape {
+        case .face, .ellipse:
+            let innerRadius = max(0.02, 1 - feather)
+            let radial = CIFilter(
+                name: "CIRadialGradient",
+                parameters: [
+                    "inputCenter": CIVector(x: 0, y: 0),
+                    "inputRadius0": innerRadius,
+                    "inputRadius1": 1.0,
+                    "inputColor0": white,
+                    "inputColor1": black
+                ]
+            )?.outputImage ?? blackBackground
+            matte = radial
+                .transformed(by: CGAffineTransform(scaleX: radiusX, y: radiusY))
+                .transformed(by: CGAffineTransform(rotationAngle: mask.rotation * .pi))
+                .transformed(by: CGAffineTransform(translationX: center.x, y: center.y))
+                .cropped(to: extent)
+
+        case .rectangle:
+            let rect = CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
+            var shape = CIImage(color: white)
+                .cropped(to: rect)
+                .transformed(by: CGAffineTransform(rotationAngle: mask.rotation * .pi))
+                .transformed(by: CGAffineTransform(translationX: center.x, y: center.y))
+            if feather > 0.0001 {
+                shape = shape.applyingFilter(
+                    "CIGaussianBlur",
+                    parameters: [kCIInputRadiusKey: feather * min(radiusX, radiusY) * 0.5]
+                )
+            }
+            matte = shape.composited(over: blackBackground).cropped(to: extent)
+
+        case .linear:
+            let angle = mask.rotation * .pi
+            let direction = CGVector(dx: cos(angle), dy: sin(angle))
+            let transition = max(8, min(extent.width, extent.height) * max(mask.feather, 0.04) * 0.5)
+            matte = CIFilter(
+                name: "CILinearGradient",
+                parameters: [
+                    "inputPoint0": CIVector(
+                        x: center.x - direction.dx * transition,
+                        y: center.y - direction.dy * transition
+                    ),
+                    "inputPoint1": CIVector(
+                        x: center.x + direction.dx * transition,
+                        y: center.y + direction.dy * transition
+                    ),
+                    "inputColor0": white,
+                    "inputColor1": black
+                ]
+            )?.outputImage?.cropped(to: extent) ?? blackBackground
+
+        case .polygon:
+            matte = makePolygonMask(mask, extent: extent, background: blackBackground)
+        }
+
+        var result = mask.isInverted
+            ? matte.applyingFilter("CIColorInvert")
+            : matte
+        if mask.opacity < 0.9999 {
+            let amount = min(max(mask.opacity, 0), 1)
+            result = result.applyingFilter(
+                "CIColorMatrix",
+                parameters: [
+                    "inputRVector": CIVector(x: amount, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: amount, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: amount, w: 0)
+                ]
+            )
+        }
+        return result.cropped(to: extent)
+    }
+
+    private static func makePolygonMask(
+        _ mask: EditorColorMask,
+        extent: CGRect,
+        background: CIImage
+    ) -> CIImage {
+        guard mask.points.count >= 3 else { return background }
+        var hasher = Hasher()
+        hasher.combine(mask.points)
+        hasher.combine(mask.feather)
+        hasher.combine(Int(extent.width.rounded()))
+        hasher.combine(Int(extent.height.rounded()))
+        let cacheKey = String(hasher.finalize()) as NSString
+        if let cached = polygonMaskCache.object(forKey: cacheKey) { return cached }
+        let width = max(Int(extent.width.rounded(.up)), 1)
+        let height = max(Int(extent.height.rounded(.up)), 1)
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return background }
+
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let path = CGMutablePath()
+        for (index, point) in mask.points.enumerated() {
+            let destination = CGPoint(
+                x: min(max(point.x, 0), 1) * Double(width),
+                y: (1 - min(max(point.y, 0), 1)) * Double(height)
+            )
+            if index == 0 { path.move(to: destination) } else { path.addLine(to: destination) }
+        }
+        path.closeSubpath()
+        context.addPath(path)
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fillPath()
+        guard let cgImage = context.makeImage() else { return background }
+        var result = CIImage(cgImage: cgImage)
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+        if mask.feather > 0.0001 {
+            result = result.applyingFilter(
+                "CIGaussianBlur",
+                parameters: [
+                    kCIInputRadiusKey: mask.feather * min(extent.width, extent.height) * 0.08
+                ]
+            )
+        }
+        let cropped = result.cropped(to: extent)
+        polygonMaskCache.setObject(cropped, forKey: cacheKey)
+        return cropped
     }
 
     private static func applyPreset(

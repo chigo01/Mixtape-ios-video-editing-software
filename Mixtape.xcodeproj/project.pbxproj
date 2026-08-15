@@ -53,6 +53,11 @@
 		C010C004A15C010000000004 /* ColorGradeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D004A15C010000000004 /* ColorGradeControls.swift */; };
 		C010C005A15C010000000005 /* EditorColorScopeAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */; };
 		C010C006A15C010000000006 /* ColorScopeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D006A15C010000000006 /* ColorScopeViews.swift */; };
+		C010C007A15C010000000007 /* EditorFaceMaskDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D007A15C010000000007 /* EditorFaceMaskDetector.swift */; };
+		C010C008A15C010000000008 /* ColorMaskControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D008A15C010000000008 /* ColorMaskControls.swift */; };
+		C010C009A15C010000000009 /* EditorColorMaskTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D009A15C010000000009 /* EditorColorMaskTracker.swift */; };
+		C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00AA15C01000000000A /* EditorKeyframe.swift */; };
+		C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00BA15C01000000000B /* KeyframeToolPanel.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
 		CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */; };
@@ -118,6 +123,11 @@
 		C010D004A15C010000000004 /* ColorGradeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorGradeControls.swift; sourceTree = "<group>"; };
 		C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorScopeAnalyzer.swift; sourceTree = "<group>"; };
 		C010D006A15C010000000006 /* ColorScopeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorScopeViews.swift; sourceTree = "<group>"; };
+		C010D007A15C010000000007 /* EditorFaceMaskDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFaceMaskDetector.swift; sourceTree = "<group>"; };
+		C010D008A15C010000000008 /* ColorMaskControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMaskControls.swift; sourceTree = "<group>"; };
+		C010D009A15C010000000009 /* EditorColorMaskTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorMaskTracker.swift; sourceTree = "<group>"; };
+		C010D00AA15C01000000000A /* EditorKeyframe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorKeyframe.swift; sourceTree = "<group>"; };
+		C010D00BA15C01000000000B /* KeyframeToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyframeToolPanel.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
 		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
 		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
@@ -225,6 +235,7 @@
 				BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */,
 				BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */,
 				C010D001A15C010000000001 /* EditorColorGrade.swift */,
+				C010D00AA15C01000000000A /* EditorKeyframe.swift */,
 				BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
@@ -261,6 +272,8 @@
 				C010D003A15C010000000003 /* ColorAdjustmentToolPanel.swift */,
 				C010D004A15C010000000004 /* ColorGradeControls.swift */,
 				C010D006A15C010000000006 /* ColorScopeViews.swift */,
+				C010D008A15C010000000008 /* ColorMaskControls.swift */,
+				C010D00BA15C01000000000B /* KeyframeToolPanel.swift */,
 				80BD65BF4472826A783449A0 /* AudioPickerView.swift */,
 			);
 			path = Components;
@@ -273,6 +286,8 @@
 				BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */,
 				C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */,
 				C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */,
+				C010D007A15C010000000007 /* EditorFaceMaskDetector.swift */,
+				C010D009A15C010000000009 /* EditorColorMaskTracker.swift */,
 				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
 				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
@@ -501,6 +516,7 @@
 				BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */,
 				C010C001A15C010000000001 /* EditorColorGrade.swift in Sources */,
+				C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */,
@@ -537,6 +553,10 @@
 				C010C004A15C010000000004 /* ColorGradeControls.swift in Sources */,
 				C010C005A15C010000000005 /* EditorColorScopeAnalyzer.swift in Sources */,
 				C010C006A15C010000000006 /* ColorScopeViews.swift in Sources */,
+				C010C007A15C010000000007 /* EditorFaceMaskDetector.swift in Sources */,
+				C010C008A15C010000000008 /* ColorMaskControls.swift in Sources */,
+				C010C009A15C010000000009 /* EditorColorMaskTracker.swift in Sources */,
+				C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */,
 				C0505206B7B237C572F82EFF /* AudioPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

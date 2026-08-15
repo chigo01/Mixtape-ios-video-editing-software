@@ -19,6 +19,7 @@ struct EditorScreen: View {
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioIndex: Int?
+    @State private var isReplacingClip = false
     @State private var transitionTarget: EditorTransitionTarget?
     @Environment(\.dismiss) private var dismiss
 
@@ -106,7 +107,10 @@ struct EditorScreen: View {
                         } else if vm.selectedAudioClipID != nil {
                             EditorAudioActionBar(vm: vm)
                         } else if vm.selectedClipID != nil {
-                            EditorClipActionBar(vm: vm)
+                            EditorClipActionBar(vm: vm, onReplace: {
+                                isReplacingClip = true
+                                isMediaPickerPresented = true
+                            })
                         } else if vm.selectedTextOverlayID != nil {
                             EditorTextActionBar(vm: vm)
                         } else {
@@ -149,7 +153,12 @@ struct EditorScreen: View {
                 confirmButtonTitle: "Add",
                 onCancel: { isMediaPickerPresented = false },
                 onConfirm: { items in
-                    vm.insertClips(from: items, afterIndex: insertAfterClipIndex)
+                    if isReplacingClip, let item = items.first {
+                        vm.replaceSelectedClip(with: item)
+                    } else {
+                        vm.insertClips(from: items, afterIndex: insertAfterClipIndex)
+                    }
+                    isReplacingClip = false
                     isMediaPickerPresented = false
                 }
             )
@@ -178,6 +187,29 @@ struct EditorScreen: View {
                     isAudioPickerPresented = false
                 }
             )
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .keyframe },
+                set: { if !$0 && vm.selectedTool == .keyframe { vm.selectedTool = nil } }
+            )
+        ) {
+            KeyframeToolPanel(vm: vm)
+                .presentationDetents([.fraction(0.72), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .canvas },
+                set: { if !$0 && vm.selectedTool == .canvas { vm.selectedTool = nil } }
+            )
+        ) {
+            CanvasToolPanel(vm: vm)
+                .presentationDetents([.height(410), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
         }
         .sheet(
             isPresented: Binding(

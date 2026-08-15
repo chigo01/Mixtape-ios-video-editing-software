@@ -38,6 +38,26 @@ struct EditorTextActionBar: View {
                     }
 
                     ClipActionButton(
+                        action: .keyframe,
+                        isSelected: vm.selectedTool == .keyframe,
+                        isDisabled: false
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            vm.performToolAction(.keyframe)
+                        }
+                    }
+
+                    ClipActionButton(
+                        action: .duplicate,
+                        isSelected: false,
+                        isDisabled: false
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            vm.duplicateSelectedTextOverlay()
+                        }
+                    }
+
+                    ClipActionButton(
                         action: .delete,
                         isSelected: false,
                         isDisabled: false

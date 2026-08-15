@@ -15,8 +15,31 @@ private enum ColorWorkspaceSection: String, CaseIterable, Identifiable {
     case hsl = "HSL"
     case curves = "Curves"
     case wheels = "Wheels"
+    case masks = "Masks"
     case scopes = "Scopes"
     var id: String { rawValue }
+}
+
+private enum MaskColorControl: String, CaseIterable, Identifiable {
+    case exposure, brightness, contrast, saturation, vibrance
+    case temperature, tint, hue, smoothness
+
+    var id: String { rawValue }
+    var title: String { self == .temperature ? "Temp" : rawValue.capitalized }
+    var keyPath: WritableKeyPath<EditorMaskedColorAdjustment, Double> {
+        switch self {
+        case .exposure: return \.exposure
+        case .brightness: return \.brightness
+        case .contrast: return \.contrast
+        case .saturation: return \.saturation
+        case .vibrance: return \.vibrance
+        case .temperature: return \.temperature
+        case .tint: return \.tint
+        case .hue: return \.hue
+        case .smoothness: return \.smoothness
+        }
+    }
+    var isPositiveOnly: Bool { self == .smoothness }
 }
 
 private enum PrimaryColorControl: String, CaseIterable, Identifiable {
@@ -103,6 +126,9 @@ struct ColorAdjustmentToolPanel: View {
     @State private var scopeSnapshot: EditorColorScopeSnapshot?
     @State private var isScopeLoading = false
     @State private var scopesUseGrade = true
+    @State private var selectedMaskControl: MaskColorControl = .exposure
+    @State private var isDetectingFaces = false
+    @State private var maskMessage: String?
 
     private var adjustment: EditorColorAdjustment {
         vm.selectedClip?.colorAdjustment ?? .neutral
@@ -121,19 +147,39 @@ struct ColorAdjustmentToolPanel: View {
                 case .hsl: hslView
                 case .curves: curvesView
                 case .wheels: wheelsView
+                case .masks: masksView
                 case .scopes: scopesView
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            footer
+            if section != .masks && section != .scopes {
+                footer
+            }
         }
         .padding(.horizontal, 18)
         .padding(.top, 16)
         .padding(.bottom, 12)
         .task(id: vm.selectedClipID) { await loadFilterPreviewSource() }
         .task(id: scopeFingerprint) { await updateScopeIfNeeded() }
-        .onDisappear { vm.commitColorAdjustmentEdit() }
+        .onChange(of: adjustment.masks.map(\.id)) { _, ids in
+            guard let selectedMaskID = vm.selectedColorMaskID, ids.contains(selectedMaskID) else {
+                vm.selectedColorMaskID = ids.first
+                return
+            }
+        }
+        .onChange(of: section) { _, newSection in
+            vm.isColorMaskEditing = newSection == .masks
+            if newSection == .masks, vm.selectedColorMaskID == nil {
+                vm.selectedColorMaskID = adjustment.masks.first?.id
+            }
+        }
+        .onDisappear {
+            vm.cancelColorMaskTracking()
+            vm.isColorMaskEditing = false
+            vm.selectedColorMaskID = nil
+            vm.commitColorAdjustmentEdit()
+        }
     }
 
     private var header: some View {
@@ -362,6 +408,345 @@ struct ColorAdjustmentToolPanel: View {
                     .frame(width: 122)
                 }
             }
+        }
+    }
+
+    private var selectedMask: EditorColorMask? {
+        guard let selectedMaskID = vm.selectedColorMaskID else { return nil }
+        return adjustment.masks.first { $0.id == selectedMaskID }
+    }
+
+    private var masksView: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 12) {
+                maskCreationToolbar
+
+                if !adjustment.masks.isEmpty {
+                    maskSelector
+                }
+
+                if let mask = selectedMask {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.draw.fill")
+                        Text(mask.shape == .polygon
+                            ? "Drag points directly on the preview"
+                            : "Drag or pinch the window directly on the preview")
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color.appColors.primaryColor)
+                    maskActions(mask)
+                    maskTrackingControls(mask)
+                    maskGeometryControls(mask)
+                    maskGradeControls(mask)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "circle.dashed")
+                            .font(.system(size: 34, weight: .light))
+                        Text("Add a face or shape mask")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("Local corrections affect only the selected area and render identically in preview and export.")
+                            .font(.system(size: 10))
+                            .multilineTextAlignment(.center)
+                    }
+                    .foregroundColor(Color.white.opacity(0.55))
+                    .padding(.vertical, 28)
+                }
+
+                if let message = vm.colorMaskTrackingMessage ?? maskMessage {
+                    Text(message)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Color.white.opacity(0.55))
+                }
+            }
+            .padding(.bottom, 4)
+        }
+    }
+
+    private var maskCreationToolbar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    Task { await detectFaceMasks() }
+                } label: {
+                    Label(isDetectingFaces ? "Detecting…" : "Detect faces", systemImage: "face.smiling")
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.appColors.primaryColor.opacity(0.9)))
+                        .foregroundColor(.black)
+                }
+                .disabled(isDetectingFaces || vm.player == nil)
+
+                maskAddButton("Ellipse", systemImage: "circle.dashed", shape: .ellipse)
+                maskAddButton("Rectangle", systemImage: "rectangle.dashed", shape: .rectangle)
+                maskAddButton("Gradient", systemImage: "square.lefthalf.filled", shape: .linear)
+                maskAddButton("Polygon", systemImage: "point.3.connected.trianglepath.dotted", shape: .polygon)
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(.white)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func maskAddButton(
+        _ title: String,
+        systemImage: String,
+        shape: EditorColorMaskShape
+    ) -> some View {
+        Button {
+            addMask(shape: shape)
+        } label: {
+            Label(title, systemImage: systemImage)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+        }
+    }
+
+    private var maskSelector: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(Array(adjustment.masks.enumerated()), id: \.element.id) { index, mask in
+                    Button { vm.selectedColorMaskID = mask.id } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: maskIcon(mask.shape))
+                            Text(mask.name.isEmpty ? "Mask \(index + 1)" : mask.name)
+                        }
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(vm.selectedColorMaskID == mask.id ? .black : .white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule().fill(
+                                vm.selectedColorMaskID == mask.id
+                                    ? Color.appColors.primaryColor
+                                    : Color.white.opacity(0.07)
+                            )
+                        )
+                        .opacity(mask.isEnabled ? 1 : 0.45)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func maskActions(_ mask: EditorColorMask) -> some View {
+        VStack(spacing: 7) {
+            HStack(spacing: 7) {
+                compactMaskButton(
+                    vm.showsColorMaskOverlay ? "Hide overlay" : "Show overlay",
+                    systemImage: vm.showsColorMaskOverlay ? "eye.slash.fill" : "eye.fill",
+                    isActive: !vm.showsColorMaskOverlay
+                ) {
+                    vm.showsColorMaskOverlay.toggle()
+                }
+                compactMaskButton(mask.isEnabled ? "Enabled" : "Disabled", systemImage: mask.isEnabled ? "checkmark.circle.fill" : "circle") {
+                    var updated = mask
+                    updated.isEnabled.toggle()
+                    vm.updateSelectedClipColorMask(updated)
+                    vm.commitColorAdjustmentEdit()
+                }
+                compactMaskButton("Invert", systemImage: "circle.lefthalf.filled", isActive: mask.isInverted) {
+                    var updated = mask
+                    updated.isInverted.toggle()
+                    vm.updateSelectedClipColorMask(updated)
+                    vm.commitColorAdjustmentEdit()
+                }
+            }
+            HStack(spacing: 7) {
+                compactMaskButton("Reset local grade", systemImage: "arrow.counterclockwise") {
+                    vm.resetSelectedClipColorMask(id: mask.id)
+                }
+                compactMaskButton("Delete mask", systemImage: "trash", roleColor: .red) {
+                    vm.removeSelectedClipColorMask(id: mask.id)
+                }
+            }
+        }
+    }
+
+    private func maskTrackingControls(_ mask: EditorColorMask) -> some View {
+        VStack(spacing: 7) {
+            HStack {
+                Text("Tracking")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                Spacer()
+                if mask.isTracked {
+                    Label("Tracked", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Color.appColors.primaryColor)
+                }
+            }
+            HStack(spacing: 7) {
+                compactMaskButton("Track back", systemImage: "backward.end.fill") {
+                    vm.trackSelectedColorMask(.backward)
+                }
+                compactMaskButton("Track forward", systemImage: "forward.end.fill") {
+                    vm.trackSelectedColorMask(.forward)
+                }
+                if vm.isColorMaskTracking {
+                    compactMaskButton("Cancel", systemImage: "xmark.circle", roleColor: .red) {
+                        vm.cancelColorMaskTracking()
+                    }
+                } else if mask.isTracked {
+                    compactMaskButton("Clear", systemImage: "arrow.uturn.backward", roleColor: .red) {
+                        vm.clearSelectedColorMaskTracking()
+                    }
+                }
+            }
+            if vm.isColorMaskTracking {
+                ProgressView()
+                    .tint(Color.appColors.primaryColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func compactMaskButton(
+        _ title: String,
+        systemImage: String,
+        isActive: Bool = false,
+        roleColor: Color = .white,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(isActive ? .black : roleColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(isActive ? Color.appColors.primaryColor : Color.white.opacity(0.07))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func maskGeometryControls(_ mask: EditorColorMask) -> some View {
+        VStack(spacing: 9) {
+            HStack {
+                Text("Geometry")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                Spacer()
+                Text(mask.shape == .polygon ? "Drag preview points" : "Direct preview controls")
+                    .font(.system(size: 9))
+                    .foregroundColor(Color.white.opacity(0.4))
+            }
+            HStack(spacing: 12) {
+                compactMaskSlider("Feather", value: mask.feather) { value in
+                    var updated = mask
+                    updated.feather = value
+                    vm.updateSelectedClipColorMask(updated)
+                }
+                compactMaskSlider("Opacity", value: mask.opacity) { value in
+                    var updated = mask
+                    updated.opacity = value
+                    vm.updateSelectedClipColorMask(updated)
+                }
+                if mask.shape != .polygon {
+                    compactMaskSlider("Rotate", value: (mask.rotation + 1) / 2) { value in
+                        var updated = mask
+                        updated.rotation = value * 2 - 1
+                        vm.updateSelectedClipColorMask(updated)
+                    }
+                }
+            }
+            if mask.shape == .polygon {
+                HStack(spacing: 8) {
+                    Button {
+                        addPolygonPoint(to: mask)
+                    } label: {
+                        Label("Add point", systemImage: "plus.circle")
+                    }
+                    .disabled(mask.points.count >= 12)
+                    Button {
+                        removePolygonPoint(from: mask)
+                    } label: {
+                        Label("Remove point", systemImage: "minus.circle")
+                    }
+                    .disabled(mask.points.count <= 3)
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(Color.appColors.primaryColor)
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func compactMaskSlider(
+        _ title: String,
+        value: Double,
+        onChange: @escaping (Double) -> Void
+    ) -> some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(Int(value * 100))")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundColor(Color.white.opacity(0.58))
+            Slider(
+                value: Binding(get: { value }, set: onChange),
+                in: 0...1,
+                step: 0.01,
+                onEditingChanged: { if !$0 { vm.commitColorAdjustmentEdit() } }
+            )
+            .tint(Color.appColors.primaryColor)
+        }
+    }
+
+    private func maskGradeControls(_ mask: EditorColorMask) -> some View {
+        VStack(spacing: 9) {
+            HStack {
+                Text("Local grade")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+                Spacer()
+                Text(mask.shape == .face ? "Skin correction" : "Inside mask")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(Color.appColors.primaryColor)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(MaskColorControl.allCases) { control in
+                        let active = selectedMaskControl == control
+                        Button { selectedMaskControl = control } label: {
+                            VStack(spacing: 4) {
+                                Text(control.title)
+                                    .font(.system(size: 9, weight: .semibold))
+                                Circle()
+                                    .fill(abs(mask.adjustment[keyPath: control.keyPath]) > 0.001 ? Color.appColors.primaryColor : .clear)
+                                    .frame(width: 4, height: 4)
+                            }
+                            .foregroundColor(active ? .black : .white)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(active ? Color.appColors.primaryColor : Color.white.opacity(0.07))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            gradeSlider(
+                title: selectedMaskControl.title,
+                value: Binding(
+                    get: { selectedMask?.adjustment[keyPath: selectedMaskControl.keyPath] ?? 0 },
+                    set: { value in
+                        guard var updated = selectedMask else { return }
+                        updated.adjustment[keyPath: selectedMaskControl.keyPath] = value
+                        vm.updateSelectedClipColorMask(updated)
+                    }
+                ),
+                range: selectedMaskControl.isPositiveOnly ? 0...1 : -1...1,
+                tint: Color.appColors.primaryColor
+            )
         }
     }
 
@@ -612,8 +997,111 @@ struct ColorAdjustmentToolPanel: View {
         }
     }
 
+    private func maskIcon(_ shape: EditorColorMaskShape) -> String {
+        switch shape {
+        case .face: return "face.smiling"
+        case .ellipse: return "circle.dashed"
+        case .rectangle: return "rectangle.dashed"
+        case .linear: return "square.lefthalf.filled"
+        case .polygon: return "point.3.connected.trianglepath.dotted"
+        }
+    }
+
+    private func addMask(shape: EditorColorMaskShape) {
+        let number = adjustment.masks.filter { $0.shape == shape }.count + 1
+        var mask = EditorColorMask(name: "\(shape.title) \(number)", shape: shape)
+        if shape == .linear {
+            mask.width = 1
+            mask.height = 1
+            mask.feather = 0.35
+        }
+        guard let id = vm.addSelectedClipColorMask(mask) else {
+            maskMessage = "A clip can contain up to eight color masks."
+            return
+        }
+        vm.selectedColorMaskID = id
+        maskMessage = nil
+    }
+
+    private func addPolygonPoint(to mask: EditorColorMask) {
+        guard mask.points.count >= 2, mask.points.count < 12 else { return }
+        var updated = mask
+        let pairs = updated.points.indices.map { index -> (Int, Double) in
+            let next = (index + 1) % updated.points.count
+            let dx = updated.points[index].x - updated.points[next].x
+            let dy = updated.points[index].y - updated.points[next].y
+            return (index, dx * dx + dy * dy)
+        }
+        guard let longest = pairs.max(by: { $0.1 < $1.1 })?.0 else { return }
+        let next = (longest + 1) % updated.points.count
+        let midpoint = EditorColorMaskPoint(
+            x: (updated.points[longest].x + updated.points[next].x) / 2,
+            y: (updated.points[longest].y + updated.points[next].y) / 2
+        )
+        updated.points.insert(midpoint, at: longest + 1)
+        vm.updateSelectedClipColorMask(updated)
+        vm.commitColorAdjustmentEdit()
+    }
+
+    private func removePolygonPoint(from mask: EditorColorMask) {
+        guard mask.points.count > 3 else { return }
+        var updated = mask
+        updated.points.removeLast()
+        vm.updateSelectedClipColorMask(updated)
+        vm.commitColorAdjustmentEdit()
+    }
+
+    @MainActor
+    private func detectFaceMasks() async {
+        isDetectingFaces = true
+        maskMessage = nil
+        guard let source = await vm.currentProgramFrameForMaskDetection() else {
+            isDetectingFaces = false
+            maskMessage = "The current preview frame is not available yet."
+            return
+        }
+        let suggestions = await Task.detached(priority: .userInitiated) {
+            (try? EditorFaceMaskDetector.detectFaces(in: source)) ?? []
+        }.value
+        guard !Task.isCancelled else { return }
+        isDetectingFaces = false
+        guard !suggestions.isEmpty else {
+            maskMessage = "No clear faces were found in this frame. Try an ellipse mask."
+            return
+        }
+
+        let availableSlots = max(0, 8 - adjustment.masks.count)
+        var firstAddedID: UUID?
+        let firstFaceNumber = adjustment.masks.filter { $0.shape == .face }.count + 1
+        for (index, suggestion) in suggestions.prefix(availableSlots).enumerated() {
+            var mask = EditorColorMask(name: "Face \(firstFaceNumber + index)", shape: .face)
+            mask.centerX = suggestion.centerX
+            mask.centerY = suggestion.centerY
+            mask.width = suggestion.width
+            mask.height = suggestion.height
+            mask.feather = 0.32
+            let id = vm.addSelectedClipColorMask(mask)
+            if firstAddedID == nil { firstAddedID = id }
+        }
+        if let firstAddedID {
+            vm.selectedColorMaskID = firstAddedID
+            vm.commitColorAdjustmentEdit()
+            maskMessage = suggestions.count == 1
+                ? "Face mask added. Use Track back/forward to follow the subject."
+                : "\(min(suggestions.count, availableSlots)) face masks added. Select one, then track it from this frame."
+        } else {
+            maskMessage = "A clip can contain up to eight color masks."
+        }
+    }
+
     @MainActor
     private func loadFilterPreviewSource() async {
+        if let selectedMaskID = vm.selectedColorMaskID,
+           !adjustment.masks.contains(where: { $0.id == selectedMaskID }) {
+            vm.selectedColorMaskID = adjustment.masks.first?.id
+        } else if vm.selectedColorMaskID == nil {
+            vm.selectedColorMaskID = adjustment.masks.first?.id
+        }
         guard let asset = vm.selectedClip?.asset else {
             filterPreviewSource = nil
             return
@@ -625,8 +1113,8 @@ struct ColorAdjustmentToolPanel: View {
         filterPreviewSource = await withCheckedContinuation { continuation in
             PHImageManager.default().requestImage(
                 for: asset,
-                targetSize: CGSize(width: 220, height: 220),
-                contentMode: .aspectFill,
+                targetSize: CGSize(width: 512, height: 512),
+                contentMode: .aspectFit,
                 options: options
             ) { image, _ in
                 continuation.resume(returning: image)

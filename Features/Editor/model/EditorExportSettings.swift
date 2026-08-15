@@ -23,6 +23,14 @@ enum EditorExportResolution: String, CaseIterable, Identifiable {
         }
     }
 
+    var longEdge: CGFloat {
+        switch self {
+        case .p720: return 1280
+        case .p1080: return 1920
+        case .p4K: return 3840
+        }
+    }
+
     var avPreset: String {
         switch self {
         case .p720: return AVAssetExportPreset1280x720

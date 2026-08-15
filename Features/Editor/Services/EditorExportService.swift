@@ -47,6 +47,8 @@ enum EditorExportService {
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
         closingTransitionDuration: TimeInterval = 0,
+        canvasSettings: EditorCanvasSettings = .default,
+        timeRange: ClosedRange<TimeInterval>? = nil,
         settings: EditorExportSettings,
         projectTitle: String,
         progress: @escaping @Sendable (Double) -> Void
@@ -60,8 +62,9 @@ enum EditorExportService {
             openingTransitionDuration: openingTransitionDuration,
             closingTransitionKind: closingTransitionKind,
             closingTransitionDuration: closingTransitionDuration,
+            canvasSettings: canvasSettings,
             frameRate: Int32(settings.frameRate.rawValue),
-            canvasSize: settings.resolution.canvasSize,
+            canvasSize: canvasSettings.renderSize(longEdge: settings.resolution.longEdge),
             isOfflineRender: true
         ) else {
             throw EditorExportError.compositionFailed
@@ -82,6 +85,7 @@ enum EditorExportService {
             outputURL: outputURL,
             fileType: settings.format.fileType,
             settings: settings,
+            timeRange: timeRange,
             progress: progress
         )
 
@@ -108,6 +112,7 @@ enum EditorExportService {
         outputURL: URL,
         fileType: AVFileType,
         settings: EditorExportSettings,
+        timeRange: ClosedRange<TimeInterval>?,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -125,7 +130,14 @@ enum EditorExportService {
         }
 
         let duration = try await composition.load(.duration)
-        let durationSeconds = max(duration.seconds, 0.01)
+        let fullDuration = max(duration.seconds, 0.01)
+        let rangeStart = min(max(0, timeRange?.lowerBound ?? 0), fullDuration)
+        let rangeEnd = min(max(rangeStart, timeRange?.upperBound ?? fullDuration), fullDuration)
+        let durationSeconds = max(rangeEnd - rangeStart, 0.01)
+        reader.timeRange = CMTimeRange(
+            start: CMTime(seconds: rangeStart, preferredTimescale: 600),
+            duration: CMTime(seconds: durationSeconds, preferredTimescale: 600)
+        )
         let renderSize = videoComposition.renderSize
 
         let videoTracks = try await composition.loadTracks(withMediaType: .video)
@@ -205,7 +217,7 @@ enum EditorExportService {
         guard writer.startWriting() else {
             throw EditorExportError.exportFailed(writer.error?.localizedDescription ?? "Writer failed.")
         }
-        writer.startSession(atSourceTime: .zero)
+        writer.startSession(atSourceTime: CMTime(seconds: rangeStart, preferredTimescale: 600))
 
         let queue = DispatchQueue(label: "mixtape.export.writer")
 
@@ -239,7 +251,7 @@ enum EditorExportService {
 
                     let pts = CMSampleBufferGetPresentationTimeStamp(sample).seconds
                     if pts.isFinite {
-                        progress(min(1, pts / durationSeconds))
+                        progress(min(1, max(0, pts - rangeStart) / durationSeconds))
                     }
                 }
             }

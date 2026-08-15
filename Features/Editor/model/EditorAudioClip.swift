@@ -16,6 +16,7 @@ struct EditorAudioClip: Identifiable, Hashable {
     var volume: Float
     var fadeInDuration: TimeInterval
     var fadeOutDuration: TimeInterval
+    var keyframes: EditorKeyframeTracks
     let waveform: [CGFloat]
 
     init(
@@ -28,7 +29,8 @@ struct EditorAudioClip: Identifiable, Hashable {
         timelineStart: TimeInterval = 0,
         volume: Float = 1.0,
         fadeInDuration: TimeInterval = 0,
-        fadeOutDuration: TimeInterval = 0
+        fadeOutDuration: TimeInterval = 0,
+        keyframes: EditorKeyframeTracks = .empty
     ) {
         self.id = id
         self.title = title
@@ -40,6 +42,7 @@ struct EditorAudioClip: Identifiable, Hashable {
         self.volume = volume
         self.fadeInDuration = min(max(0, fadeInDuration), self.trimEnd - self.trimStart)
         self.fadeOutDuration = min(max(0, fadeOutDuration), self.trimEnd - self.trimStart)
+        self.keyframes = keyframes
         self.waveform = Self.generateWaveform(seed: title.hashValue, count: 96)
     }
 
@@ -57,6 +60,8 @@ struct EditorAudioClip: Identifiable, Hashable {
         guard sourceTime >= trimStart + Self.minimumSpan,
               sourceTime <= trimEnd - Self.minimumSpan else { return nil }
 
+        let splitKeyframes = keyframes.split(at: sourceTime - trimStart)
+
         let left = EditorAudioClip(
             id: id,
             title: title,
@@ -67,7 +72,8 @@ struct EditorAudioClip: Identifiable, Hashable {
             timelineStart: timelineStart,
             volume: volume,
             fadeInDuration: min(fadeInDuration, sourceTime - trimStart),
-            fadeOutDuration: 0
+            fadeOutDuration: 0,
+            keyframes: splitKeyframes.left
         )
         let right = EditorAudioClip(
             title: title,
@@ -78,7 +84,8 @@ struct EditorAudioClip: Identifiable, Hashable {
             timelineStart: timelineStart + left.duration,
             volume: volume,
             fadeInDuration: 0,
-            fadeOutDuration: min(fadeOutDuration, trimEnd - sourceTime)
+            fadeOutDuration: min(fadeOutDuration, trimEnd - sourceTime),
+            keyframes: splitKeyframes.right
         )
         return (left, right)
     }

@@ -19,4 +19,7 @@ struct EditorTimelineSnapshot: Equatable {
     var textOverlays: [EditorTextOverlay]
     var audioClips: [EditorAudioClip]
     var overlayClips: [EditorOverlayClip]
+    var canvasSettings: EditorCanvasSettings
+    var exportInPoint: TimeInterval?
+    var exportOutPoint: TimeInterval?
 }

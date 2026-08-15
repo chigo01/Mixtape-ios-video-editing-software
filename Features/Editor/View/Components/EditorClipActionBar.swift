@@ -15,6 +15,9 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
     case volume
     case filter
     case text
+    case keyframe
+    case duplicate
+    case replace
     case delete
 
     var id: String { rawValue }
@@ -28,6 +31,9 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .volume: return "VOLUME"
         case .filter: return "ADJUST"
         case .text: return "TEXT"
+        case .keyframe: return "KEYFRAME"
+        case .duplicate: return "DUPLICATE"
+        case .replace: return "REPLACE"
         case .delete: return "DELETE"
         }
     }
@@ -41,6 +47,9 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
         case .text: return "textformat"
+        case .keyframe: return "diamond.fill"
+        case .duplicate: return "plus.square.on.square"
+        case .replace: return "arrow.triangle.2.circlepath"
         case .delete: return "trash"
         }
     }
@@ -50,6 +59,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
 
 struct EditorClipActionBar: View {
     let vm: EditorViewModel
+    var onReplace: () -> Void = {}
 
     private var availableActions: [EditorClipAction] {
         EditorClipAction.allCases.filter { action in
@@ -82,7 +92,7 @@ struct EditorClipActionBar: View {
                             isDisabled: action == .delete && !vm.canDeleteSelectedClip
                         ) {
                             withAnimation(.easeInOut(duration: 0.15)) {
-                                vm.performClipAction(action)
+                                if action == .replace { onReplace() } else { vm.performClipAction(action) }
                             }
                         }
                     }
@@ -116,6 +126,8 @@ extension EditorClipAction {
         case .volume: return .volume
         case .filter: return .filter
         case .text: return .text
+        case .keyframe: return .keyframe
+        case .duplicate, .replace: return nil
         case .delete: return nil
         }
     }
@@ -166,8 +178,11 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case opacity
     case smaller
     case larger
+    case sendBackward
+    case bringForward
     case reset
     case text
+    case keyframe
     case delete
 
     var id: String { rawValue }
@@ -180,8 +195,11 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .opacity: return "OPACITY"
         case .smaller: return "SMALLER"
         case .larger: return "LARGER"
+        case .sendBackward: return "SEND BACK"
+        case .bringForward: return "BRING FRONT"
         case .reset: return "RESET"
         case .text: return "TEXT"
+        case .keyframe: return "KEYFRAME"
         case .delete: return "DELETE"
         }
     }
@@ -194,8 +212,11 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .opacity: return "circle.lefthalf.filled"
         case .smaller: return "minus.magnifyingglass"
         case .larger: return "plus.magnifyingglass"
+        case .sendBackward: return "arrow.down"
+        case .bringForward: return "arrow.up"
         case .reset: return "arrow.counterclockwise"
         case .text: return "textformat"
+        case .keyframe: return "diamond.fill"
         case .delete: return "trash"
         }
     }
@@ -206,6 +227,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .volume: return .volume
         case .opacity: return .opacity
         case .text: return .text
+        case .keyframe: return .keyframe
         default: return nil
         }
     }
@@ -244,7 +266,9 @@ struct EditorOverlayActionBar: View {
                                     .tracking(0.5)
                             }
                             .foregroundColor(
-                                action == .delete
+                                isDisabled(action)
+                                    ? Color.white.opacity(0.25)
+                                    : action == .delete
                                     ? Color.red.opacity(0.9)
                                     : (action.tool.map { vm.selectedTool == $0 } == true
                                         ? Color.appColors.primaryColor
@@ -254,6 +278,7 @@ struct EditorOverlayActionBar: View {
                             .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
+                        .disabled(isDisabled(action))
                         .accessibilityLabel(action.title)
                     }
                 }
@@ -264,6 +289,14 @@ struct EditorOverlayActionBar: View {
         .padding(.top, 12)
         .padding(.bottom, 18)
         .background(Rectangle().fill(Color.white.opacity(0.02)))
+    }
+
+    private func isDisabled(_ action: EditorOverlayAction) -> Bool {
+        switch action {
+        case .sendBackward: return !vm.canSendSelectedOverlayBackward
+        case .bringForward: return !vm.canBringSelectedOverlayForward
+        default: return false
+        }
     }
 
     private func perform(_ action: EditorOverlayAction) {
@@ -286,10 +319,16 @@ struct EditorOverlayActionBar: View {
             guard let clip = vm.selectedOverlayClip else { return }
             vm.setOverlayScale(id: clip.id, scale: clip.scale + 0.1)
             vm.commitOverlayTransform()
+        case .sendBackward:
+            vm.sendSelectedOverlayBackward()
+        case .bringForward:
+            vm.bringSelectedOverlayForward()
         case .reset:
             vm.resetSelectedOverlayTransform()
         case .text:
             vm.performToolAction(.text)
+        case .keyframe:
+            vm.selectTool(.keyframe)
         case .delete:
             vm.deleteSelectedOverlayClip()
         }
