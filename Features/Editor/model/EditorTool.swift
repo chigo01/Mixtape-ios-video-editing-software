@@ -21,7 +21,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     static var mainTools: [EditorTool] {
-        allCases.filter { $0 != .duration && $0 != .opacity }
+        allCases.filter { $0 != .duration && $0 != .opacity && $0 != .filter }
     }
 
     var title: String {
@@ -31,7 +31,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .duration: return "DURATION"
         case .crop: return "CROP"
         case .volume: return "VOLUME"
-        case .filter: return "FILTER"
+        case .filter: return "COLOR"
         case .text: return "TEXT"
         case .overlay: return "OVERLAY"
         case .opacity: return "OPACITY"

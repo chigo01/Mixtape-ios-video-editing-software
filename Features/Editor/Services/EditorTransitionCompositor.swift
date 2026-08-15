@@ -73,6 +73,7 @@ final class EditorTransitionRenderInstruction:
     let backgroundTrackID: CMPersistentTrackID?
     let overlayLayers: [EditorOverlayRenderLayer]
     let baseTransform: CGAffineTransform
+    let colorAdjustment: EditorColorAdjustment
     let incomingKind: EditorTransitionKind
     let outgoingKind: EditorTransitionKind
     let incomingDuration: TimeInterval
@@ -87,6 +88,7 @@ final class EditorTransitionRenderInstruction:
         backgroundTrackID: CMPersistentTrackID?,
         overlayLayers: [EditorOverlayRenderLayer],
         baseTransform: CGAffineTransform,
+        colorAdjustment: EditorColorAdjustment,
         incomingKind: EditorTransitionKind,
         outgoingKind: EditorTransitionKind,
         incomingDuration: TimeInterval,
@@ -101,6 +103,7 @@ final class EditorTransitionRenderInstruction:
         self.backgroundTrackID = backgroundTrackID
         self.overlayLayers = overlayLayers
         self.baseTransform = baseTransform
+        self.colorAdjustment = colorAdjustment
         self.incomingKind = incomingKind
         self.outgoingKind = outgoingKind
         self.incomingDuration = incomingDuration
@@ -298,7 +301,10 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     renderSize: instruction.renderSize
                 )
 
-                var foreground = CIImage(cvPixelBuffer: foregroundBuffer)
+                var foreground = EditorColorGradeRenderer.apply(
+                    instruction.colorAdjustment,
+                    to: CIImage(cvPixelBuffer: foregroundBuffer)
+                )
                     .transformed(by: imageTransform)
                     .cropped(to: extent)
 

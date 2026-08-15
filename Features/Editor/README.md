@@ -113,18 +113,17 @@ EditorScreen
 ├── SpeedToolPanel           ← when SPEED tool active (inline above timeline)
 ├── CropReframeToolPanel     ← crop/aspect, fit/fill, rotate/flip, straighten, scale
 ├── EditorTimeline           ← ruler, text, primary clip, video overlay, and audio lanes
-├── EditorBottomToolbar      ← default tools (split, speed, volume, filter*, text, overlay)
+├── EditorBottomToolbar      ← default tools (split, speed, volume, text, overlay)
 ├── EditorClipActionBar      ← when a clip is selected: back + contextual actions + delete
 ├── EditorOverlayActionBar   ← overlay split, speed, volume, opacity, resize, reset, text, delete
 ├── EditorTextActionBar      ← when a text overlay is selected: back + edit + delete
 └── EditorAudioActionBar     ← when an audio clip is selected: split, volume, delete
 
 VolumeToolPanel              ← bottom sheet when VOLUME tool active (primary, overlay, or audio)
+ColorAdjustmentToolPanel     ← Filters/Adjust/HSL/Curves/Wheels/Scopes with live GPU preview
 OverlayOpacityToolPanel      ← bottom sheet for selected-overlay transparency
 TextOverlayEditorSheet       ← bottom sheet (styles, fonts, position); live-syncs to preview
 AudioPickerView              ← sheet to import MP3/M4A etc. onto the audio lane
-
-* filter: toolbar button only — no panel or CIFilter compositor yet
 
 EditorExportScreen (pushed from Export)
 ├── EditorExportPreviewSection ← live composition preview, play/pause, scrub slider
@@ -419,7 +418,9 @@ use the same selected duration.
 When a clip thumbnail is selected, **`EditorClipActionBar`** replaces the main toolbar (CapCut-style):
 
 - **Back chevron** → `deselectClip()` returns to the main tool row.
-- **SPLIT / SPEED / VOLUME / FILTER / TEXT** → same actions as the main toolbar (`performClipAction`).
+- **SPLIT / SPEED / VOLUME / TEXT** → same actions as the main toolbar (`performClipAction`).
+- **ADJUST** → clip-only Filters/Adjust workspace with preset intensity, manual color controls,
+  reset/copy/paste/apply-to-all, and debounced live preview.
 - **DELETE** → `deleteSelectedClip()` (disabled when only one clip remains).
 
 Selecting a clip clears text-overlay and audio selection; selecting text or audio clears the others.
@@ -448,7 +449,9 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `ViewModel/EditorViewModel.swift` | Timeline, playback, video/text/audio overlays, `projectTitle`, undo, export, auto-save. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
 | `Services/EditorCompositionBuilder.swift` | Shared preview/export composition; primary and overlay video tracks, transforms, transitions, audio mix, backing tracks, and extended timelines. |
-| `Services/EditorTransitionCompositor.swift` | Metal-backed Core Image transitions; composites overlay layers after each GPU transition effect. |
+| `Services/EditorTransitionCompositor.swift` | Metal-backed custom compositor; invokes color grading, transitions, and overlay composition. |
+| `Services/EditorColorGradeRenderer.swift` | Core Image primary controls, 40 filter recipes, cached 3D LUT HSL/RGB-curves/wheels, detail and grain effects. |
+| `Services/EditorColorScopeAnalyzer.swift` | Downsampled post-grade pixel analysis for waveform, parade, vectorscope, histogram, and clipping percentages. |
 | `Services/EditorExportService.swift` | Explicit `AVAssetReader`/`AVAssetWriter` encoding with bitrate/HDR settings, progress/cancel, sanitized project-title filename, and Photos save. |
 | `Services/EditorTextOverlayRenderer.swift` | SwiftUI text → `UIImage` for export (`ImageRenderer` + off-screen fallback). |
 | `Services/EditorUndoManager.swift` | Snapshot undo/redo stack. |
@@ -456,7 +459,10 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/EditorTimeline.swift` | Ruler, text/primary-video/video-overlay/audio lanes, trim/move gestures, scrub, playhead, `TimelineLayout`. |
 | `View/Components/ClipFilmstripView.swift` | Tiled thumbnail row per clip. |
 | `View/Components/SpeedToolPanel.swift` | Speed/photo-duration controls plus the crop/reframe sheet controls. |
-| `View/Components/VolumeToolPanel.swift` | Volume presets + slider sheet (clip or audio clip). |
+| `View/Components/VolumeToolPanel.swift` | Volume and overlay-opacity sheets. |
+| `View/Components/ColorAdjustmentToolPanel.swift` | Categorized filter browser plus primary, HSL, curves, lift/gamma/gain/offset, and scope workspaces. |
+| `View/Components/ColorGradeControls.swift` | Reusable interactive tone-curve graph and DaVinci-style color-wheel controls. |
+| `View/Components/ColorScopeViews.swift` | SwiftUI Canvas scope plots, vectorscope guides, and shadow/highlight clipping readouts. |
 | `View/Components/AudioPickerView.swift` | Document picker for background music import. |
 | `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected. |
 | `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
@@ -467,12 +473,13 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/EditorClipActionBar.swift` | Contextual primary-clip and video-overlay action bars. |
 | `View/Components/EditorTextActionBar.swift` | Contextual toolbar when a text overlay is selected. |
 | `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + main editing tools. |
-| `Model/EditorClip.swift` | Primary and overlay clip models; trim/split, overlay timing/transform, preview aspect. |
+| `Model/EditorClip.swift` | Primary and overlay clip models; trim/split, color grade, overlay timing/transform, preview aspect. |
+| `Model/EditorColorGrade.swift` | Codable filter catalog, primary controls, eight-band HSL, master/R/G/B curves, and lift/gamma/gain/offset values. |
 | `Model/EditorTransition.swift` | Single transition catalog: 105 stable identifiers plus picker title, icon, category, renderer routing, and opening/cut/closing targets. |
 | `Model/EditorTextOverlay.swift` | Text overlay model + style enums. |
 | `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume, fade in/out). |
 | `Model/EditorTimelineSnapshot.swift` | Undo snapshot for primary/overlay clips, endpoints, playhead, selections, text, and audio. |
-| `Model/EditorTool.swift` | Tool enum (`filter` not wired yet). |
+| `Model/EditorTool.swift` | Tool enum, including selected-clip color adjustment routing. |
 | `ProjectList/Model/EditorProject.swift` | Backward-compatible Codable document (`SavedEditorClip`, `SavedOverlayClip`, text/audio DTOs). |
 | `ProjectList/Services/ProjectStore.swift` | JSON persistence in Application Support. |
 | `Core/AudioSessionConfigurator.swift` | Speaker / headphone routing for preview audio. |
@@ -682,6 +689,17 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Render architecture:** immutable `EditorTransitionRenderInstruction` values carry only track IDs, timing, transforms, and transition metadata. Preview and export instantiate the same serial GPU compositor and render into BGRA Metal-compatible buffers. The compositor never reaches into view-model or mutable editor state.
 - **Orientation normalization:** the custom compositor converts each complete AVFoundation transform into Core Image pixel-buffer coordinates using the decoded source and render dimensions. Portrait, landscape, rotated, and generated-photo clips therefore retain their original presentation orientation throughout GPU effects.
 - **Color-space safety:** the GPU path explicitly advertises an 8-bit SDR working space, so AVFoundation conforms HDR/wide-color inputs before rendering rather than passing unsupported 10-bit frames. Projects that use only standard transitions keep the existing Apple compositor and its current color behavior.
+
+### Color grading and scope behavior
+
+- The grade is non-destructive and stored per clip. Splits inherit it; reset, copy, paste, Apply all, undo, autosave, reopen, preview, and export all use the same `EditorColorAdjustment` contract.
+- Primary controls and filter recipes stay in Core Image. Selective HSL, master/R/G/B curves, and four tonal wheels are fused into a cached 24³ color cube so advanced grades do not become a long per-frame filter chain.
+- The Offset wheel applies a global chroma/luminance bias after Lift/Gamma/Gain. Vibrance protects already-saturated colors; Dehaze uses restrained large-radius local contrast plus saturation/contrast compensation.
+- Scopes are monitoring-only. They analyze a maximum-256-pixel selected-clip frame off the main thread, then draw with SwiftUI Canvas. This keeps scope work out of the playback/export graph and avoids retaining full-resolution frame buffers.
+- Waveform plots Rec.709 luma by horizontal image position. RGB parade plots each channel independently. The vectorscope uses Rec.709 chroma projection with neutral, saturation, and skin-tone guides. Histogram overlays luma and RGB distributions.
+- Source/Graded toggles make clipping introduced by the grade easy to isolate. Shadow and highlight percentages are explicit measurements from the analyzed frame.
+- Current limitation: scopes follow the selected clip's representative frame rather than sampling every playing frame. True continuous scopes should be added with a throttled `AVPlayerItemVideoOutput`/Metal analysis path after proxy rendering and thermal budgets exist.
+- Current limitation: rendering is intentionally 8-bit SDR. Proper log/HDR grading requires an explicit linear/wide-gamut 16-bit Metal pipeline, transfer-function-aware scopes, tone mapping, and metadata validation before exposing HDR-specific controls.
 - Selecting a style rebuilds and plays the relevant edge/cut preview. Duration is adjustable up to 2 s (clamped to available clip lengths), and **Apply to all cuts** can update every internal boundary in one operation.
 - Cancel restores the endpoint/cut state; Done creates one undo step and persists the transition kind/duration. Preview and export use the same `AVVideoComposition` opacity/transform ramps over cached, encoded black/white backing-video tracks, so letterboxing and transformed or faded frames always contain initialized pixels instead of a green YUV surface. The closing effect finishes at the last video frame; any audio-only tail continues over the initialized black canvas. The Core Animation text-overlay tool is attached only during offline export because AVPlayer does not support it.
 
@@ -704,13 +722,14 @@ through project save/reopen, and has reasonable device-performance coverage.
 | **Video overlays** | Picture-in-picture video with trim/move/split/delete, preview drag/pinch transforms, audio, undo, persistence, and standard/GPU export parity. |
 | **Projects** | Autosaved JSON projects, resume, home rename, delete confirmation, PhotoKit rehydration, and modified-date ordering. |
 | **Export** | Preview, project filename, 720p/1080p/4K, 24–120 fps, bitrate tiers, MP4/MOV, optional HDR/HEVC, progress, cancellation, Photos, and Share. |
+| **Color** | 40 looks in seven categories; 20 primary controls; eight-band HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; waveform, RGB parade, vectorscope, and histogram monitoring; reset/copy/paste/apply-to-all, undo, backward-compatible persistence, and GPU preview/export parity. |
 | **Rendering safety** | Orientation normalization, SDR GPU working space, and encoded black/white backing tracks that prevent green or uninitialized export frames. |
 
 ### Phase 1 — complete the core editing toolkit
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 1 | **Color and filters** | Filter browser, intensity, exposure, contrast, saturation, temperature, tint, highlights/shadows, vignette, reset/copy, and identical GPU preview/export. |
+| 1 | **Color and filters — complete** | 40 categorized filters and intensity; 20 primary adjustments including Vibrance and Dehaze; selective HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; four professional scopes with clipping readouts and Source/Graded comparison; reset/copy/paste/apply-to-all; undo/persistence; identical GPU preview/export. |
 | 2 | **Crop and reframe — complete** | Per-clip crop, rotate, flip, scale, position, straighten, Original/9:16/16:9/1:1/4:5 presets, optional safe-area/rule-of-thirds guides, and Fit/Fill background framing. Preview, undo, persistence, reopen, GPU transitions, and export use the same transform. |
 | 3 | **Canvas formats** | 9:16, 16:9, 1:1, 4:5, and custom sizes with blur/color/image backgrounds and project-level persistence. |
 | 4 | **Timeline snapping** | Magnetic playhead and clip/overlay edge snapping, visible guides, zoom-aware thresholds, and haptic feedback. |
@@ -756,7 +775,7 @@ through project save/reopen, and has reasonable device-performance coverage.
 | 24 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
 | 25 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
 | 26 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |
-| 27 | **Color management** | Explicit SDR/HDR pipeline, transfer functions, wide-gamut handling, tone mapping, metadata validation, and scopes. |
+| 27 | **Color management** | Scopes are complete for representative SDR graded frames. Remaining: explicit SDR/HDR pipeline, transfer functions, wide-gamut handling, tone mapping, metadata validation, continuous-playback scope sampling, and HDR-aware scope scales. |
 | 28 | **Automated quality suite** | Unit tests, UI flows, golden-frame renders, orientation matrices, audio timing tests, export probes, and long-project stress tests. |
 | 29 | **Performance budgets** | Signposted preview/export stages, frame-drop and memory targets, thermal testing, cancellation latency, and regression dashboards. |
 | 30 | **iCloud and collaboration readiness** | Conflict-safe project sync, asset availability states, deterministic document IDs, and future collaboration-friendly edit operations. |

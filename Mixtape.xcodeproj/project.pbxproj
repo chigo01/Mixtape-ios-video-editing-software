@@ -47,6 +47,12 @@
 		BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */; };
 		BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */; };
 		C0505206B7B237C572F82EFF /* AudioPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80BD65BF4472826A783449A0 /* AudioPickerView.swift */; };
+		C010C001A15C010000000001 /* EditorColorGrade.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D001A15C010000000001 /* EditorColorGrade.swift */; };
+		C010C002A15C010000000002 /* EditorColorGradeRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */; };
+		C010C003A15C010000000003 /* ColorAdjustmentToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D003A15C010000000003 /* ColorAdjustmentToolPanel.swift */; };
+		C010C004A15C010000000004 /* ColorGradeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D004A15C010000000004 /* ColorGradeControls.swift */; };
+		C010C005A15C010000000005 /* EditorColorScopeAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */; };
+		C010C006A15C010000000006 /* ColorScopeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D006A15C010000000006 /* ColorScopeViews.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
 		CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */; };
@@ -106,6 +112,12 @@
 		BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTransition.swift; sourceTree = "<group>"; };
 		BF5180642B1AC3288A6921DE /* MixtapeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixtapeApp.swift; sourceTree = "<group>"; };
 		CED677962FACE5BD00531EBF /* ProjectListScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListScreen.swift; sourceTree = "<group>"; };
+		C010D001A15C010000000001 /* EditorColorGrade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorGrade.swift; sourceTree = "<group>"; };
+		C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorGradeRenderer.swift; sourceTree = "<group>"; };
+		C010D003A15C010000000003 /* ColorAdjustmentToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorAdjustmentToolPanel.swift; sourceTree = "<group>"; };
+		C010D004A15C010000000004 /* ColorGradeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorGradeControls.swift; sourceTree = "<group>"; };
+		C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorScopeAnalyzer.swift; sourceTree = "<group>"; };
+		C010D006A15C010000000006 /* ColorScopeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorScopeViews.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
 		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
 		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
@@ -212,6 +224,7 @@
 			children = (
 				BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */,
 				BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */,
+				C010D001A15C010000000001 /* EditorColorGrade.swift */,
 				BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
@@ -245,6 +258,9 @@
 				63F8ECBE73E4FFD084A70D66 /* TextOverlayEditorSheet.swift */,
 				8E56D87ACFF2712C8890CA60 /* EditorTextActionBar.swift */,
 				E87DAAFAE4F84C0C17BFE6B8 /* VolumeToolPanel.swift */,
+				C010D003A15C010000000003 /* ColorAdjustmentToolPanel.swift */,
+				C010D004A15C010000000004 /* ColorGradeControls.swift */,
+				C010D006A15C010000000006 /* ColorScopeViews.swift */,
 				80BD65BF4472826A783449A0 /* AudioPickerView.swift */,
 			);
 			path = Components;
@@ -255,6 +271,8 @@
 			children = (
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 				BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */,
+				C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */,
+				C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */,
 				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
 				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
@@ -482,6 +500,7 @@
 				A0B0F00DDEAFB001CAFE0108 /* MediaPreviewView.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */,
+				C010C001A15C010000000001 /* EditorColorGrade.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */,
@@ -489,6 +508,7 @@
 				BA0EDF00DEAFB001CAFE011A /* EditorViewModel.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */,
+				C010C002A15C010000000002 /* EditorColorGradeRenderer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */,
@@ -513,6 +533,10 @@
 				CEF644E2B8DD9C620CF60C35 /* EditorTextOverlayLayerView.swift in Sources */,
 				1FAFCD6593F00D7A42C9DDA7 /* EditorTextOverlayRenderer.swift in Sources */,
 				794DF62E89AB0BCA798BCCAA /* VolumeToolPanel.swift in Sources */,
+				C010C003A15C010000000003 /* ColorAdjustmentToolPanel.swift in Sources */,
+				C010C004A15C010000000004 /* ColorGradeControls.swift in Sources */,
+				C010C005A15C010000000005 /* EditorColorScopeAnalyzer.swift in Sources */,
+				C010C006A15C010000000006 /* ColorScopeViews.swift in Sources */,
 				C0505206B7B237C572F82EFF /* AudioPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -525,6 +549,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = TTJL7FNUXQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
@@ -536,6 +561,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dev.mixtape;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
@@ -575,6 +601,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = TTJL7FNUXQ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
@@ -586,6 +613,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dev.mixtape;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;

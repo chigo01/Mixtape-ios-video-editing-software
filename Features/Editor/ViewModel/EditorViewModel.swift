@@ -88,6 +88,11 @@ final class EditorViewModel {
     @ObservationIgnored
     private var reframeUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var colorUndoSnapshot: EditorTimelineSnapshot?
+    private var copiedColorAdjustment: EditorColorAdjustment?
+    @ObservationIgnored
+    private var colorPreviewTask: Task<Void, Never>?
+    @ObservationIgnored
     private var reframePositionDragOrigin: (x: CGFloat, y: CGFloat)?
     @ObservationIgnored
     private var textEditUndoSnapshot: EditorTimelineSnapshot?
@@ -245,6 +250,9 @@ final class EditorViewModel {
         if selectedTool == .crop {
             finalizeReframeEditUndo()
         }
+        if selectedTool == .filter {
+            finalizeColorAdjustmentUndo()
+        }
         selectedClipID = id
         selectedTextOverlayID = nil
         selectedAudioClipID = nil
@@ -259,6 +267,9 @@ final class EditorViewModel {
         }
         if selectedTool == .crop {
             finalizeReframeEditUndo()
+        }
+        if selectedTool == .filter {
+            finalizeColorAdjustmentUndo()
         }
         selectedAudioClipID = id
         selectedClipID = nil
@@ -283,6 +294,9 @@ final class EditorViewModel {
         }
         if selectedTool == .crop {
             finalizeReframeEditUndo()
+        }
+        if selectedTool == .filter {
+            finalizeColorAdjustmentUndo()
         }
         finalizeOverlayTransform()
         selectedOverlayClipID = id
@@ -314,6 +328,9 @@ final class EditorViewModel {
         }
         if selectedTool == .crop {
             finalizeReframeEditUndo()
+        }
+        if selectedTool == .filter {
+            finalizeColorAdjustmentUndo()
         }
         selectedTool = nil
         selectedClipID = nil
@@ -376,11 +393,15 @@ final class EditorViewModel {
             finalizeVolumeEditUndo()
             finalizeAudioVolumeEditUndo()
         }
+        if selectedTool == .filter, tool != .filter {
+            finalizeColorAdjustmentUndo()
+        }
 
         if selectedTool == tool {
             if tool == .speed { finalizeSpeedEditUndo() }
             if tool == .duration { finalizePhotoDurationEditUndo() }
             if tool == .crop { finalizeReframeEditUndo() }
+            if tool == .filter { finalizeColorAdjustmentUndo() }
             selectedTool = nil
             if tool == .crop { showsReframeSafeAreaGuides = false }
             return
@@ -404,6 +425,10 @@ final class EditorViewModel {
             }
             Task { await alignPlaybackToTimeline() }
         }
+        if tool == .filter {
+            colorUndoSnapshot = currentSnapshot()
+            pausePlaybackForEdit()
+        }
     }
 
     func performToolAction(_ tool: EditorTool) {
@@ -419,6 +444,140 @@ final class EditorViewModel {
             }
         default:
             selectTool(tool)
+        }
+    }
+
+    // MARK: Crop and reframe
+
+    // MARK: Color and filters
+
+    var canPasteColorAdjustment: Bool { copiedColorAdjustment != nil }
+
+    func setSelectedClipFilter(_ preset: EditorFilterPreset) {
+        updateSelectedClipColor { $0.preset = preset }
+    }
+
+    func setSelectedClipFilterIntensity(_ intensity: Double) {
+        updateSelectedClipColor { $0.presetIntensity = min(max(intensity, 0), 1) }
+    }
+
+    func setSelectedClipColorValue(
+        _ keyPath: WritableKeyPath<EditorColorAdjustment, Double>,
+        value: Double
+    ) {
+        updateSelectedClipColor {
+            $0[keyPath: keyPath] = min(max(value, -1), 1)
+        }
+    }
+
+    func setSelectedClipHSLValue(
+        color: EditorHSLColor,
+        keyPath: WritableKeyPath<EditorHSLBandAdjustment, Double>,
+        value: Double
+    ) {
+        updateSelectedClipColor { adjustment in
+            var band = adjustment.hsl[color]
+            band[keyPath: keyPath] = min(max(value, -1), 1)
+            adjustment.hsl[color] = band
+        }
+    }
+
+    func setSelectedClipToneCurve(
+        channel: EditorCurveChannel,
+        points: [EditorCurvePoint]
+    ) {
+        updateSelectedClipColor { adjustment in
+            adjustment.curves[channel] = points
+                .sorted { $0.x < $1.x }
+                .map {
+                    EditorCurvePoint(
+                        x: min(max($0.x, 0), 1),
+                        y: min(max($0.y, 0), 1)
+                    )
+                }
+        }
+    }
+
+    func setSelectedClipColorWheel(
+        range: EditorColorWheelRange,
+        value: EditorColorWheelValue
+    ) {
+        updateSelectedClipColor { adjustment in
+            adjustment.wheels[range] = EditorColorWheelValue(
+                x: min(max(value.x, -1), 1),
+                y: min(max(value.y, -1), 1),
+                luminance: min(max(value.luminance, -1), 1)
+            )
+        }
+    }
+
+    func resetSelectedClipColor() {
+        updateSelectedClipColor { $0 = .neutral }
+        commitColorAdjustmentEdit()
+    }
+
+    func copySelectedClipColor() {
+        copiedColorAdjustment = selectedClip?.colorAdjustment
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    func pasteColorToSelectedClip() {
+        guard let copiedColorAdjustment else { return }
+        updateSelectedClipColor { $0 = copiedColorAdjustment }
+        commitColorAdjustmentEdit()
+    }
+
+    func applySelectedColorToAllClips() {
+        guard let adjustment = selectedClip?.colorAdjustment else { return }
+        beginColorAdjustmentEditIfNeeded()
+        for index in clips.indices {
+            clips[index].colorAdjustment = adjustment
+        }
+        invalidateComposition()
+        commitColorAdjustmentEdit()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    func commitColorAdjustmentEdit() {
+        colorPreviewTask?.cancel()
+        colorPreviewTask = nil
+        finalizeColorAdjustmentUndo()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func updateSelectedClipColor(_ update: (inout EditorColorAdjustment) -> Void) {
+        beginColorAdjustmentEditIfNeeded()
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        update(&clips[index].colorAdjustment)
+        invalidateComposition()
+        scheduleColorPreviewRefresh()
+    }
+
+    private func beginColorAdjustmentEditIfNeeded() {
+        if colorUndoSnapshot == nil {
+            colorUndoSnapshot = currentSnapshot()
+        }
+    }
+
+    private func finalizeColorAdjustmentUndo() {
+        colorPreviewTask?.cancel()
+        colorPreviewTask = nil
+        guard let before = colorUndoSnapshot else { return }
+        colorUndoSnapshot = nil
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+    }
+
+    private func scheduleColorPreviewRefresh() {
+        colorPreviewTask?.cancel()
+        colorPreviewTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled, let self else { return }
+            await self.alignPlaybackToTimeline()
         }
     }
 
@@ -1736,7 +1895,7 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.fileURL.path)"

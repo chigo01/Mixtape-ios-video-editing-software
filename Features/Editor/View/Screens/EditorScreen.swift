@@ -253,6 +253,23 @@ struct EditorScreen: View {
         }
         .sheet(
             isPresented: Binding(
+                get: { vm.selectedTool == .filter && vm.selectedClipID != nil },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .filter {
+                        vm.commitColorAdjustmentEdit()
+                        vm.selectedTool = nil
+                    }
+                }
+            )
+        ) {
+            ColorAdjustmentToolPanel(vm: vm)
+                .presentationDetents([.fraction(0.68), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .sheet(
+            isPresented: Binding(
                 get: { vm.selectedTool == .opacity && vm.selectedOverlayClipID != nil },
                 set: { newValue in
                     if !newValue && vm.selectedTool == .opacity {

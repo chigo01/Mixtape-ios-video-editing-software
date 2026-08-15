@@ -76,6 +76,7 @@ struct EditorClip: Identifiable, Hashable {
     var reframeScale: CGFloat
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
+    var colorAdjustment: EditorColorAdjustment
     /// Transition rendered at the cut after this clip.
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
@@ -107,6 +108,7 @@ struct EditorClip: Identifiable, Hashable {
         reframeScale: CGFloat = 1,
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
+        colorAdjustment: EditorColorAdjustment = .neutral,
         transitionKind: EditorTransitionKind = .none,
         transitionDuration: TimeInterval = 0
     ) {
@@ -126,6 +128,7 @@ struct EditorClip: Identifiable, Hashable {
         self.reframeScale = min(max(reframeScale, 0.5), 4)
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
+        self.colorAdjustment = colorAdjustment
         self.transitionKind = transitionDuration > 0 ? transitionKind : .none
         self.transitionDuration = max(0, transitionDuration)
     }
@@ -156,6 +159,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeScale: reframeScale,
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
+            colorAdjustment: colorAdjustment,
             transitionKind: .none,
             transitionDuration: 0
         )
@@ -175,6 +179,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeScale: reframeScale,
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
+            colorAdjustment: colorAdjustment,
             transitionKind: transitionKind,
             transitionDuration: transitionDuration
         )
@@ -214,6 +219,7 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.reframeScale == rhs.reframeScale
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
+            && lhs.colorAdjustment == rhs.colorAdjustment
             && lhs.transitionKind == rhs.transitionKind
             && lhs.transitionDuration == rhs.transitionDuration
     }

@@ -28,7 +28,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -61,6 +61,7 @@ enum EditorCompositionBuilder {
     private struct VideoSegment {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
+        let colorAdjustment: EditorColorAdjustment
         let transitionIn: EditorTransitionKind
         let transitionOut: EditorTransitionKind
         let fadeInDuration: TimeInterval
@@ -548,6 +549,7 @@ enum EditorCompositionBuilder {
             VideoSegment(
                 timeRange: holdRange,
                 transform: last.transform,
+                colorAdjustment: last.colorAdjustment,
                 transitionIn: .none,
                 transitionOut: .none,
                 fadeInDuration: 0,
@@ -584,6 +586,7 @@ enum EditorCompositionBuilder {
         return VideoSegment(
             timeRange: timeRange,
             transform: transform,
+            colorAdjustment: clips[clipIndex].colorAdjustment,
             transitionIn: transitionIn,
             transitionOut: transitionOut,
             fadeInDuration: clipIndex == 0
@@ -614,7 +617,9 @@ enum EditorCompositionBuilder {
         composition.animationTool = animationTool
 
         let needsGPUCompositor = segments.contains {
-            $0.transitionIn.usesGPUCompositor || $0.transitionOut.usesGPUCompositor
+            !$0.colorAdjustment.isNeutral
+                || $0.transitionIn.usesGPUCompositor
+                || $0.transitionOut.usesGPUCompositor
         }
         if needsGPUCompositor {
             composition.customVideoCompositorClass = EditorTransitionCompositor.self
@@ -638,6 +643,7 @@ enum EditorCompositionBuilder {
                         )
                     },
                     baseTransform: segment.transform,
+                    colorAdjustment: segment.colorAdjustment,
                     incomingKind: segment.transitionIn,
                     outgoingKind: segment.transitionOut,
                     incomingDuration: segment.fadeInDuration,

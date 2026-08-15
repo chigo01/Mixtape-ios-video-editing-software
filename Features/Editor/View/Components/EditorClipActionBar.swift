@@ -26,7 +26,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .duration: return "DURATION"
         case .crop: return "CROP"
         case .volume: return "VOLUME"
-        case .filter: return "FILTER"
+        case .filter: return "ADJUST"
         case .text: return "TEXT"
         case .delete: return "DELETE"
         }

@@ -25,6 +25,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var reframeScale: CGFloat
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
+    var colorAdjustment: EditorColorAdjustment
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
 
@@ -45,6 +46,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         reframeScale = clip.reframeScale
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
+        colorAdjustment = clip.colorAdjustment
         transitionKind = clip.transitionKind
         transitionDuration = clip.transitionDuration
     }
@@ -67,6 +69,10 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         reframeScale = try c.decodeIfPresent(CGFloat.self, forKey: .reframeScale) ?? 1
         reframeXOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeXOffset) ?? 0
         reframeYOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeYOffset) ?? 0
+        colorAdjustment = try c.decodeIfPresent(
+            EditorColorAdjustment.self,
+            forKey: .colorAdjustment
+        ) ?? .neutral
         transitionDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .transitionDuration) ?? 0
         if let rawKind = try c.decodeIfPresent(String.self, forKey: .transitionKind) {
             // `zoom` was shipped briefly before the catalog split it into Zoom In/Out.
@@ -494,6 +500,7 @@ enum EditorProjectResolver {
                 reframeScale: item.reframeScale,
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
+                colorAdjustment: item.colorAdjustment,
                 transitionKind: item.transitionKind,
                 transitionDuration: item.transitionDuration
             )
