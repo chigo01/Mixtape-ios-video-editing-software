@@ -305,7 +305,7 @@ struct EditorClip: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// A video clip composited above the primary timeline (picture-in-picture).
+/// A photo or video clip composited above the primary timeline (picture-in-picture).
 /// Position is stored as a normalized canvas offset so projects render consistently
 /// at preview and export resolutions.
 struct EditorOverlayClip: Identifiable, Hashable {
@@ -313,7 +313,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
 
     let id: UUID
     let asset: PHAsset
-    let originalDuration: TimeInterval
+    var originalDuration: TimeInterval
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
@@ -327,6 +327,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
     var yOffset: CGFloat
     var opacity: Double
     var volume: Float
+    var cropAspect: EditorCropAspect
+    var reframeMode: EditorReframeMode
+    var rotationQuarterTurns: Int
+    var straightenDegrees: Double
+    var isFlippedHorizontally: Bool
+    var isFlippedVertically: Bool
+    var reframeScale: CGFloat
+    var reframeXOffset: CGFloat
+    var reframeYOffset: CGFloat
+    var colorAdjustment: EditorColorAdjustment
     var keyframes: EditorKeyframeTracks
 
     init(
@@ -344,9 +354,20 @@ struct EditorOverlayClip: Identifiable, Hashable {
         yOffset: CGFloat = 0,
         opacity: Double = 1,
         volume: Float = 1,
+        cropAspect: EditorCropAspect = .original,
+        reframeMode: EditorReframeMode = .fit,
+        rotationQuarterTurns: Int = 0,
+        straightenDegrees: Double = 0,
+        isFlippedHorizontally: Bool = false,
+        isFlippedVertically: Bool = false,
+        reframeScale: CGFloat = 1,
+        reframeXOffset: CGFloat = 0,
+        reframeYOffset: CGFloat = 0,
+        colorAdjustment: EditorColorAdjustment = .neutral,
         keyframes: EditorKeyframeTracks = .empty
     ) {
-        let duration = originalDuration ?? asset.duration
+        let duration = originalDuration
+            ?? (asset.mediaType == .video ? asset.duration : EditorClip.photoDefaultDuration)
         self.id = id
         self.asset = asset
         self.originalDuration = duration
@@ -361,6 +382,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
         self.yOffset = min(max(yOffset, -0.75), 0.75)
         self.opacity = min(max(opacity, 0.05), 1)
         self.volume = min(max(volume, 0), 1)
+        self.cropAspect = cropAspect
+        self.reframeMode = reframeMode
+        self.rotationQuarterTurns = rotationQuarterTurns % 4
+        self.straightenDegrees = min(max(straightenDegrees, -45), 45)
+        self.isFlippedHorizontally = isFlippedHorizontally
+        self.isFlippedVertically = isFlippedVertically
+        self.reframeScale = min(max(reframeScale, 0.5), 4)
+        self.reframeXOffset = min(max(reframeXOffset, -1), 1)
+        self.reframeYOffset = min(max(reframeYOffset, -1), 1)
+        self.colorAdjustment = colorAdjustment
         self.keyframes = keyframes
     }
 
@@ -369,6 +400,8 @@ struct EditorOverlayClip: Identifiable, Hashable {
         return sourceDuration / TimeInterval(max(speed, 0.001))
     }
     var timelineEnd: TimeInterval { timelineStart + duration }
+    var isVideo: Bool { asset.mediaType == .video }
+    var isPhoto: Bool { asset.mediaType == .image }
 
     var thumbnailClip: EditorClip {
         EditorClip(
@@ -378,7 +411,17 @@ struct EditorOverlayClip: Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             speed: speed,
-            volume: volume
+            volume: volume,
+            cropAspect: cropAspect,
+            reframeMode: reframeMode,
+            rotationQuarterTurns: rotationQuarterTurns,
+            straightenDegrees: straightenDegrees,
+            isFlippedHorizontally: isFlippedHorizontally,
+            isFlippedVertically: isFlippedVertically,
+            reframeScale: reframeScale,
+            reframeXOffset: reframeXOffset,
+            reframeYOffset: reframeYOffset,
+            colorAdjustment: colorAdjustment
         )
     }
 
@@ -426,6 +469,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
             yOffset: yOffset,
             opacity: opacity,
             volume: volume,
+            cropAspect: cropAspect,
+            reframeMode: reframeMode,
+            rotationQuarterTurns: rotationQuarterTurns,
+            straightenDegrees: straightenDegrees,
+            isFlippedHorizontally: isFlippedHorizontally,
+            isFlippedVertically: isFlippedVertically,
+            reframeScale: reframeScale,
+            reframeXOffset: reframeXOffset,
+            reframeYOffset: reframeYOffset,
+            colorAdjustment: colorAdjustment,
             keyframes: splitKeyframes.left
         )
         let right = EditorOverlayClip(
@@ -442,6 +495,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
             yOffset: yOffset,
             opacity: opacity,
             volume: volume,
+            cropAspect: cropAspect,
+            reframeMode: reframeMode,
+            rotationQuarterTurns: rotationQuarterTurns,
+            straightenDegrees: straightenDegrees,
+            isFlippedHorizontally: isFlippedHorizontally,
+            isFlippedVertically: isFlippedVertically,
+            reframeScale: reframeScale,
+            reframeXOffset: reframeXOffset,
+            reframeYOffset: reframeYOffset,
+            colorAdjustment: colorAdjustment,
             keyframes: splitKeyframes.right
         )
         return (left, right)
@@ -450,6 +513,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
     static func == (lhs: EditorOverlayClip, rhs: EditorOverlayClip) -> Bool {
         lhs.id == rhs.id
             && lhs.asset.localIdentifier == rhs.asset.localIdentifier
+            && lhs.originalDuration == rhs.originalDuration
             && lhs.trimStart == rhs.trimStart
             && lhs.trimEnd == rhs.trimEnd
             && lhs.timelineStart == rhs.timelineStart
@@ -461,6 +525,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
             && lhs.yOffset == rhs.yOffset
             && lhs.opacity == rhs.opacity
             && lhs.volume == rhs.volume
+            && lhs.cropAspect == rhs.cropAspect
+            && lhs.reframeMode == rhs.reframeMode
+            && lhs.rotationQuarterTurns == rhs.rotationQuarterTurns
+            && lhs.straightenDegrees == rhs.straightenDegrees
+            && lhs.isFlippedHorizontally == rhs.isFlippedHorizontally
+            && lhs.isFlippedVertically == rhs.isFlippedVertically
+            && lhs.reframeScale == rhs.reframeScale
+            && lhs.reframeXOffset == rhs.reframeXOffset
+            && lhs.reframeYOffset == rhs.reframeYOffset
+            && lhs.colorAdjustment == rhs.colorAdjustment
             && lhs.keyframes == rhs.keyframes
     }
 

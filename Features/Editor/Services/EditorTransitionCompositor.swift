@@ -54,6 +54,7 @@ struct EditorOverlayRenderLayer {
     let timeRange: CMTimeRange
     let transform: CGAffineTransform
     let opacity: Float
+    let colorAdjustment: EditorColorAdjustment
     let animation: EditorRenderKeyframeAnimation?
 }
 
@@ -66,6 +67,9 @@ struct EditorRenderKeyframeAnimation {
     let baseRotation: Double
     let baseOpacity: Double
     let baseFilterIntensity: Double
+    let baseCropX: Double
+    let baseCropY: Double
+    let baseCropScale: Double
 
     var hasVisualAnimation: Bool {
         let visual: Set<EditorKeyframeProperty> = [
@@ -84,17 +88,17 @@ struct EditorRenderKeyframeAnimation {
         let y = tracks.value(for: .positionY, at: localTime, default: basePositionY)
         let scale = tracks.value(for: .scale, at: localTime, default: baseScale)
         let rotation = tracks.value(for: .rotation, at: localTime, default: baseRotation)
-        let cropX = tracks.value(for: .cropX, at: localTime, default: basePositionX)
-        let cropY = tracks.value(for: .cropY, at: localTime, default: basePositionY)
-        let cropScale = tracks.value(for: .cropScale, at: localTime, default: baseScale)
+        let cropX = tracks.value(for: .cropX, at: localTime, default: baseCropX)
+        let cropY = tracks.value(for: .cropY, at: localTime, default: baseCropY)
+        let cropScale = tracks.value(for: .cropScale, at: localTime, default: baseCropScale)
 
         let scaleRatio = CGFloat(
             (scale / max(baseScale, 0.000_001))
-                * (cropScale / max(baseScale, 0.000_001))
+                * (cropScale / max(baseCropScale, 0.000_001))
         )
         let rotationDelta = CGFloat((rotation - baseRotation) * .pi / 180)
-        let xDelta = CGFloat((x - basePositionX) + (cropX - basePositionX)) * renderSize.width
-        let yDelta = CGFloat((y - basePositionY) + (cropY - basePositionY)) * renderSize.height
+        let xDelta = CGFloat((x - basePositionX) + (cropX - baseCropX)) * renderSize.width
+        let yDelta = CGFloat((y - basePositionY) + (cropY - baseCropY)) * renderSize.height
         let center = CGPoint(x: renderSize.width / 2, y: renderSize.height / 2)
 
         let destination = CGAffineTransform(translationX: center.x + xDelta, y: center.y + yDelta)
@@ -450,14 +454,35 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     sourceSize: sourceSize,
                     renderSize: instruction.renderSize
                 )
-                let overlayImage = CIImage(cvPixelBuffer: overlayBuffer)
+                let overlayLocalTime = max(
+                    0,
+                    (request.compositionTime - overlay.timeRange.start).seconds
+                )
+                var overlayColor = overlay.colorAdjustment
+                if let animation = overlay.animation {
+                    overlayColor.presetIntensity = animation.filterIntensity(at: overlayLocalTime)
+                }
+                var overlayImage = EditorColorGradeRenderer.applyBase(
+                    overlayColor,
+                    to: CIImage(cvPixelBuffer: overlayBuffer)
+                )
                     .transformed(by: imageTransform)
                     .cropped(to: extent)
-                    .applyingOpacity(
-                        overlay.animation?.opacity(
-                            at: max(0, (request.compositionTime - overlay.timeRange.start).seconds)
-                        ) ?? CGFloat(overlay.opacity)
+
+                if overlayColor.masks.contains(where: \.isEffective) {
+                    let progress = overlay.timeRange.duration.seconds > 0
+                        ? overlayLocalTime / overlay.timeRange.duration.seconds
+                        : 0
+                    overlayImage = EditorColorGradeRenderer.applyMasks(
+                        overlayColor.masks,
+                        to: overlayImage,
+                        clipProgress: progress
                     )
+                }
+
+                overlayImage = overlayImage.applyingOpacity(
+                    overlay.animation?.opacity(at: overlayLocalTime) ?? CGFloat(overlay.opacity)
+                )
                 composed = overlayImage
                     .applyingFilter(
                         "CISourceOverCompositing",

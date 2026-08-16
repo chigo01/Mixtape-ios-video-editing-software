@@ -238,6 +238,16 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
     var yOffset: CGFloat
     var opacity: Double
     var volume: Float
+    var cropAspect: EditorCropAspect
+    var reframeMode: EditorReframeMode
+    var rotationQuarterTurns: Int
+    var straightenDegrees: Double
+    var isFlippedHorizontally: Bool
+    var isFlippedVertically: Bool
+    var reframeScale: CGFloat
+    var reframeXOffset: CGFloat
+    var reframeYOffset: CGFloat
+    var colorAdjustment: EditorColorAdjustment
     var keyframes: EditorKeyframeTracks
 
     init(from clip: EditorOverlayClip) {
@@ -255,6 +265,16 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         yOffset = clip.yOffset
         opacity = clip.opacity
         volume = clip.volume
+        cropAspect = clip.cropAspect
+        reframeMode = clip.reframeMode
+        rotationQuarterTurns = clip.rotationQuarterTurns
+        straightenDegrees = clip.straightenDegrees
+        isFlippedHorizontally = clip.isFlippedHorizontally
+        isFlippedVertically = clip.isFlippedVertically
+        reframeScale = clip.reframeScale
+        reframeXOffset = clip.reframeXOffset
+        reframeYOffset = clip.reframeYOffset
+        colorAdjustment = clip.colorAdjustment
         keyframes = clip.keyframes
     }
 
@@ -274,6 +294,16 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0
         opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
         volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+        cropAspect = try c.decodeIfPresent(EditorCropAspect.self, forKey: .cropAspect) ?? .original
+        reframeMode = try c.decodeIfPresent(EditorReframeMode.self, forKey: .reframeMode) ?? .fit
+        rotationQuarterTurns = try c.decodeIfPresent(Int.self, forKey: .rotationQuarterTurns) ?? 0
+        straightenDegrees = try c.decodeIfPresent(Double.self, forKey: .straightenDegrees) ?? 0
+        isFlippedHorizontally = try c.decodeIfPresent(Bool.self, forKey: .isFlippedHorizontally) ?? false
+        isFlippedVertically = try c.decodeIfPresent(Bool.self, forKey: .isFlippedVertically) ?? false
+        reframeScale = try c.decodeIfPresent(CGFloat.self, forKey: .reframeScale) ?? 1
+        reframeXOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeXOffset) ?? 0
+        reframeYOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeYOffset) ?? 0
+        colorAdjustment = try c.decodeIfPresent(EditorColorAdjustment.self, forKey: .colorAdjustment) ?? .neutral
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
     }
 }
@@ -551,7 +581,8 @@ enum EditorProjectResolver {
         }
 
         return saved.compactMap { item in
-            guard let asset = lookup[item.assetLocalIdentifier], asset.mediaType == .video else {
+            guard let asset = lookup[item.assetLocalIdentifier],
+                  asset.mediaType == .video || asset.mediaType == .image else {
                 return nil
             }
             return EditorOverlayClip(
@@ -569,6 +600,16 @@ enum EditorProjectResolver {
                 yOffset: item.yOffset,
                 opacity: item.opacity,
                 volume: item.volume,
+                cropAspect: item.cropAspect,
+                reframeMode: item.reframeMode,
+                rotationQuarterTurns: item.rotationQuarterTurns,
+                straightenDegrees: item.straightenDegrees,
+                isFlippedHorizontally: item.isFlippedHorizontally,
+                isFlippedVertically: item.isFlippedVertically,
+                reframeScale: item.reframeScale,
+                reframeXOffset: item.reframeXOffset,
+                reframeYOffset: item.reframeYOffset,
+                colorAdjustment: item.colorAdjustment,
                 keyframes: item.keyframes
             )
         }

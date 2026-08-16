@@ -57,6 +57,7 @@
 		C010C008A15C010000000008 /* ColorMaskControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D008A15C010000000008 /* ColorMaskControls.swift */; };
 		C010C009A15C010000000009 /* EditorColorMaskTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D009A15C010000000009 /* EditorColorMaskTracker.swift */; };
 		C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00AA15C01000000000A /* EditorKeyframe.swift */; };
+		C010C00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */; };
 		C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00BA15C01000000000B /* KeyframeToolPanel.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
@@ -127,6 +128,7 @@
 		C010D008A15C010000000008 /* ColorMaskControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorMaskControls.swift; sourceTree = "<group>"; };
 		C010D009A15C010000000009 /* EditorColorMaskTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorColorMaskTracker.swift; sourceTree = "<group>"; };
 		C010D00AA15C01000000000A /* EditorKeyframe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorKeyframe.swift; sourceTree = "<group>"; };
+		C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAdaptiveBottomSheet.swift; sourceTree = "<group>"; };
 		C010D00BA15C01000000000B /* KeyframeToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyframeToolPanel.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
 		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
@@ -273,6 +275,7 @@
 				C010D004A15C010000000004 /* ColorGradeControls.swift */,
 				C010D006A15C010000000006 /* ColorScopeViews.swift */,
 				C010D008A15C010000000008 /* ColorMaskControls.swift */,
+				C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */,
 				C010D00BA15C01000000000B /* KeyframeToolPanel.swift */,
 				80BD65BF4472826A783449A0 /* AudioPickerView.swift */,
 			);
@@ -555,6 +558,7 @@
 				C010C006A15C010000000006 /* ColorScopeViews.swift in Sources */,
 				C010C007A15C010000000007 /* EditorFaceMaskDetector.swift in Sources */,
 				C010C008A15C010000000008 /* ColorMaskControls.swift in Sources */,
+				C010C00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift in Sources */,
 				C010C009A15C010000000009 /* EditorColorMaskTracker.swift in Sources */,
 				C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */,
 				C0505206B7B237C572F82EFF /* AudioPickerView.swift in Sources */,
@@ -577,7 +581,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
@@ -629,7 +633,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;

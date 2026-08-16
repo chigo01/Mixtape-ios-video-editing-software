@@ -127,14 +127,14 @@ struct PhotoDurationToolPanel: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.white)
                 Spacer()
-                if let clip = vm.selectedClip, clip.isPhoto {
+                if let clip = vm.selectedDurationClip, clip.isPhoto {
                     Text(formatted(clip.duration))
                         .font(.system(size: 13, weight: .bold).monospacedDigit())
                         .foregroundColor(Color.appColors.primaryColor)
                 }
             }
 
-            if vm.selectedClip?.isPhoto == true {
+            if vm.selectedDurationClip?.isPhoto == true {
                 HStack(spacing: 8) {
                     ForEach(presets, id: \.self) { preset in
                         durationChip(preset)
@@ -162,9 +162,9 @@ struct PhotoDurationToolPanel: View {
     }
 
     private func durationChip(_ duration: TimeInterval) -> some View {
-        let isActive = abs((vm.selectedClip?.duration ?? 0) - duration) < 0.05
+        let isActive = abs((vm.selectedDurationClip?.duration ?? 0) - duration) < 0.05
         return Button {
-            guard let id = vm.selectedClipID else { return }
+            guard let id = vm.selectedOverlayClipID ?? vm.selectedClipID else { return }
             vm.commitPhotoDuration(clipID: id, duration: duration)
         } label: {
             Text(formatted(duration))
@@ -199,9 +199,9 @@ struct PhotoDurationToolPanel: View {
 
     private var durationBinding: Binding<Double> {
         Binding(
-            get: { vm.selectedClip?.duration ?? EditorClip.photoDefaultDuration },
+            get: { vm.selectedDurationClip?.duration ?? EditorClip.photoDefaultDuration },
             set: { duration in
-                guard let id = vm.selectedClipID else { return }
+                guard let id = vm.selectedOverlayClipID ?? vm.selectedClipID else { return }
                 vm.setPhotoDuration(clipID: id, duration: duration)
             }
         )
@@ -209,8 +209,8 @@ struct PhotoDurationToolPanel: View {
 
     private func finishSliderEdit(_ isEditing: Bool) {
         guard !isEditing,
-              let id = vm.selectedClipID,
-              let duration = vm.selectedClip?.duration else { return }
+              let id = vm.selectedOverlayClipID ?? vm.selectedClipID,
+              let duration = vm.selectedDurationClip?.duration else { return }
         vm.commitPhotoDuration(clipID: id, duration: duration)
     }
 
@@ -224,7 +224,7 @@ struct PhotoDurationToolPanel: View {
 struct CropReframeToolPanel: View {
     let vm: EditorViewModel
 
-    private var clip: EditorClip? { vm.selectedClip }
+    private var clip: EditorClip? { vm.selectedReframeClip }
 
     var body: some View {
         ScrollView {

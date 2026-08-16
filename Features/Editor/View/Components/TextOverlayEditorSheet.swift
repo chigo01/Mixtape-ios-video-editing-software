@@ -9,20 +9,54 @@ import SwiftUI
 
 struct TextOverlayEditorSheet: View {
     let vm: EditorViewModel
+    let isEmbedded: Bool
 
     @State private var overlay: EditorTextOverlay
     @State private var selectedTab = "Styles"
     @FocusState private var isTextFieldFocused: Bool
-    @Environment(\.dismiss) private var dismiss
 
-    init(vm: EditorViewModel, overlay: EditorTextOverlay) {
+    init(vm: EditorViewModel, overlay: EditorTextOverlay, isEmbedded: Bool = false) {
         self.vm = vm
+        self.isEmbedded = isEmbedded
         _overlay = State(initialValue: overlay)
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
+        Group {
+            if isEmbedded {
+                VStack(spacing: 0) {
+                    embeddedHeader
+                    Divider().overlay(Color.white.opacity(0.1))
+                    editorContent
+                }
+            } else {
+                NavigationStack {
+                    editorContent
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { nativeToolbar }
+                        .toolbarBackground(Color(white: 0.11), for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(Color(white: 0.11))
+        .onChange(of: overlay) { _, newValue in
+            vm.updateTextOverlay(newValue)
+        }
+        .onAppear {
+            vm.beginTextOverlayEdit()
+            isTextFieldFocused = true
+        }
+        .interactiveDismissDisabled(false)
+        .onDisappear {
+            vm.dismissTextEditor()
+        }
+    }
+
+    private var editorContent: some View {
+        ZStack {
                 Color(white: 0.11).ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -51,39 +85,37 @@ struct TextOverlayEditorSheet: View {
                     .padding(.top, 8)
                     .padding(.bottom, 32)
                 }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Text")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        commitAndDismiss()
-                    }
-                    .font(.system(size: 15, weight: .semibold))
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var nativeToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Text("Text")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done", action: commitAndDismiss)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(Color.appColors.primaryColor)
+        }
+    }
+
+    private var embeddedHeader: some View {
+        ZStack {
+            Text("Text")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundColor(.white)
+            HStack {
+                Spacer()
+                Button("Done", action: commitAndDismiss)
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundColor(Color.appColors.primaryColor)
-                }
             }
-            .toolbarBackground(Color(white: 0.11), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .presentationBackground(Color(white: 0.11))
-        .onChange(of: overlay) { _, newValue in
-            vm.updateTextOverlay(newValue)
-        }
-        .onAppear {
-            vm.beginTextOverlayEdit()
-            isTextFieldFocused = true
-        }
-        .interactiveDismissDisabled(false)
-        .onDisappear {
-            vm.dismissTextEditor()
-        }
+        .padding(.horizontal, 18)
+        .frame(height: 48)
     }
 
     // MARK: - Tab row (Styles active; rest are future placeholders)
@@ -415,7 +447,6 @@ struct TextOverlayEditorSheet: View {
     private var deleteButton: some View {
         Button(role: .destructive) {
             vm.deleteTextOverlay(id: overlay.id)
-            dismiss()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "trash")
@@ -438,6 +469,6 @@ struct TextOverlayEditorSheet: View {
 
     private func commitAndDismiss() {
         vm.updateTextOverlay(overlay)
-        dismiss()
+        vm.dismissTextEditor()
     }
 }

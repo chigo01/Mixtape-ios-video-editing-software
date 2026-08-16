@@ -280,11 +280,22 @@ final class EditorViewModel {
         return overlayClips.first { $0.id == id }
     }
 
+    var selectedReframeClip: EditorClip? {
+        selectedOverlayClip?.thumbnailClip ?? selectedClip
+    }
+
+    var selectedDurationClip: EditorClip? {
+        selectedOverlayClip?.thumbnailClip ?? selectedClip
+    }
+
     // MARK: Keyframes
 
     var availableKeyframeProperties: [EditorKeyframeProperty] {
         if selectedOverlayClip != nil {
-            return [.positionX, .positionY, .scale, .rotation, .opacity, .volume, .effectAmount]
+            return [
+                .positionX, .positionY, .scale, .rotation, .opacity, .volume,
+                .cropX, .cropY, .cropScale, .filterIntensity, .effectAmount
+            ]
         }
         if selectedAudioClip != nil { return [.volume] }
         if selectedTextOverlay != nil {
@@ -300,7 +311,7 @@ final class EditorViewModel {
     }
 
     var keyframeTargetTitle: String {
-        if selectedOverlayClip != nil { return "Video Overlay" }
+        if selectedOverlayClip != nil { return "Media Overlay" }
         if selectedAudioClip != nil { return "Audio" }
         if selectedTextOverlay != nil { return "Text" }
         return "Clip"
@@ -462,8 +473,13 @@ final class EditorViewModel {
             case .positionX: return Double(overlay.xOffset)
             case .positionY: return Double(overlay.yOffset)
             case .scale: return Double(overlay.scale)
+            case .rotation: return overlay.straightenDegrees
             case .opacity: return overlay.opacity
             case .volume: return Double(overlay.volume)
+            case .cropX: return Double(overlay.reframeXOffset)
+            case .cropY: return Double(overlay.reframeYOffset)
+            case .cropScale: return Double(overlay.reframeScale)
+            case .filterIntensity: return overlay.colorAdjustment.presetIntensity
             default: return property.neutralValue
             }
         }
@@ -539,7 +555,19 @@ final class EditorViewModel {
 
     var selectedColorMask: EditorColorMask? {
         guard let selectedColorMaskID else { return nil }
-        return selectedClip?.colorAdjustment.masks.first { $0.id == selectedColorMaskID }
+        return selectedColorAdjustment?.masks.first { $0.id == selectedColorMaskID }
+    }
+
+    var selectedColorAdjustment: EditorColorAdjustment? {
+        selectedOverlayClip?.colorAdjustment ?? selectedClip?.colorAdjustment
+    }
+
+    var selectedColorAsset: PHAsset? {
+        selectedOverlayClip?.asset ?? selectedClip?.asset
+    }
+
+    var selectedColorTargetID: UUID? {
+        selectedOverlayClipID ?? selectedClipID
     }
 
     /// `MM:SS:CC` (hundredths) — HUD uses global timeline.
@@ -628,8 +656,14 @@ final class EditorViewModel {
     }
 
     func selectOverlayClip(_ id: UUID) {
+        cancelColorMaskTracking()
+        selectedColorMaskID = nil
+        isColorMaskEditing = false
         if selectedTool == .speed {
             finalizeSpeedEditUndo()
+        }
+        if selectedTool == .duration {
+            finalizePhotoDurationEditUndo()
         }
         if selectedTool == .volume {
             finalizeVolumeEditUndo()
@@ -650,13 +684,25 @@ final class EditorViewModel {
     }
 
     func deselectOverlayClip() {
+        cancelColorMaskTracking()
         if selectedTool == .speed {
             finalizeSpeedEditUndo()
+        }
+        if selectedTool == .duration {
+            finalizePhotoDurationEditUndo()
         }
         if selectedTool == .volume {
             finalizeVolumeEditUndo()
         }
+        if selectedTool == .crop {
+            finalizeReframeEditUndo()
+        }
+        if selectedTool == .filter {
+            finalizeColorAdjustmentUndo()
+        }
         finalizeOverlayTransform()
+        selectedColorMaskID = nil
+        isColorMaskEditing = false
         selectedOverlayClipID = nil
         selectedTool = nil
     }
@@ -786,12 +832,6 @@ final class EditorViewModel {
         if tool == .filter {
             colorUndoSnapshot = currentSnapshot()
             pausePlaybackForEdit()
-            if let id = selectedClipID,
-               let index = clips.firstIndex(where: { $0.id == id }),
-               playbackInfo?.clip.id != id {
-                timelinePosition = timelineOffsetForClipIndex(index)
-                Task { await alignPlaybackToTimeline() }
-            }
         }
     }
 
@@ -879,7 +919,7 @@ final class EditorViewModel {
 
     @discardableResult
     func addSelectedClipColorMask(_ mask: EditorColorMask) -> UUID? {
-        guard (selectedClip?.colorAdjustment.masks.count ?? 0) < 8 else { return nil }
+        guard (selectedColorAdjustment?.masks.count ?? 0) < 8 else { return nil }
         var sanitized = mask
         sanitizeColorMask(&sanitized)
         updateSelectedClipColor { $0.masks.append(sanitized) }
@@ -911,7 +951,7 @@ final class EditorViewModel {
             adjustment.masks.removeAll { $0.id == id }
         }
         if selectedColorMaskID == id {
-            selectedColorMaskID = selectedClip?.colorAdjustment.masks.first?.id
+            selectedColorMaskID = selectedColorAdjustment?.masks.first?.id
         }
         commitColorAdjustmentEdit()
     }
@@ -985,15 +1025,28 @@ final class EditorViewModel {
     func trackSelectedColorMask(_ direction: EditorColorMaskTrackingDirection) {
         guard colorMaskTrackingTask == nil,
               let mask = selectedColorMask,
-              let info = playbackInfo,
-              info.clip.id == selectedClipID,
               let item = player?.currentItem else { return }
 
-        let clipStart = timelineOffsetForClipIndex(info.index)
-        let clipDuration = max(info.clip.duration, 0.001)
-        let startProgress = min(max(info.localTime / clipDuration, 0), 1)
+        let target: (id: UUID, start: TimeInterval, duration: TimeInterval)
+        if let overlay = selectedOverlayClip {
+            guard timelinePosition >= overlay.timelineStart,
+                  timelinePosition <= overlay.timelineEnd else { return }
+            target = (overlay.id, overlay.timelineStart, max(overlay.duration, 0.001))
+        } else if let info = playbackInfo, info.clip.id == selectedClipID {
+            target = (
+                info.clip.id,
+                timelineOffsetForClipIndex(info.index),
+                max(info.clip.duration, 0.001)
+            )
+        } else {
+            return
+        }
+
+        let clipStart = target.start
+        let clipDuration = target.duration
+        let startProgress = min(max((timelinePosition - clipStart) / clipDuration, 0), 1)
         let maskID = mask.id
-        let clipID = info.clip.id
+        let clipID = target.id
         let sessionID = UUID()
         colorMaskTrackingSessionID = sessionID
         colorMaskTrackingDirection = direction
@@ -1018,7 +1071,7 @@ final class EditorViewModel {
                 )
                 try Task.checkCancellation()
                 guard self.colorMaskTrackingSessionID == sessionID,
-                      self.selectedClipID == clipID else { return }
+                      self.selectedColorTargetID == clipID else { return }
                 self.updateSelectedClipColor { adjustment in
                     guard let index = adjustment.masks.firstIndex(where: { $0.id == maskID }) else {
                         return
@@ -1085,7 +1138,7 @@ final class EditorViewModel {
     }
 
     func copySelectedClipColor() {
-        copiedColorAdjustment = selectedClip?.colorAdjustment
+        copiedColorAdjustment = selectedColorAdjustment
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
@@ -1096,10 +1149,13 @@ final class EditorViewModel {
     }
 
     func applySelectedColorToAllClips() {
-        guard let adjustment = selectedClip?.colorAdjustment else { return }
+        guard let adjustment = selectedColorAdjustment else { return }
         beginColorAdjustmentEditIfNeeded()
         for index in clips.indices {
             clips[index].colorAdjustment = adjustment
+        }
+        for index in overlayClips.indices {
+            overlayClips[index].colorAdjustment = adjustment
         }
         invalidateComposition()
         commitColorAdjustmentEdit()
@@ -1115,9 +1171,15 @@ final class EditorViewModel {
 
     private func updateSelectedClipColor(_ update: (inout EditorColorAdjustment) -> Void) {
         beginColorAdjustmentEditIfNeeded()
-        guard let id = selectedClipID,
-              let index = clips.firstIndex(where: { $0.id == id }) else { return }
-        update(&clips[index].colorAdjustment)
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            update(&overlayClips[index].colorAdjustment)
+        } else if let id = selectedClipID,
+                  let index = clips.firstIndex(where: { $0.id == id }) {
+            update(&clips[index].colorAdjustment)
+        } else {
+            return
+        }
         invalidateComposition()
         scheduleColorPreviewRefresh()
     }
@@ -1192,18 +1254,27 @@ final class EditorViewModel {
 
     func beginSelectedClipReframeDrag() {
         beginReframeEditIfNeeded()
-        guard reframePositionDragOrigin == nil, let clip = selectedClip else { return }
+        guard reframePositionDragOrigin == nil, let clip = selectedReframeClip else { return }
         reframePositionDragOrigin = (clip.reframeXOffset, clip.reframeYOffset)
     }
 
     func updateSelectedClipReframeDrag(translation: CGSize, canvasSize: CGSize) {
-        guard let id = selectedClipID,
-              let origin = reframePositionDragOrigin,
+        guard let origin = reframePositionDragOrigin,
               canvasSize.width > 0,
-              canvasSize.height > 0,
-              let index = clips.firstIndex(where: { $0.id == id }) else { return }
-        clips[index].reframeXOffset = min(max(origin.x + translation.width / canvasSize.width, -1), 1)
-        clips[index].reframeYOffset = min(max(origin.y + translation.height / canvasSize.height, -1), 1)
+              canvasSize.height > 0 else { return }
+        let x = min(max(origin.x + translation.width / canvasSize.width, -1), 1)
+        let y = min(max(origin.y + translation.height / canvasSize.height, -1), 1)
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            overlayClips[index].reframeXOffset = x
+            overlayClips[index].reframeYOffset = y
+        } else if let id = selectedClipID,
+                  let index = clips.firstIndex(where: { $0.id == id }) {
+            clips[index].reframeXOffset = x
+            clips[index].reframeYOffset = y
+        } else {
+            return
+        }
         invalidateComposition()
     }
 
@@ -1229,9 +1300,25 @@ final class EditorViewModel {
 
     private func updateSelectedClipReframe(_ update: (inout EditorClip) -> Void) {
         beginReframeEditIfNeeded()
-        guard let id = selectedClipID,
-              let index = clips.firstIndex(where: { $0.id == id }) else { return }
-        update(&clips[index])
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            var proxy = overlayClips[index].thumbnailClip
+            update(&proxy)
+            overlayClips[index].cropAspect = proxy.cropAspect
+            overlayClips[index].reframeMode = proxy.reframeMode
+            overlayClips[index].rotationQuarterTurns = proxy.rotationQuarterTurns
+            overlayClips[index].straightenDegrees = proxy.straightenDegrees
+            overlayClips[index].isFlippedHorizontally = proxy.isFlippedHorizontally
+            overlayClips[index].isFlippedVertically = proxy.isFlippedVertically
+            overlayClips[index].reframeScale = proxy.reframeScale
+            overlayClips[index].reframeXOffset = proxy.reframeXOffset
+            overlayClips[index].reframeYOffset = proxy.reframeYOffset
+        } else if let id = selectedClipID,
+                  let index = clips.firstIndex(where: { $0.id == id }) {
+            update(&clips[index])
+        } else {
+            return
+        }
         invalidateComposition()
     }
 
@@ -1252,18 +1339,20 @@ final class EditorViewModel {
         }
     }
 
-    // MARK: Video overlays
+    // MARK: Media overlays
 
     func addOverlayClips(from media: [MediaItem]) {
-        let videos = media.filter { $0.asset.mediaType == .video }
-        guard !videos.isEmpty else { return }
+        let supportedMedia = media.filter {
+            $0.asset.mediaType == .video || $0.asset.mediaType == .image
+        }
+        guard !supportedMedia.isEmpty else { return }
 
         registerUndoIfNeeded()
         var insertionTime = timelinePosition
         var added: [EditorOverlayClip] = []
         var nextLane = (overlayClips.map(\.laneIndex).max() ?? -1) + 1
         var nextZIndex = (overlayClips.map(\.zIndex).max() ?? -1) + 1
-        for item in videos {
+        for item in supportedMedia {
             let clip = EditorOverlayClip(
                 asset: item.asset,
                 timelineStart: insertionTime,
@@ -1331,6 +1420,94 @@ final class EditorViewModel {
         Task { await alignPlaybackToTimeline() }
     }
 
+    func duplicateSelectedOverlayClip() {
+        guard let id = selectedOverlayClipID,
+              let index = overlayClips.firstIndex(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        let source = overlayClips[index]
+        let copy = EditorOverlayClip(
+            asset: source.asset,
+            originalDuration: source.originalDuration,
+            trimStart: source.trimStart,
+            trimEnd: source.trimEnd,
+            timelineStart: source.timelineEnd,
+            laneIndex: source.laneIndex,
+            zIndex: source.zIndex,
+            speed: source.speed,
+            scale: source.scale,
+            xOffset: source.xOffset,
+            yOffset: source.yOffset,
+            opacity: source.opacity,
+            volume: source.volume,
+            cropAspect: source.cropAspect,
+            reframeMode: source.reframeMode,
+            rotationQuarterTurns: source.rotationQuarterTurns,
+            straightenDegrees: source.straightenDegrees,
+            isFlippedHorizontally: source.isFlippedHorizontally,
+            isFlippedVertically: source.isFlippedVertically,
+            reframeScale: source.reframeScale,
+            reframeXOffset: source.reframeXOffset,
+            reframeYOffset: source.reframeYOffset,
+            colorAdjustment: source.colorAdjustment,
+            keyframes: source.keyframes
+        )
+        overlayClips.insert(copy, at: index + 1)
+        selectedOverlayClipID = copy.id
+        timelinePosition = copy.timelineStart
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    /// Replaces an overlay's source while retaining its timing, grade, crop,
+    /// transform, layer order, opacity, audio, and keyframe edits.
+    func replaceSelectedOverlayClip(with media: MediaItem) {
+        guard let id = selectedOverlayClipID,
+              let index = overlayClips.firstIndex(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        let old = overlayClips[index]
+        let rawDuration = media.asset.mediaType == .video
+            ? media.asset.duration
+            : EditorClip.photoDefaultDuration
+        let minimumSpan = EditorClip.minimumSourceSpan(speed: old.speed)
+        let sourceSpan = min(old.trimEnd - old.trimStart, rawDuration)
+        let start = min(old.trimStart, max(0, rawDuration - minimumSpan))
+        let end = min(rawDuration, max(start + minimumSpan, start + sourceSpan))
+        overlayClips[index] = EditorOverlayClip(
+            id: old.id,
+            asset: media.asset,
+            originalDuration: rawDuration,
+            trimStart: start,
+            trimEnd: end,
+            timelineStart: old.timelineStart,
+            laneIndex: old.laneIndex,
+            zIndex: old.zIndex,
+            speed: old.speed,
+            scale: old.scale,
+            xOffset: old.xOffset,
+            yOffset: old.yOffset,
+            opacity: old.opacity,
+            volume: old.volume,
+            cropAspect: old.cropAspect,
+            reframeMode: old.reframeMode,
+            rotationQuarterTurns: old.rotationQuarterTurns,
+            straightenDegrees: old.straightenDegrees,
+            isFlippedHorizontally: old.isFlippedHorizontally,
+            isFlippedVertically: old.isFlippedVertically,
+            reframeScale: old.reframeScale,
+            reframeXOffset: old.reframeXOffset,
+            reframeYOffset: old.reframeYOffset,
+            colorAdjustment: old.colorAdjustment,
+            keyframes: old.keyframes
+        )
+        timelinePosition = min(max(old.timelineStart, timelinePosition), overlayClips[index].timelineEnd)
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
     func splitSelectedOverlayAtPlayhead() {
         guard let id = selectedOverlayClipID,
               let index = overlayClips.firstIndex(where: { $0.id == id }) else { return }
@@ -1355,14 +1532,23 @@ final class EditorViewModel {
             overlayTrimUndoSnapshot = currentSnapshot()
         }
         guard let index = overlayClips.firstIndex(where: { $0.id == clipID }) else { return }
-        let minimumSpan = EditorClip.minimumSourceSpan(speed: overlayClips[index].speed)
-        let start = min(max(0, trimStart), overlayClips[index].originalDuration - minimumSpan)
-        let end = max(
-            min(overlayClips[index].originalDuration, trimEnd),
-            start + minimumSpan
-        )
-        overlayClips[index].trimStart = start
-        overlayClips[index].trimEnd = end
+        var clip = overlayClips[index]
+        let minimumSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
+
+        if clip.isPhoto {
+            let start = max(0, min(trimStart, trimEnd - minimumSpan))
+            let end = max(trimEnd, start + minimumSpan)
+            clip.originalDuration = end
+            clip.trimStart = start
+            clip.trimEnd = end
+        } else {
+            let start = min(max(0, trimStart), clip.originalDuration - minimumSpan)
+            let end = max(min(clip.originalDuration, trimEnd), start + minimumSpan)
+            clip.trimStart = start
+            clip.trimEnd = end
+        }
+
+        overlayClips[index] = clip
         invalidateComposition()
     }
 
@@ -1539,8 +1725,6 @@ final class EditorViewModel {
     // MARK: Photo duration
 
     func setPhotoDuration(clipID: UUID, duration: TimeInterval) {
-        guard let idx = clips.firstIndex(where: { $0.id == clipID }),
-              clips[idx].isPhoto else { return }
         if photoDurationUndoSnapshot == nil {
             photoDurationUndoSnapshot = currentSnapshot()
         }
@@ -1549,12 +1733,23 @@ final class EditorViewModel {
             max(duration, EditorClip.photoMinimumDuration),
             EditorClip.photoMaximumDuration
         )
-        var clip = clips[idx]
-        let sourceSpan = clampedDuration * TimeInterval(max(clip.speed, 0.001))
-        clip.originalDuration = sourceSpan
-        clip.trimStart = 0
-        clip.trimEnd = sourceSpan
-        clips[idx] = clip
+        if let index = overlayClips.firstIndex(where: { $0.id == clipID }),
+           overlayClips[index].isPhoto {
+            let sourceSpan = clampedDuration * TimeInterval(max(overlayClips[index].speed, 0.001))
+            overlayClips[index].originalDuration = sourceSpan
+            overlayClips[index].trimStart = 0
+            overlayClips[index].trimEnd = sourceSpan
+        } else if let index = clips.firstIndex(where: { $0.id == clipID }),
+                  clips[index].isPhoto {
+            var clip = clips[index]
+            let sourceSpan = clampedDuration * TimeInterval(max(clip.speed, 0.001))
+            clip.originalDuration = sourceSpan
+            clip.trimStart = 0
+            clip.trimEnd = sourceSpan
+            clips[index] = clip
+        } else {
+            return
+        }
 
         timelinePosition = min(timelinePosition, totalDuration)
         invalidateComposition()
@@ -2673,7 +2868,7 @@ final class EditorViewModel {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)"
         }.joined(separator: ";")
         let overlayHash = overlayClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.keyframes)|\($0.asset.localIdentifier)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.keyframes)|\($0.asset.localIdentifier)"
         }.joined(separator: ";")
         let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
         let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"

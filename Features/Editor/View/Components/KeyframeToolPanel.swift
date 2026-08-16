@@ -7,16 +7,17 @@ import SwiftUI
 
 struct KeyframeToolPanel: View {
     let vm: EditorViewModel
+    let isEmbedded: Bool
 
-    @Environment(\.dismiss) private var dismiss
     @State private var selectedProperty: EditorKeyframeProperty
     @State private var selectedKeyframeID: UUID?
     @State private var draftValue: Double = 0
     @State private var draftTime: TimeInterval = 0
     @State private var draftCurve: EditorKeyframeCurve = .linear
 
-    init(vm: EditorViewModel) {
+    init(vm: EditorViewModel, isEmbedded: Bool = false) {
         self.vm = vm
+        self.isEmbedded = isEmbedded
         _selectedProperty = State(
             initialValue: vm.availableKeyframeProperties.first ?? .positionX
         )
@@ -40,9 +41,31 @@ struct KeyframeToolPanel: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+        Group {
+            if isEmbedded {
+                VStack(spacing: 0) {
+                    embeddedHeader
+                    Divider().overlay(Color.white.opacity(0.1))
+                    panelContent
+                }
+            } else {
+                NavigationStack {
+                    panelContent
+                        .navigationTitle("\(vm.keyframeTargetTitle) Keyframes")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { nativeToolbar }
+                }
+            }
+        }
+        .onChange(of: selectedProperty) { _, _ in
+            selectedKeyframeID = nil
+            syncDrafts()
+        }
+    }
+
+    private var panelContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
                     propertyPicker
 
                     KeyframeCurveGraph(
@@ -109,45 +132,51 @@ struct KeyframeToolPanel: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 18)
                     }
-                }
-                .padding(18)
             }
-            .navigationTitle("\(vm.keyframeTargetTitle) Keyframes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    Button {
-                        vm.undo()
-                        reconcileSelection()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .disabled(!vm.canUndo)
-                    .accessibilityLabel("Undo keyframe change")
-
-                    Button {
-                        vm.redo()
-                        reconcileSelection()
-                    } label: {
-                        Image(systemName: "arrow.uturn.forward")
-                    }
-                    .disabled(!vm.canRedo)
-                    .accessibilityLabel("Redo keyframe change")
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        vm.selectedTool = nil
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: selectedProperty) { _, _ in
-                selectedKeyframeID = nil
-                syncDrafts()
-            }
+            .padding(18)
         }
     }
+
+    @ToolbarContentBuilder
+    private var nativeToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarLeading) {
+            historyButton("arrow.uturn.backward", enabled: vm.canUndo, action: undo)
+            historyButton("arrow.uturn.forward", enabled: vm.canRedo, action: redo)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { vm.selectedTool = nil }
+        }
+    }
+
+    private var embeddedHeader: some View {
+        ZStack {
+            Text("\(vm.keyframeTargetTitle) Keyframes")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundColor(.white)
+            HStack(spacing: 8) {
+                historyButton("arrow.uturn.backward", enabled: vm.canUndo, action: undo)
+                historyButton("arrow.uturn.forward", enabled: vm.canRedo, action: redo)
+                Spacer()
+                Button("Done") { vm.selectedTool = nil }
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color.appColors.primaryColor)
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 48)
+    }
+
+    private func historyButton(
+        _ systemImage: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) { Image(systemName: systemImage) }
+            .disabled(!enabled)
+    }
+
+    private func undo() { vm.undo(); reconcileSelection() }
+    private func redo() { vm.redo(); reconcileSelection() }
 
     private var propertyPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {

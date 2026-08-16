@@ -23,8 +23,10 @@ struct EditorPreviewPlayer: View {
     }
 
     private var showingVideoLayer: Bool {
-        guard let clip = previewClip, clip.isVideo else { return false }
-        return vm.player != nil
+        // Photo clips are silent video segments in the shared composition. Showing
+        // the composition here keeps their grade, masks, transitions, and canvas
+        // treatment visible instead of covering them with the raw PhotoKit poster.
+        vm.player != nil
     }
 
     var body: some View {
@@ -174,9 +176,13 @@ struct EditorReframeSelectionLayer: View {
     @State private var scaleAtGestureStart: CGFloat?
 
     private var activeClip: EditorClip? {
-        guard vm.selectedTool == .crop,
-              let selected = vm.selectedClip,
-              vm.playbackInfo?.clip.id == selected.id else { return nil }
+        guard vm.selectedTool == .crop, let selected = vm.selectedReframeClip else { return nil }
+        if let overlay = vm.selectedOverlayClip {
+            guard vm.timelinePosition >= overlay.timelineStart,
+                  vm.timelinePosition <= overlay.timelineEnd else { return nil }
+        } else {
+            guard vm.playbackInfo?.clip.id == vm.selectedClipID else { return nil }
+        }
         return selected
     }
 
@@ -272,7 +278,9 @@ struct EditorOverlaySelectionLayer: View {
     @State private var handleScaleAtGestureStart: CGFloat?
 
     private var selectedVisibleOverlay: EditorOverlayClip? {
-        guard let clip = vm.selectedOverlayClip,
+        guard vm.selectedTool != .crop,
+              !(vm.selectedTool == .filter && vm.isColorMaskEditing),
+              let clip = vm.selectedOverlayClip,
               vm.timelinePosition >= clip.timelineStart,
               vm.timelinePosition < clip.timelineEnd else { return nil }
         return clip.resolved(at: vm.timelinePosition)
@@ -311,7 +319,7 @@ struct EditorOverlaySelectionLayer: View {
                     )
                     .gesture(positionGesture(for: clip, canvasSize: geometry.size))
                     .simultaneousGesture(scaleGesture(for: clip))
-                    .accessibilityLabel("Selected video overlay")
+                    .accessibilityLabel("Selected media overlay")
                     .accessibilityHint("Drag to move; pinch or drag the corner handle to resize")
             }
         }

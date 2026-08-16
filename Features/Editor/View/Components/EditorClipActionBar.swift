@@ -174,7 +174,10 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case addOverlay
     case split
     case speed
+    case duration
+    case crop
     case volume
+    case filter
     case opacity
     case smaller
     case larger
@@ -183,6 +186,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case reset
     case text
     case keyframe
+    case duplicate
+    case replace
     case delete
 
     var id: String { rawValue }
@@ -191,7 +196,10 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .addOverlay: return "ADD OVERLAY"
         case .split: return "SPLIT"
         case .speed: return "SPEED"
+        case .duration: return "DURATION"
+        case .crop: return "CROP"
         case .volume: return "VOLUME"
+        case .filter: return "ADJUST"
         case .opacity: return "OPACITY"
         case .smaller: return "SMALLER"
         case .larger: return "LARGER"
@@ -200,6 +208,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .reset: return "RESET"
         case .text: return "TEXT"
         case .keyframe: return "KEYFRAME"
+        case .duplicate: return "DUPLICATE"
+        case .replace: return "REPLACE"
         case .delete: return "DELETE"
         }
     }
@@ -208,7 +218,10 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .addOverlay: return "plus.rectangle.on.rectangle"
         case .split: return "scissors"
         case .speed: return "speedometer"
+        case .duration: return "timer"
+        case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
+        case .filter: return "slider.horizontal.3"
         case .opacity: return "circle.lefthalf.filled"
         case .smaller: return "minus.magnifyingglass"
         case .larger: return "plus.magnifyingglass"
@@ -217,6 +230,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .reset: return "arrow.counterclockwise"
         case .text: return "textformat"
         case .keyframe: return "diamond.fill"
+        case .duplicate: return "plus.square.on.square"
+        case .replace: return "arrow.triangle.2.circlepath"
         case .delete: return "trash"
         }
     }
@@ -224,7 +239,10 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     var tool: EditorTool? {
         switch self {
         case .speed: return .speed
+        case .duration: return .duration
+        case .crop: return .crop
         case .volume: return .volume
+        case .filter: return .filter
         case .opacity: return .opacity
         case .text: return .text
         case .keyframe: return .keyframe
@@ -236,7 +254,14 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
 struct EditorOverlayActionBar: View {
     let vm: EditorViewModel
     var onAddOverlay: () -> Void = {}
+    var onReplace: () -> Void = {}
     var onBack: () -> Void = {}
+
+    private var availableActions: [EditorOverlayAction] {
+        EditorOverlayAction.allCases.filter { action in
+            action != .duration || vm.selectedOverlayClip?.isPhoto == true
+        }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -256,7 +281,7 @@ struct EditorOverlayActionBar: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(EditorOverlayAction.allCases) { action in
+                    ForEach(availableActions) { action in
                         Button { perform(action) } label: {
                             VStack(spacing: 6) {
                                 Image(systemName: action.systemImage)
@@ -307,8 +332,14 @@ struct EditorOverlayActionBar: View {
             vm.splitSelectedOverlayAtPlayhead()
         case .speed:
             vm.selectTool(.speed)
+        case .duration:
+            vm.selectTool(.duration)
+        case .crop:
+            vm.selectTool(.crop)
         case .volume:
             vm.selectTool(.volume)
+        case .filter:
+            vm.selectTool(.filter)
         case .opacity:
             vm.selectTool(.opacity)
         case .smaller:
@@ -329,6 +360,10 @@ struct EditorOverlayActionBar: View {
             vm.performToolAction(.text)
         case .keyframe:
             vm.selectTool(.keyframe)
+        case .duplicate:
+            vm.duplicateSelectedOverlayClip()
+        case .replace:
+            onReplace()
         case .delete:
             vm.deleteSelectedOverlayClip()
         }

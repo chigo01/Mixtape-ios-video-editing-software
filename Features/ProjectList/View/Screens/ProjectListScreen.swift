@@ -24,74 +24,11 @@ struct ProjectListScreen: View {
     var body: some View {
         AppGlobalBackgroundScaffold {
             NavigationStack(path: $path) {
-                SizedBox(height: 20)
-
-                Text("Studio WorkSpace").font(.custom("", size: 18))
-                SizedBox(height: 12)
-                Text("Manage and curate your visual narratives")
-                    .font(.custom("", size: 15))
-                    .foregroundStyle(Color.appColors.darkPrimary)
-
-                SizedBox(height: 12)
-
-                NavigationLink(value: ProjectListRoute.createProject) {
-                    HStack {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundColor(.black)
-
-                        Text("New Project")
-                            .font(.title2)
-                            .kerning(2)
-                            .fontWeight(.regular)
-                            .foregroundColor(.black)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.appColors.primaryColor.opacity(0.8))
-                    .cornerRadius(8)
+                GeometryReader { geometry in
+                    projectListContent(availableWidth: geometry.size.width)
+                        .frame(maxWidth: 1180)
+                        .frame(maxWidth: .infinity)
                 }
-                SizedBox(height: 20)
-
-                if let error = listVM.loadError {
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundColor(.red.opacity(0.8))
-                        .padding(.bottom, 8)
-                }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if listVM.projects.isEmpty {
-                            Text("No saved projects yet. Tap New Project to start editing.")
-                                .font(.subheadline)
-                                .foregroundColor(Color.white.opacity(0.55))
-                                .padding(.top, 24)
-                        } else {
-                            ForEach(listVM.projects) { project in
-                                NavigationLink(value: ProjectListRoute.editor(project)) {
-                                    ProjectCardView(project: project)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button {
-                                        renameText = project.title
-                                        projectToRename = project
-                                    } label: {
-                                        Label("Rename Project", systemImage: "pencil")
-                                    }
-
-                                    Button(role: .destructive) {
-                                        projectToDelete = project
-                                    } label: {
-                                        Label("Delete Project", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
                 .navigationDestination(for: ProjectListRoute.self) { route in
                     switch route {
                     case .createProject:
@@ -144,10 +81,98 @@ struct ProjectListScreen: View {
             .background(Color.appColors.backgroundColor)
             .toolbarBackground(Color.appColors.backgroundColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .padding(.horizontal)
             .onAppear { listVM.reload() }
             .onChange(of: path) { _, newPath in
                 if newPath.isEmpty { listVM.reload() }
+            }
+        }
+    }
+
+    private func projectListContent(availableWidth: CGFloat) -> some View {
+        let usesGrid = availableWidth >= 700
+        let columnCount = availableWidth >= 1080 ? 3 : 2
+
+        return VStack(spacing: 0) {
+            SizedBox(height: usesGrid ? 32 : 20)
+
+            Text("Studio WorkSpace")
+                .font(.system(size: usesGrid ? 24 : 18, weight: .semibold))
+            SizedBox(height: 8)
+            Text("Manage and curate your visual narratives")
+                .font(.system(size: usesGrid ? 16 : 15))
+                .foregroundStyle(Color.appColors.darkPrimary)
+
+            SizedBox(height: usesGrid ? 20 : 12)
+
+            NavigationLink(value: ProjectListRoute.createProject) {
+                Label("New Project", systemImage: "plus.circle.fill")
+                    .font(.system(size: usesGrid ? 19 : 18, weight: .medium))
+                    .kerning(usesGrid ? 1 : 2)
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, usesGrid ? 18 : 16)
+                    .background(Color.appColors.primaryColor.opacity(0.8))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            SizedBox(height: 20)
+
+            if let error = listVM.loadError {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundColor(.red.opacity(0.8))
+                    .padding(.bottom, 8)
+            }
+
+            ScrollView {
+                if listVM.projects.isEmpty {
+                    Text("No saved projects yet. Tap New Project to start editing.")
+                        .font(.subheadline)
+                        .foregroundColor(Color.white.opacity(0.55))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 24)
+                } else if usesGrid {
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(), spacing: 16),
+                            count: columnCount
+                        ),
+                        spacing: 16
+                    ) {
+                        ForEach(listVM.projects) { project in
+                            projectLink(project)
+                        }
+                    }
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(listVM.projects) { project in
+                            projectLink(project)
+                        }
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.horizontal, usesGrid ? 28 : 16)
+    }
+
+    private func projectLink(_ project: EditorProject) -> some View {
+        NavigationLink(value: ProjectListRoute.editor(project)) {
+            ProjectCardView(project: project)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                renameText = project.title
+                projectToRename = project
+            } label: {
+                Label("Rename Project", systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                projectToDelete = project
+            } label: {
+                Label("Delete Project", systemImage: "trash")
             }
         }
     }

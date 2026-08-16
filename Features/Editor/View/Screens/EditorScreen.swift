@@ -8,6 +8,7 @@
 import AVFoundation
 import Photos
 import SwiftUI
+import UIKit
 
 struct EditorScreen: View {
     @State private var vm: EditorViewModel
@@ -20,6 +21,7 @@ struct EditorScreen: View {
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioIndex: Int?
     @State private var isReplacingClip = false
+    @State private var isReplacingOverlayClip = false
     @State private var transitionTarget: EditorTransitionTarget?
     @Environment(\.dismiss) private var dismiss
 
@@ -40,104 +42,16 @@ struct EditorScreen: View {
                         onExport: { showExportScreen = true }
                     )
 
-                    EditorPreviewPlayer(vm: vm) {
-                        isFullscreenPreview = true
+                    if usesWideIPadLayout(in: geo) {
+                        wideIPadWorkspace(in: geo)
+                    } else {
+                        compactWorkspace(in: geo)
                     }
-                    .frame(maxWidth: geo.size.width - (previewHorizontalInset * 2))
-                    .frame(maxHeight: inlinePreviewHeight(in: geo))
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 2)
-
-                    if vm.selectedTool == .speed {
-                        SpeedToolPanel(vm: vm)
-                            .padding(.top, 8)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    if vm.selectedTool == .duration {
-                        PhotoDurationToolPanel(vm: vm)
-                            .padding(.top, 8)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-
-                    EditorTimelineControls(
-                        onUndo: { vm.undo() },
-                        onRedo: { vm.redo() },
-                        canUndo: vm.canUndo,
-                        canRedo: vm.canRedo
-                    )
-                    .padding(.top, 4)
-
-                    EditorTimeline(
-                        vm: vm,
-                        isOverlayTracksExpanded: $isOverlayTracksExpanded,
-                        onInsertAfterClip: { clipIndex in
-                            insertAfterClipIndex = clipIndex
-                            isMediaPickerPresented = true
-                        },
-                        onSelectOpeningTransition: {
-                            vm.beginTransitionEditing()
-                            transitionTarget = .opening
-                        },
-                        onSelectClosingTransition: {
-                            vm.beginTransitionEditing()
-                            transitionTarget = .closing
-                        },
-                        onSelectTransition: { clipIndex in
-                            vm.beginTransitionEditing()
-                            transitionTarget = .cut(afterClipAt: clipIndex)
-                        },
-                        onAddAudioClip: { audioIndex in
-                            insertAfterAudioIndex = audioIndex
-                            isAudioPickerPresented = true
-                        },
-                        onAddOverlayClip: {
-                            isOverlayPickerPresented = true
-                        }
-                    )
-                    .frame(maxHeight: .infinity, alignment: .top)
-
-                    Group {
-                        if vm.selectedOverlayClipID != nil {
-                            EditorOverlayActionBar(
-                                vm: vm,
-                                onAddOverlay: { isOverlayPickerPresented = true },
-                                onBack: { isOverlayTracksExpanded = false }
-                            )
-                        } else if vm.selectedAudioClipID != nil {
-                            EditorAudioActionBar(vm: vm)
-                        } else if vm.selectedClipID != nil {
-                            EditorClipActionBar(vm: vm, onReplace: {
-                                isReplacingClip = true
-                                isMediaPickerPresented = true
-                            })
-                        } else if vm.selectedTextOverlayID != nil {
-                            EditorTextActionBar(vm: vm)
-                        } else {
-                            EditorBottomToolbar(
-                                vm: vm,
-                                isOverlayMode: isOverlayTracksExpanded,
-                                onAddOverlay: {
-                                    if vm.overlayClips.isEmpty {
-                                        isOverlayPickerPresented = true
-                                    } else {
-                                        isOverlayTracksExpanded.toggle()
-                                    }
-                                }
-                            )
-                        }
-                    }
-                    .animation(
-                        .easeInOut(duration: 0.2),
-                        value: vm.selectedClipID != nil
-                            || vm.selectedTextOverlayID != nil
-                            || vm.selectedAudioClipID != nil
-                            || vm.selectedOverlayClipID != nil
-                    )
                 }
             }
 
         }
+        .background(EditorNavigationPopGestureLock())
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(isPresented: $showExportScreen) {
@@ -165,18 +79,28 @@ struct EditorScreen: View {
         }
         .fullScreenCover(isPresented: $isOverlayPickerPresented) {
             MediaLibraryPickerScreen(
-                title: "Add Video Overlay",
-                confirmButtonTitle: "Add Overlay",
-                allowedMediaType: .video,
-                onCancel: { isOverlayPickerPresented = false },
+                title: isReplacingOverlayClip ? "Replace Overlay" : "Add Overlay",
+                confirmButtonTitle: isReplacingOverlayClip ? "Replace" : "Add Overlay",
+                onCancel: {
+                    isReplacingOverlayClip = false
+                    isOverlayPickerPresented = false
+                },
                 onConfirm: { items in
-                    vm.addOverlayClips(from: items)
+                    if isReplacingOverlayClip, let item = items.first {
+                        vm.replaceSelectedOverlayClip(with: item)
+                    } else {
+                        vm.addOverlayClips(from: items)
+                    }
+                    isReplacingOverlayClip = false
                     isOverlayPickerPresented = false
                     isOverlayTracksExpanded = true
                 }
             )
         }
-        .sheet(isPresented: $isAudioPickerPresented) {
+        .editorSheet(
+            isPresented: $isAudioPickerPresented,
+            iPadHeight: .fraction(0.82)
+        ) {
             AudioPickerView(
                 onPick: { url in
                     isAudioPickerPresented = false
@@ -188,39 +112,44 @@ struct EditorScreen: View {
                 }
             )
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .keyframe },
                 set: { if !$0 && vm.selectedTool == .keyframe { vm.selectedTool = nil } }
-            )
+            ),
+            iPadHeight: .fraction(0.72)
         ) {
-            KeyframeToolPanel(vm: vm)
+            KeyframeToolPanel(vm: vm, isEmbedded: UIDevice.current.userInterfaceIdiom == .pad)
                 .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .canvas },
                 set: { if !$0 && vm.selectedTool == .canvas { vm.selectedTool = nil } }
-            )
+            ),
+            iPadHeight: .fixed(410)
         ) {
-            CanvasToolPanel(vm: vm)
+            CanvasToolPanel(vm: vm, isEmbedded: UIDevice.current.userInterfaceIdiom == .pad)
                 .presentationDetents([.height(410), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { transitionTarget != nil },
                 set: { if !$0 { transitionTarget = nil } }
-            )
+            ),
+            iPadHeight: .fraction(0.58),
+            allowsBackdropDismiss: false
         ) {
             if let transitionTarget {
                 EditorTransitionSheet(
                     vm: vm,
                     target: transitionTarget,
+                    isEmbedded: UIDevice.current.userInterfaceIdiom == .pad,
                     onCancel: {
                         vm.cancelTransitionEditing()
                         self.transitionTarget = nil
@@ -236,20 +165,25 @@ struct EditorScreen: View {
                 .interactiveDismissDisabled()
             }
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { vm.isTextEditorPresented },
                 set: { newValue in
                     if !newValue { vm.dismissTextEditor() }
                 }
-            )
+            ),
+            iPadHeight: .fraction(0.68)
         ) {
             if let overlay = vm.selectedTextOverlay {
-                TextOverlayEditorSheet(vm: vm, overlay: overlay)
+                TextOverlayEditorSheet(
+                    vm: vm,
+                    overlay: overlay,
+                    isEmbedded: UIDevice.current.userInterfaceIdiom == .pad
+                )
                     .presentationBackgroundInteraction(.enabled)
             }
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .volume },
                 set: { newValue in
@@ -257,7 +191,8 @@ struct EditorScreen: View {
                         vm.selectedTool = nil
                     }
                 }
-            )
+            ),
+            iPadHeight: .fixed(vm.selectedAudioClip == nil ? 180 : 300)
         ) {
             VolumeToolPanel(vm: vm)
                 .presentationDetents([.height(vm.selectedAudioClip == nil ? 180 : 300)])
@@ -265,9 +200,12 @@ struct EditorScreen: View {
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
-                get: { vm.selectedTool == .crop && vm.selectedClipID != nil },
+                get: {
+                    vm.selectedTool == .crop
+                        && (vm.selectedClipID != nil || vm.selectedOverlayClipID != nil)
+                },
                 set: { newValue in
                     if !newValue && vm.selectedTool == .crop {
                         vm.commitSelectedClipReframe()
@@ -275,7 +213,8 @@ struct EditorScreen: View {
                         vm.selectedTool = nil
                     }
                 }
-            )
+            ),
+            iPadHeight: .fixed(430)
         ) {
             CropReframeToolPanel(vm: vm)
                 .presentationDetents([.height(430), .large])
@@ -283,16 +222,20 @@ struct EditorScreen: View {
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
-                get: { vm.selectedTool == .filter && vm.selectedClipID != nil },
+                get: {
+                    vm.selectedTool == .filter
+                        && (vm.selectedClipID != nil || vm.selectedOverlayClipID != nil)
+                },
                 set: { newValue in
                     if !newValue && vm.selectedTool == .filter {
                         vm.commitColorAdjustmentEdit()
                         vm.selectedTool = nil
                     }
                 }
-            )
+            ),
+            iPadHeight: .fraction(0.68)
         ) {
             ColorAdjustmentToolPanel(vm: vm)
                 .presentationDetents([.fraction(0.68), .large])
@@ -300,7 +243,7 @@ struct EditorScreen: View {
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
-        .sheet(
+        .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .opacity && vm.selectedOverlayClipID != nil },
                 set: { newValue in
@@ -309,7 +252,8 @@ struct EditorScreen: View {
                         vm.selectedTool = nil
                     }
                 }
-            )
+            ),
+            iPadHeight: .fixed(180)
         ) {
             OverlayOpacityToolPanel(vm: vm)
                 .presentationDetents([.height(180)])
@@ -334,6 +278,159 @@ struct EditorScreen: View {
         dismiss()
     }
 
+    private func usesWideIPadLayout(in geo: GeometryProxy) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+            && geo.size.width >= 920
+            && geo.size.width > geo.size.height
+    }
+
+    private func compactWorkspace(in geo: GeometryProxy) -> some View {
+        VStack(spacing: 0) {
+            preview
+                .frame(maxWidth: min(geo.size.width - (previewHorizontalInset * 2), 860))
+                .frame(maxHeight: inlinePreviewHeight(in: geo))
+                .frame(maxWidth: .infinity)
+                .padding(.top, 2)
+
+            activeInlineTool
+            timelineControls
+            timeline
+            selectionActionBar
+        }
+    }
+
+    private func wideIPadWorkspace(in geo: GeometryProxy) -> some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                preview
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(16)
+
+                activeInlineTool
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+            .frame(width: max(390, geo.size.width * 0.43))
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1)
+
+            VStack(spacing: 0) {
+                timelineControls
+                timeline
+                selectionActionBar
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var preview: some View {
+        EditorPreviewPlayer(vm: vm) {
+            isFullscreenPreview = true
+        }
+    }
+
+    @ViewBuilder
+    private var activeInlineTool: some View {
+        if vm.selectedTool == .speed {
+            SpeedToolPanel(vm: vm)
+                .padding(.top, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+
+        if vm.selectedTool == .duration {
+            PhotoDurationToolPanel(vm: vm)
+                .padding(.top, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private var timelineControls: some View {
+        EditorTimelineControls(
+            onUndo: { vm.undo() },
+            onRedo: { vm.redo() },
+            canUndo: vm.canUndo,
+            canRedo: vm.canRedo
+        )
+        .padding(.top, 4)
+    }
+
+    private var timeline: some View {
+        EditorTimeline(
+            vm: vm,
+            isOverlayTracksExpanded: $isOverlayTracksExpanded,
+            onInsertAfterClip: { clipIndex in
+                insertAfterClipIndex = clipIndex
+                isMediaPickerPresented = true
+            },
+            onSelectOpeningTransition: {
+                vm.beginTransitionEditing()
+                transitionTarget = .opening
+            },
+            onSelectClosingTransition: {
+                vm.beginTransitionEditing()
+                transitionTarget = .closing
+            },
+            onSelectTransition: { clipIndex in
+                vm.beginTransitionEditing()
+                transitionTarget = .cut(afterClipAt: clipIndex)
+            },
+            onAddAudioClip: { audioIndex in
+                insertAfterAudioIndex = audioIndex
+                isAudioPickerPresented = true
+            },
+            onAddOverlayClip: {
+                isOverlayPickerPresented = true
+            }
+        )
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var selectionActionBar: some View {
+        Group {
+            if vm.selectedOverlayClipID != nil {
+                EditorOverlayActionBar(
+                    vm: vm,
+                    onAddOverlay: { isOverlayPickerPresented = true },
+                    onReplace: {
+                        isReplacingOverlayClip = true
+                        isOverlayPickerPresented = true
+                    },
+                    onBack: { isOverlayTracksExpanded = false }
+                )
+            } else if vm.selectedAudioClipID != nil {
+                EditorAudioActionBar(vm: vm)
+            } else if vm.selectedClipID != nil {
+                EditorClipActionBar(vm: vm, onReplace: {
+                    isReplacingClip = true
+                    isMediaPickerPresented = true
+                })
+            } else if vm.selectedTextOverlayID != nil {
+                EditorTextActionBar(vm: vm)
+            } else {
+                EditorBottomToolbar(
+                    vm: vm,
+                    isOverlayMode: isOverlayTracksExpanded,
+                    onAddOverlay: {
+                        if vm.overlayClips.isEmpty {
+                            isOverlayPickerPresented = true
+                        } else {
+                            isOverlayTracksExpanded.toggle()
+                        }
+                    }
+                )
+            }
+        }
+        .animation(
+            .easeInOut(duration: 0.2),
+            value: vm.selectedClipID != nil
+                || vm.selectedTextOverlayID != nil
+                || vm.selectedAudioClipID != nil
+                || vm.selectedOverlayClipID != nil
+        )
+    }
+
     private func inlinePreviewHeight(in geo: GeometryProxy) -> CGFloat {
         let maxByChrome = geo.size.height - editorChromeMinHeight
         let maxByFraction = geo.size.height * 0.54
@@ -344,6 +441,7 @@ struct EditorScreen: View {
 private struct EditorTransitionSheet: View {
     let vm: EditorViewModel
     let target: EditorTransitionTarget
+    let isEmbedded: Bool
     let onCancel: () -> Void
     let onDone: () -> Void
 
@@ -355,11 +453,13 @@ private struct EditorTransitionSheet: View {
     init(
         vm: EditorViewModel,
         target: EditorTransitionTarget,
+        isEmbedded: Bool = false,
         onCancel: @escaping () -> Void,
         onDone: @escaping () -> Void
     ) {
         self.vm = vm
         self.target = target
+        self.isEmbedded = isEmbedded
         self.onCancel = onCancel
         self.onDone = onDone
         let current = vm.transition(for: target) ?? (.none, 0)
@@ -382,8 +482,26 @@ private struct EditorTransitionSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        Group {
+            if isEmbedded {
+                VStack(spacing: 0) {
+                    embeddedHeader
+                    Divider().overlay(Color.white.opacity(0.1))
+                    panelContent
+                }
+            } else {
+                NavigationStack {
+                    panelContent
+                        .navigationTitle(target.navigationTitle)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { nativeToolbar }
+                }
+            }
+        }
+    }
+
+    private var panelContent: some View {
+        VStack(spacing: 0) {
                 categoryPicker
                 Divider().overlay(Color.white.opacity(0.12))
 
@@ -420,28 +538,44 @@ private struct EditorTransitionSheet: View {
                 if selectedKind != .none {
                     durationControl
                 }
-            }
-            .background(Color.appColors.backgroundColor)
-            .navigationTitle(target.navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                        .foregroundColor(.white)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        previewSelection()
-                        onDone()
-                    } label: {
-                        Image(systemName: "checkmark")
-                            .fontWeight(.bold)
-                    }
-                    .foregroundColor(Color.appColors.primaryColor)
-                    .accessibilityLabel("Apply transition")
-                }
+        }
+        .background(Color.appColors.backgroundColor)
+    }
+
+    @ToolbarContentBuilder
+    private var nativeToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel", action: onCancel).foregroundColor(.white)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            applyButton
+        }
+    }
+
+    private var embeddedHeader: some View {
+        ZStack {
+            Text(target.navigationTitle)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundColor(.white)
+            HStack {
+                Button("Cancel", action: onCancel).foregroundColor(.white)
+                Spacer()
+                applyButton
             }
         }
+        .padding(.horizontal, 18)
+        .frame(height: 48)
+    }
+
+    private var applyButton: some View {
+        Button {
+            previewSelection()
+            onDone()
+        } label: {
+            Image(systemName: "checkmark").fontWeight(.bold)
+        }
+        .foregroundColor(Color.appColors.primaryColor)
+        .accessibilityLabel("Apply transition")
     }
 
     private var categoryPicker: some View {
@@ -615,8 +749,7 @@ private struct EditorFullscreenPreviewSheet: View {
     }
 
     private var showingVideoLayer: Bool {
-        guard let clip = previewClip, clip.isVideo else { return false }
-        return vm.player != nil
+        vm.player != nil
     }
 
     var body: some View {

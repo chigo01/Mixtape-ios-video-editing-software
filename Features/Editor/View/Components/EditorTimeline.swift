@@ -200,7 +200,7 @@ struct EditorTimeline: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: Video overlays
+    // MARK: Media overlays
 
     private func overlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         Group {
@@ -295,7 +295,7 @@ struct EditorTimeline: View {
                         .buttonStyle(.plain)
                         .offset(x: max(0, totalWidth - 26), y: 9)
                         .zIndex(20)
-                        .accessibilityLabel("Add video overlay")
+                        .accessibilityLabel("Add media overlay")
                     }
                 }
                 .frame(width: totalWidth, height: overlayLaneHeight)
@@ -625,7 +625,7 @@ struct EditorTimeline: View {
     }
 }
 
-// MARK: - Video overlay thumb
+// MARK: - Media overlay thumb
 
 private struct OverlayClipThumb: View {
     let clip: EditorOverlayClip
@@ -689,7 +689,7 @@ private struct OverlayClipThumb: View {
                     trimStart: clip.trimStart,
                     trimEnd: clip.trimEnd,
                     originalDuration: clip.originalDuration,
-                    allowsDurationExtension: false,
+                    allowsDurationExtension: clip.isPhoto,
                     speed: clip.speed,
                     pixelsPerSecond: layout.pixelsPerSecond,
                     onTrimChanged: { _, start, end in

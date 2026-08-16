@@ -19,33 +19,33 @@ struct MediaLibraryPickerScreen: View {
     @State private var vm = PhotoLibraryViewModel()
     @State private var previewItem: MediaItem?
 
-    private let columns: [GridItem] = Array(
-        repeating: GridItem(.flexible(), spacing: 6),
-        count: 3
-    )
-
     var body: some View {
         AppGlobalBackgroundScaffold {
-            VStack(spacing: 0) {
-                headerBar
-                searchBar
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 10)
-                filterChips
-                    .padding(.bottom, 10)
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    headerBar
+                    searchBar
+                        .padding(.horizontal, horizontalPadding(for: geometry.size.width))
+                        .padding(.top, 6)
+                        .padding(.bottom, 10)
+                    filterChips
+                        .padding(.bottom, 10)
 
-                content
-            }
-            .safeAreaInset(edge: .bottom) {
-                if !vm.selectedIDs.isEmpty {
-                    SelectionBottomBar(
-                        vm: vm,
-                        confirmTitle: confirmButtonTitle,
-                        isLoading: isConfirmLoading,
-                        onNext: confirmSelection
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    content(availableWidth: geometry.size.width)
+                }
+                .frame(maxWidth: 1280)
+                .frame(maxWidth: .infinity)
+                .safeAreaInset(edge: .bottom) {
+                    if !vm.selectedIDs.isEmpty {
+                        SelectionBottomBar(
+                            vm: vm,
+                            confirmTitle: confirmButtonTitle,
+                            isLoading: isConfirmLoading,
+                            onNext: confirmSelection
+                        )
+                        .frame(maxWidth: 920)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: vm.selectedIDs.count)
@@ -161,7 +161,7 @@ struct MediaLibraryPickerScreen: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(availableWidth: CGFloat) -> some View {
         switch vm.authorizationStatus {
         case .denied, .restricted:
             permissionDeniedView
@@ -170,9 +170,9 @@ struct MediaLibraryPickerScreen: View {
                 .tint(Color.appColors.primaryColor)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .authorized, .limited:
-            grid
+            grid(availableWidth: availableWidth)
         @unknown default:
-            grid
+            grid(availableWidth: availableWidth)
         }
     }
 
@@ -202,14 +202,17 @@ struct MediaLibraryPickerScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var grid: some View {
+    private func grid(availableWidth: CGFloat) -> some View {
         let visible = vm.filteredItems.filter(isAllowed)
+        let spacing: CGFloat = availableWidth >= 700 ? 10 : 6
+        let minimumTileWidth: CGFloat = availableWidth >= 700 ? 142 : 108
+        let columns = [GridItem(.adaptive(minimum: minimumTileWidth), spacing: spacing)]
         return ScrollView {
             if visible.isEmpty && !vm.isLoading {
                 emptyState
                     .padding(.top, 60)
             } else {
-                LazyVGrid(columns: columns, spacing: 6) {
+                LazyVGrid(columns: columns, spacing: spacing) {
                     ForEach(visible) { item in
                         MediaGridItemView(
                             item: item,
@@ -228,11 +231,15 @@ struct MediaLibraryPickerScreen: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, horizontalPadding(for: availableWidth))
                 .padding(.bottom, 24)
             }
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func horizontalPadding(for availableWidth: CGFloat) -> CGFloat {
+        availableWidth >= 700 ? 24 : 16
     }
 
     private func isAllowed(_ item: MediaItem) -> Bool {

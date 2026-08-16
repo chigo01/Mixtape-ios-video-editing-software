@@ -17,28 +17,19 @@ struct EditorExportScreen: View {
 
     var body: some View {
         AppGlobalBackgroundScaffold {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    EditorExportPreviewSection(vm: vm)
-                    rangeSection
-                    resolutionSection
-                    frameRateSection
-                    qualitySection
-                    hdrToggle
-                    formatAndSizeRow
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, vm.isExporting || vm.exportMessage != nil ? 220 : 100)
-            }
-            .safeAreaInset(edge: .bottom) {
-                if !vm.isExporting && vm.exportedFileURL == nil && vm.exportMessage == nil {
-                    startExportButton
-                }
-            }
+            GeometryReader { geometry in
+                exportContent(availableWidth: geometry.size.width)
+                    .safeAreaInset(edge: .bottom) {
+                        if !vm.isExporting && vm.exportedFileURL == nil && vm.exportMessage == nil {
+                            startExportButton
+                                .frame(maxWidth: 720)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
 
-            if vm.isExporting || vm.exportMessage != nil || vm.exportedFileURL != nil {
-                exportPanel
+                if vm.isExporting || vm.exportMessage != nil || vm.exportedFileURL != nil {
+                    exportPanel
+                }
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -52,6 +43,49 @@ struct EditorExportScreen: View {
             }
         }
         .onDisappear { vm.commitProjectTitle() }
+    }
+
+    private func exportContent(availableWidth: CGFloat) -> some View {
+        let usesTwoColumns = UIDevice.current.userInterfaceIdiom == .pad && availableWidth >= 920
+
+        return ScrollView {
+            Group {
+                if usesTwoColumns {
+                    HStack(alignment: .top, spacing: 28) {
+                        VStack(alignment: .leading, spacing: 22) {
+                            EditorExportPreviewSection(vm: vm)
+                            rangeSection
+                        }
+                        .frame(maxWidth: 540)
+
+                        VStack(alignment: .leading, spacing: 22) {
+                            resolutionSection
+                            frameRateSection
+                            qualitySection
+                            hdrToggle
+                            formatAndSizeRow
+                        }
+                        .frame(maxWidth: 540)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 22) {
+                        EditorExportPreviewSection(vm: vm)
+                        rangeSection
+                        resolutionSection
+                        frameRateSection
+                        qualitySection
+                        hdrToggle
+                        formatAndSizeRow
+                    }
+                    .frame(maxWidth: 760)
+                }
+            }
+            .frame(maxWidth: 1120)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, usesTwoColumns ? 28 : 16)
+            .padding(.top, usesTwoColumns ? 20 : 8)
+            .padding(.bottom, vm.isExporting || vm.exportMessage != nil ? 220 : 100)
+        }
     }
 
     private var exportNavBar: some View {
@@ -310,6 +344,8 @@ struct EditorExportScreen: View {
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
                     )
             )
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
@@ -389,8 +425,7 @@ private struct EditorExportPreviewSection: View {
     }
 
     private var showingCompositionVideo: Bool {
-        guard !isShowingExportedFile, let clip = previewClip, clip.isVideo else { return false }
-        return vm.player != nil
+        !isShowingExportedFile && vm.player != nil
     }
 
     private var isPreviewPlaying: Bool {

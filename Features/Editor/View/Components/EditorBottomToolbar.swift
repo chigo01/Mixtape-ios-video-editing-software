@@ -49,20 +49,52 @@ struct EditorBottomToolbar: View {
 
 struct CanvasToolPanel: View {
     let vm: EditorViewModel
+    let isEmbedded: Bool
     @State private var draft: EditorCanvasSettings
     @State private var selectedPhoto: PhotosPickerItem?
 
     private let colors: [UInt32] = [0x000000, 0xFFFFFF, 0x1D1D1F, 0x273043, 0x6C4AB6, 0xD95D39, 0xE3B505, 0x2A9D8F]
 
-    init(vm: EditorViewModel) {
+    init(vm: EditorViewModel, isEmbedded: Bool = false) {
         self.vm = vm
+        self.isEmbedded = isEmbedded
         _draft = State(initialValue: vm.canvasSettings)
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+        Group {
+            if isEmbedded {
+                VStack(spacing: 0) {
+                    embeddedHeader
+                    Divider().overlay(Color.white.opacity(0.1))
+                    panelContent
+                }
+            } else {
+                NavigationStack {
+                    panelContent
+                        .navigationTitle("Canvas")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done", action: applyAndClose)
+                            }
+                        }
+                }
+            }
+        }
+        .task(id: selectedPhoto) {
+            guard let data = try? await selectedPhoto?.loadTransferable(type: Data.self) else { return }
+            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("MixtapeCanvas", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("\(UUID().uuidString).jpg")
+            if (try? data.write(to: url, options: .atomic)) != nil { draft.backgroundImagePath = url.path }
+        }
+    }
+
+    private var panelContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
                     section("FORMAT") {
                         HStack(spacing: 8) {
                             ForEach(EditorCanvasFormat.allCases) { format in
@@ -116,25 +148,28 @@ struct CanvasToolPanel: View {
                         Text("A softly blurred, edge-to-edge copy of the current clip fills the canvas.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                }
-                .padding(20)
             }
-            .navigationTitle("Canvas")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { vm.updateCanvasSettings(draft); vm.selectedTool = nil }
-                }
-            }
-            .task(id: selectedPhoto) {
-                guard let data = try? await selectedPhoto?.loadTransferable(type: Data.self) else { return }
-                let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("MixtapeCanvas", isDirectory: true)
-                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let url = directory.appendingPathComponent("\(UUID().uuidString).jpg")
-                if (try? data.write(to: url, options: .atomic)) != nil { draft.backgroundImagePath = url.path }
+            .padding(20)
+        }
+    }
+
+    private var embeddedHeader: some View {
+        ZStack {
+            Text("Canvas").font(.system(size: 17, weight: .bold)).foregroundColor(.white)
+            HStack {
+                Spacer()
+                Button("Done", action: applyAndClose)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color.appColors.primaryColor)
             }
         }
+        .padding(.horizontal, 18)
+        .frame(height: 48)
+    }
+
+    private func applyAndClose() {
+        vm.updateCanvasSettings(draft)
+        vm.selectedTool = nil
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

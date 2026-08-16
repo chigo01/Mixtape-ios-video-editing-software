@@ -13,12 +13,22 @@ struct EditorColorMaskSelectionLayer: View {
     private var activeMask: EditorColorMask? {
         guard vm.selectedTool == .filter,
               vm.isColorMaskEditing,
-              vm.showsColorMaskOverlay,
-              vm.playbackInfo?.clip.id == vm.selectedClipID else { return nil }
-        guard let mask = vm.selectedColorMask, let playback = vm.playbackInfo else { return nil }
-        let progress = playback.clip.duration > 0
-            ? playback.localTime / playback.clip.duration
-            : 0
+              vm.showsColorMaskOverlay else { return nil }
+        guard let mask = vm.selectedColorMask else { return nil }
+        let progress: Double
+        if let overlay = vm.selectedOverlayClip {
+            guard vm.timelinePosition >= overlay.timelineStart,
+                  vm.timelinePosition <= overlay.timelineEnd else { return nil }
+            progress = overlay.duration > 0
+                ? (vm.timelinePosition - overlay.timelineStart) / overlay.duration
+                : 0
+        } else {
+            guard let playback = vm.playbackInfo,
+                  playback.clip.id == vm.selectedClipID else { return nil }
+            progress = playback.clip.duration > 0
+                ? playback.localTime / playback.clip.duration
+                : 0
+        }
         return mask.resolved(at: progress)
     }
 

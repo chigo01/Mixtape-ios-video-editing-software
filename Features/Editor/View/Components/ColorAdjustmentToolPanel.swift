@@ -131,7 +131,7 @@ struct ColorAdjustmentToolPanel: View {
     @State private var maskMessage: String?
 
     private var adjustment: EditorColorAdjustment {
-        vm.selectedClip?.colorAdjustment ?? .neutral
+        vm.selectedColorAdjustment ?? .neutral
     }
 
     var body: some View {
@@ -160,7 +160,7 @@ struct ColorAdjustmentToolPanel: View {
         .padding(.horizontal, 18)
         .padding(.top, 16)
         .padding(.bottom, 12)
-        .task(id: vm.selectedClipID) { await loadFilterPreviewSource() }
+        .task(id: vm.selectedColorTargetID) { await loadFilterPreviewSource() }
         .task(id: scopeFingerprint) { await updateScopeIfNeeded() }
         .onChange(of: adjustment.masks.map(\.id)) { _, ids in
             guard let selectedMaskID = vm.selectedColorMaskID, ids.contains(selectedMaskID) else {
@@ -183,23 +183,63 @@ struct ColorAdjustmentToolPanel: View {
     }
 
     private var header: some View {
-        HStack {
-            Button("Reset") { vm.resetSelectedClipColor() }
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(adjustment.isNeutral ? Color.white.opacity(0.35) : .white)
-                .disabled(adjustment.isNeutral)
-            Spacer()
+        ZStack {
             Text("Color Grade")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundColor(.white)
-            Spacer()
-            Button("Done") {
-                vm.commitColorAdjustmentEdit()
-                vm.selectedTool = nil
+
+            HStack(spacing: 8) {
+                Button("Reset") { vm.resetSelectedClipColor() }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(adjustment.isNeutral ? Color.white.opacity(0.35) : .white)
+                    .disabled(adjustment.isNeutral)
+
+                historyButton(
+                    systemImage: "arrow.uturn.backward",
+                    label: "Undo color adjustment",
+                    isEnabled: vm.canUndo
+                ) {
+                    vm.commitColorAdjustmentEdit()
+                    vm.undo()
+                }
+
+                historyButton(
+                    systemImage: "arrow.uturn.forward",
+                    label: "Redo color adjustment",
+                    isEnabled: vm.canRedo
+                ) {
+                    vm.commitColorAdjustmentEdit()
+                    vm.redo()
+                }
+
+                Spacer()
+
+                Button("Done") {
+                    vm.commitColorAdjustmentEdit()
+                    vm.selectedTool = nil
+                }
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(Color.appColors.primaryColor)
             }
-            .font(.system(size: 13, weight: .bold))
-            .foregroundColor(Color.appColors.primaryColor)
         }
+    }
+
+    private func historyButton(
+        systemImage: String,
+        label: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(isEnabled ? .white : Color.white.opacity(0.24))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.white.opacity(isEnabled ? 0.08 : 0.035)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .accessibilityLabel(label)
     }
 
     private var sectionTabs: some View {
@@ -1102,7 +1142,7 @@ struct ColorAdjustmentToolPanel: View {
         } else if vm.selectedColorMaskID == nil {
             vm.selectedColorMaskID = adjustment.masks.first?.id
         }
-        guard let asset = vm.selectedClip?.asset else {
+        guard let asset = vm.selectedColorAsset else {
             filterPreviewSource = nil
             return
         }
@@ -1123,7 +1163,7 @@ struct ColorAdjustmentToolPanel: View {
     }
 
     private var scopeFingerprint: String {
-        "\(section.rawValue)|\(vm.selectedClipID?.uuidString ?? "none")|\(adjustment.hashValue)|\(filterPreviewSource?.hash ?? 0)|\(scopesUseGrade)"
+        "\(section.rawValue)|\(vm.selectedColorTargetID?.uuidString ?? "none")|\(adjustment.hashValue)|\(filterPreviewSource?.hash ?? 0)|\(scopesUseGrade)"
     }
 
     @MainActor

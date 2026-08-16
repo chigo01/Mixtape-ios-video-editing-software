@@ -76,6 +76,7 @@ enum EditorCompositionBuilder {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
         let opacity: Float
+        let colorAdjustment: EditorColorAdjustment
         let animation: EditorRenderKeyframeAnimation?
     }
 
@@ -244,8 +245,21 @@ enum EditorCompositionBuilder {
             return $0.zIndex < $1.zIndex
         }
         for overlay in orderedOverlayClips {
-            guard overlay.duration > 0,
-                  let asset = await loadVideoAsset(for: overlay.asset) else { continue }
+            guard overlay.duration > 0 else { continue }
+
+            let asset: AVAsset
+            if overlay.asset.mediaType == .video {
+                guard let videoAsset = await loadVideoAsset(for: overlay.asset) else { continue }
+                asset = videoAsset
+            } else {
+                // Reuse the same still-image conversion as primary photo clips so
+                // photo overlays have identical preview/export behavior.
+                guard let photoURL = await photoVideoURL(
+                    for: overlay.asset,
+                    duration: overlay.originalDuration
+                ) else { continue }
+                asset = AVURLAsset(url: photoURL)
+            }
 
             let timelineStart = CMTime(seconds: overlay.timelineStart, preferredTimescale: timescale)
             let sourceStart = CMTime(seconds: overlay.trimStart, preferredTimescale: timescale)
@@ -271,7 +285,11 @@ enum EditorCompositionBuilder {
                         on: overlayTrack,
                         at: timelineStart
                     )
-                    let base = await aspectFitTransform(for: sourceVideo, renderSize: renderSize)
+                    let base = await reframeTransform(
+                        for: sourceVideo,
+                        clip: overlay.thumbnailClip,
+                        renderSize: renderSize
+                    )
                     overlayVideoSegments.append(
                         OverlayVideoSegment(
                             track: overlayTrack,
@@ -282,6 +300,7 @@ enum EditorCompositionBuilder {
                                 renderSize: renderSize
                             ),
                             opacity: Float(overlay.opacity),
+                            colorAdjustment: overlay.colorAdjustment,
                             animation: renderAnimation(for: overlay)
                         )
                     )
@@ -762,7 +781,7 @@ enum EditorCompositionBuilder {
                 || $0.transitionOut.usesGPUCompositor
                 || $0.animation?.hasVisualAnimation == true
         } || overlaySegments.contains {
-            $0.animation?.hasVisualAnimation == true
+            !$0.colorAdjustment.isNeutral || $0.animation?.hasVisualAnimation == true
         } || canvasSettings.backgroundKind == .blur
         if needsGPUCompositor {
             composition.customVideoCompositorClass = EditorTransitionCompositor.self
@@ -783,6 +802,7 @@ enum EditorCompositionBuilder {
                             timeRange: $0.timeRange,
                             transform: $0.transform,
                             opacity: $0.opacity,
+                            colorAdjustment: $0.colorAdjustment,
                             animation: $0.animation
                         )
                     },
@@ -920,7 +940,10 @@ enum EditorCompositionBuilder {
             baseScale: Double(clip.reframeScale),
             baseRotation: clip.straightenDegrees,
             baseOpacity: 1,
-            baseFilterIntensity: clip.colorAdjustment.presetIntensity
+            baseFilterIntensity: clip.colorAdjustment.presetIntensity,
+            baseCropX: Double(clip.reframeXOffset),
+            baseCropY: Double(clip.reframeYOffset),
+            baseCropScale: Double(clip.reframeScale)
         )
     }
 
@@ -933,9 +956,12 @@ enum EditorCompositionBuilder {
             basePositionX: Double(clip.xOffset),
             basePositionY: Double(clip.yOffset),
             baseScale: Double(clip.scale),
-            baseRotation: 0,
+            baseRotation: clip.straightenDegrees,
             baseOpacity: clip.opacity,
-            baseFilterIntensity: 1
+            baseFilterIntensity: clip.colorAdjustment.presetIntensity,
+            baseCropX: Double(clip.reframeXOffset),
+            baseCropY: Double(clip.reframeYOffset),
+            baseCropScale: Double(clip.reframeScale)
         )
     }
 
