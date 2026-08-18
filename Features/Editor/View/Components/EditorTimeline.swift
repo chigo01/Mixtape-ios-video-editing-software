@@ -1317,7 +1317,14 @@ private struct ClipThumb: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.55)))
-                if abs(clip.speed - 1.0) > 0.02 {
+                if clip.speedRamp != nil {
+                    Label("Curve", systemImage: "waveform.path.ecg")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.appColors.primaryColor))
+                } else if abs(clip.speed - 1.0) > 0.02 {
                     Text(String(format: "%.2g×", clip.speed))
                         .font(.system(size: 8, weight: .bold).monospacedDigit())
                         .foregroundColor(.white)
@@ -1352,7 +1359,7 @@ private struct ClipThumb: View {
                     trimEnd: clip.trimEnd,
                     originalDuration: clip.originalDuration,
                     allowsDurationExtension: clip.isPhoto,
-                    speed: clip.speed,
+                    speed: clip.averageSpeed,
                     pixelsPerSecond: pixelsPerSecond,
                     onTrimChanged: { _, start, end in
                         isTrimming = true

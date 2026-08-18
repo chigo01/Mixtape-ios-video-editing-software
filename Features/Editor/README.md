@@ -448,6 +448,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Screens/EditorExportScreen.swift` | Export UI: live preview + scrubber, project name, settings, progress, share. |
 | `ViewModel/EditorViewModel.swift` | Timeline, playback, video/text/audio overlays, `projectTitle`, undo, export, auto-save. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
+| `Model/EditorSpeedRamp.swift` | Persisted curve points, presets, interpolation, source/timeline mapping, split logic, and deterministic render segments. |
 | `Services/EditorCompositionBuilder.swift` | Shared preview/export composition; primary and overlay video tracks, transforms, transitions, audio mix, backing tracks, and extended timelines. |
 | `Services/EditorTransitionCompositor.swift` | Metal-backed custom compositor; invokes color grading, transitions, and overlay composition. |
 | `Services/EditorColorGradeRenderer.swift` | Core Image primary controls, 40 filter recipes, cached 3D LUT HSL/RGB-curves/wheels, detail and grain effects. |
@@ -556,7 +557,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Orientation fix** | Portrait video not rotated in preview | `AVMutableVideoComposition`, `preferredTransform` | Video composition transforms |
 | **Export** | Render timeline → MP4/MOV → Photos | `EditorExportService`, `EditorTopBar` Export | `AVAssetReader`, `AVAssetWriter` |
 | **Undo / Redo** | Snapshot restore after edits | `EditorUndoManager`, `EditorTimelineSnapshot` | Command / memento pattern |
-| **Speed tool** | 0.25×–3× per clip; composition `scaleTimeRange` | `SpeedToolPanel`, `EditorCompositionBuilder.applySpeed` | Timeline vs source time |
+| **Speed tool** | Normal 0.25×–3× plus editable 0.1×–8× speed curves and six presets | `EditorSpeedRamp`, `SpeedToolPanel`, `EditorCompositionBuilder.insertSpeedAdjusted` | Shared source/timeline mapping and segmented rate rendering |
 | **Crop and reframe** | Crop presets, Fit/Fill, rotate, flip, straighten, scale, position, guides | `CropReframeToolPanel`, `EditorReframeSelectionLayer`, `EditorCompositionBuilder.reframeTransform` | Persistent affine transform shared by preview/export |
 | **Filmstrip thumbnails** | Multiple frames tiled per clip cell | `ClipFilmstripView`, `ClipThumbnailService` | `AVAssetImageGenerator` batching |
 | **Project persistence** | JSON project files; home list opens saved edits | `EditorProject`, `ProjectStore`, `ProjectListViewModel` | Codable + PhotoKit rehydration |
@@ -618,6 +619,17 @@ Use this as a map of **what we built** and **why**, in learning order:
 - Select a clip first. Use presets (0.5×–2×) or the slider (0.25×–3×).
 - `EditorClip.speed` drives timeline width (`duration`) and `sourceTime(forExportedLocal:)`.
 - `EditorCompositionBuilder` applies **`scaleTimeRange`** on inserted video/audio segments so playback matches the ruler.
+
+#### 12.3.1 Speed ramps
+
+- **Normal / Curve modes:** the SPEED panel keeps the existing constant-rate controls and adds a dedicated curve workspace for selected primary video clips.
+- **Presets:** Montage, Hero, Bullet, Flash, Speed Up, and Slow Down provide editable starting curves from 0.1× to 8×.
+- **Curve editor:** control points drag vertically to set speed and horizontally to set source-relative timing. Endpoint timing stays locked to the clip edges; intermediate points can be added at the playhead or largest open interval and removed independently.
+- **Interpolation:** Linear and Smooth modes share the same persisted `EditorSpeedRamp` model. The graph uses a logarithmic speed axis so slow-motion values remain as editable as high-speed values.
+- **Timing model:** points live in normalized source time. `EditorSpeedRamp` produces one bounded render plan used for clip duration, source seeking, playhead display, splitting, preview, and export, preventing separate timing implementations from drifting.
+- **Rendering:** AVFoundation has no continuous composition-track rate curve, so `EditorCompositionBuilder` samples the curve into bounded contiguous source slices and scales each slice deterministically. Video and embedded source audio use the identical plan.
+- **Editing integrity:** presets, point changes, interpolation, reset, clip duplication/replacement, split, undo/redo, autosave, reopen, timeline width, transitions, and composition fingerprints all carry ramp state. Older projects decode `speedRamp` as `nil` and keep their normal speed.
+- **Timeline feedback:** ramped clips show a Curve badge, and the curve graph displays the current source-relative playhead.
 
 ### 12.4 Thumbnail filmstrip
 
@@ -751,7 +763,7 @@ through project save/reopen, and has reasonable device-performance coverage.
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
 | 7 | **Keyframe engine — complete** | Reusable local-time scalar tracks and a graph/curve editor cover transform, opacity, volume, crop/reframe, filter intensity, text motion, and effect parameters. Hold, linear, ease-in, ease-out, ease-in/out, and editable cubic Bézier segments share one deterministic sampler. Clip/overlay GPU rendering, audio mix ramps, SwiftUI text preview, offline text burn-in, split/duplicate/replace, undo, autosave, reopen, and export consume the same persisted tracks. |
-| 8 | **Speed ramps** | Multiple speed points, curve presets, source/timeline remapping, pitch options, and transition-safe rendering. |
+| 8 | **Speed ramps — complete** | Normal/Curve modes, six presets, editable points, linear/smooth interpolation, 0.1×–8× range, source/timeline remapping, split-safe persistence, undo, timeline feedback, and shared preview/export segment rendering. |
 | 9 | **Reverse and freeze frame** | Cached reverse media generation, cancellable progress, freeze insertion, audio policy, and project relinking. |
 | 10 | **Multi-layer video — complete** | Multiple video-overlay tracks render in a persistent back-to-front stack. Each layer has independent trim/move, opacity, transforms, keyframes, and audio controls; contextual Send Back/Bring Front actions are undoable and export matches preview ordering. |
 | 11 | **Blend, mask, and chroma key** | Per-clip color masks, local corrections, bidirectional tracked motion samples, interpolation, and GPU export parity are complete. Remaining: manual tracking-correction keyframes, overlay/effect masks, blend modes, green-screen keying, and spill suppression. |

@@ -1,23 +1,37 @@
 # Mixtape
 
-Mixtape is a native, phone-first iOS video editor built with SwiftUI, AVFoundation,
-Core Image, and an MVVM feature architecture. It provides a continuous multi-clip
-timeline, creative transitions, audio and text editing, project persistence, and
-configurable video export.
+Mixtape is a native, touch-first iOS and iPadOS video editor built with SwiftUI,
+AVFoundation, Core Image, and an MVVM feature architecture. It provides a continuous
+multi-clip timeline, creative transitions, audio and text editing, project persistence,
+and configurable video export across iPhone and adaptive iPad layouts.
 
 > The project is under active development. Core editing and export flows work,
 > while the professional roadmap below tracks the remaining production features.
 
 ## Features
 
+### Platform experience
+
+- A focused portrait editor on iPhone, with iPhone orientation locked to portrait.
+- Adaptive iPad support in portrait and landscape, including Stage Manager and narrow
+  window fallbacks driven by available width instead of device orientation alone.
+- A wide iPad editing workspace with the preview beside the timeline and tools, while
+  portrait and compact iPad windows retain the touch-friendly stacked workspace.
+- Responsive project grids, adaptive PhotoKit media columns, bounded selection controls,
+  and a two-column export workspace on wide iPads.
+- iPad-native bottom tool drawers keep the preview and timeline visible while editing,
+  with native sheet presentation retained on iPhone.
+- A universal branded app icon compiled for both iPhone and iPad.
+
 ### Timeline editing
 
 - Continuous multi-clip preview backed by one `AVMutableComposition` and `AVPlayer`.
-- Video and photo clips with trim, split, reorder, speed, volume, and deletion.
+- Video and photo clips with trim, split, reorder, normal speed, curve-based speed
+  ramps, volume, and deletion.
 - Per-clip crop and reframe with rotation, flips, straighten, aspect presets,
   fit/fill framing, preview drag/pinch gestures, and safe-area guides.
 - Adjustable photo duration and media insertion at any clip boundary.
-- Global timeline with primary-video, video-overlay, text, and audio lanes, scrubbing,
+- Global timeline with primary-video, media-overlay, text, and audio lanes, scrubbing,
   undo/redo, and extended overlay/audio/text tails.
 - Magnetic playhead and clip/overlay-edge snapping with visible alignment guides,
   zoom-aware thresholds, and haptic feedback.
@@ -35,10 +49,13 @@ configurable video export.
 - Orientation-safe portrait, landscape, rotated, video, and generated-photo rendering.
 - Text overlays with fonts, color, size, opacity, alignment, position, timeline trim,
   timeline movement, and direct preview dragging.
-- CapCut-style video overlays with PhotoKit import, picture-in-picture compositing,
-  timeline trim/move/split/delete, speed, volume, opacity, direct preview positioning,
-  pinch resize, automatic stacked lanes for overlapping overlays, persistence,
-  undo/redo, and preview/export parity.
+- CapCut-style photo and video overlays with PhotoKit import, picture-in-picture
+  compositing, timeline trim/move/split/delete, speed, volume, opacity, direct preview
+  positioning, pinch resize, automatic stacked lanes for overlapping overlays,
+  persistence, undo/redo, and preview/export parity.
+- Still-image overlays begin at the standard three-second duration and can be extended
+  directly with the timeline's right trim handle, using the same generated-video path
+  for preview and export as primary still-image clips.
 - Project-level 9:16, 16:9, 1:1, 4:5, and custom canvases with solid-color,
   GPU-blurred, or imported-image backgrounds in both preview and export.
 - Forty categorized looks, twenty primary color controls, selective HSL, RGB/master
@@ -69,6 +86,8 @@ configurable video export.
 
 - macOS with Xcode and the iOS SDK.
 - An iPhone or iPad running iOS/iPadOS 18.6 or later.
+- iPhone runs in portrait; iPad supports portrait, upside-down portrait, and both
+  landscape orientations.
 - Photo Library access for media import.
 - A physical device is recommended for validating GPU transitions, HDR, performance,
   audio routing, and Photos export.
@@ -124,7 +143,8 @@ pipeline, feature guide, and engineering notes, see
 
 - Color scopes currently analyze a representative selected-clip frame rather than
   continuously sampling every frame during playback.
-- Editing is single-selection, with one primary video lane plus multiple independently ordered video-overlay layers.
+- Editing is single-selection, with one primary video lane plus multiple independently
+  ordered photo-or-video overlay layers.
 - There are no speed-ramp, reverse, stabilization, or chroma-key tools yet.
 - Embedded video audio does not yet display a waveform.
 - Projects are local-only and do not yet support packaged media relinking or iCloud sync.
@@ -134,7 +154,7 @@ pipeline, feature guide, and engineering notes, see
 
 Phase 1, the Phase 2 keyframe engine, and multi-layer video are complete. The next professional milestones are:
 
-1. Speed ramps, reverse playback, freeze frames, and optical-flow options.
+1. Reverse playback, freeze frames, and optical-flow options.
 2. Blend modes, masks, chroma key, stabilization, and tracking.
 3. Audio waveforms, meters, ducking, voiceover recording, EQ, and noise reduction.
 4. Captions, stickers, text animation, and reusable title/template systems.

@@ -29,7 +29,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -140,20 +140,16 @@ enum EditorCompositionBuilder {
                     seconds: max(0, clip.trimEnd - clip.trimStart),
                     preferredTimescale: timescale
                 )
-                let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
-
                 if let sourceVideo = try? await avAsset.loadTracks(withMediaType: .video).first {
-                    try? compositionVideoTrack.insertTimeRange(
-                        sourceRange,
-                        of: sourceVideo,
-                        at: cursor
-                    )
-                    applySpeed(
-                        clip.speed,
+                    insertSpeedAdjusted(
+                        sourceTrack: sourceVideo,
+                        into: compositionVideoTrack,
+                        sourceStart: sourceStart,
                         sourceDuration: sourceDuration,
                         timelineDuration: segmentDuration,
-                        on: compositionVideoTrack,
-                        at: cursor
+                        timelineStart: cursor,
+                        uniformSpeed: clip.speed,
+                        ramp: clip.speedRamp
                     )
                     let transform = await reframeTransform(
                         for: sourceVideo,
@@ -176,17 +172,15 @@ enum EditorCompositionBuilder {
 
                 if let compositionAudioTrack,
                    let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first {
-                    try? compositionAudioTrack.insertTimeRange(
-                        sourceRange,
-                        of: sourceAudio,
-                        at: cursor
-                    )
-                    applySpeed(
-                        clip.speed,
+                    insertSpeedAdjusted(
+                        sourceTrack: sourceAudio,
+                        into: compositionAudioTrack,
+                        sourceStart: sourceStart,
                         sourceDuration: sourceDuration,
                         timelineDuration: segmentDuration,
-                        on: compositionAudioTrack,
-                        at: cursor
+                        timelineStart: cursor,
+                        uniformSpeed: clip.speed,
+                        ramp: clip.speedRamp
                     )
                     audioVolumeSegments.append(
                         AudioVolumeSegment(
@@ -686,6 +680,67 @@ enum EditorCompositionBuilder {
         guard abs(speed - 1.0) > 0.001, sourceDuration.seconds > 0 else { return }
         let insertedRange = CMTimeRange(start: cursor, duration: sourceDuration)
         track.scaleTimeRange(insertedRange, toDuration: timelineDuration)
+    }
+
+    /// Inserts a clip as contiguous constant-rate slices sampled from the shared
+    /// speed-ramp render plan. AVMutableComposition cannot express a continuous
+    /// rate curve directly, so bounded slices provide deterministic smooth ramps
+    /// without changing the video-composition instruction topology.
+    private static func insertSpeedAdjusted(
+        sourceTrack: AVAssetTrack,
+        into compositionTrack: AVMutableCompositionTrack,
+        sourceStart: CMTime,
+        sourceDuration: CMTime,
+        timelineDuration: CMTime,
+        timelineStart: CMTime,
+        uniformSpeed: Float,
+        ramp: EditorSpeedRamp?
+    ) {
+        guard let ramp, ramp.isUsable else {
+            let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
+            try? compositionTrack.insertTimeRange(sourceRange, of: sourceTrack, at: timelineStart)
+            applySpeed(
+                uniformSpeed,
+                sourceDuration: sourceDuration,
+                timelineDuration: timelineDuration,
+                on: compositionTrack,
+                at: timelineStart
+            )
+            return
+        }
+
+        let plan = ramp.renderSegments(sourceDuration: sourceDuration.seconds)
+        for segment in plan {
+            let segmentSourceStart = sourceStart + CMTime(
+                seconds: segment.sourceStart,
+                preferredTimescale: timescale
+            )
+            let segmentSourceDuration = CMTime(
+                seconds: segment.sourceDuration,
+                preferredTimescale: timescale
+            )
+            let segmentTimelineStart = timelineStart + CMTime(
+                seconds: segment.timelineStart,
+                preferredTimescale: timescale
+            )
+            let segmentTimelineDuration = CMTime(
+                seconds: segment.timelineDuration,
+                preferredTimescale: timescale
+            )
+            let sourceRange = CMTimeRange(
+                start: segmentSourceStart,
+                duration: segmentSourceDuration
+            )
+            try? compositionTrack.insertTimeRange(
+                sourceRange,
+                of: sourceTrack,
+                at: segmentTimelineStart
+            )
+            compositionTrack.scaleTimeRange(
+                CMTimeRange(start: segmentTimelineStart, duration: segmentSourceDuration),
+                toDuration: segmentTimelineDuration
+            )
+        }
     }
 
     /// Extends the last video segment so instructions span the full composition (audio/text tail).

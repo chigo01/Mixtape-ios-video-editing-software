@@ -58,6 +58,7 @@
 		C010C009A15C010000000009 /* EditorColorMaskTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D009A15C010000000009 /* EditorColorMaskTracker.swift */; };
 		C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00AA15C01000000000A /* EditorKeyframe.swift */; };
 		C010C00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */; };
+		C010C00DA15C01000000000D /* EditorSpeedRamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00DA15C01000000000D /* EditorSpeedRamp.swift */; };
 		C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00BA15C01000000000B /* KeyframeToolPanel.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
@@ -130,6 +131,7 @@
 		C010D00AA15C01000000000A /* EditorKeyframe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorKeyframe.swift; sourceTree = "<group>"; };
 		C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAdaptiveBottomSheet.swift; sourceTree = "<group>"; };
 		C010D00BA15C01000000000B /* KeyframeToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyframeToolPanel.swift; sourceTree = "<group>"; };
+		C010D00DA15C01000000000D /* EditorSpeedRamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSpeedRamp.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
 		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
 		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
@@ -238,6 +240,7 @@
 				BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */,
 				C010D001A15C010000000001 /* EditorColorGrade.swift */,
 				C010D00AA15C01000000000A /* EditorKeyframe.swift */,
+				C010D00DA15C01000000000D /* EditorSpeedRamp.swift */,
 				BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
@@ -520,6 +523,7 @@
 				BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */,
 				C010C001A15C010000000001 /* EditorColorGrade.swift in Sources */,
 				C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */,
+				C010C00DA15C01000000000D /* EditorSpeedRamp.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */,

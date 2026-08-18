@@ -135,6 +135,7 @@ struct EditorClip: Identifiable, Hashable {
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var speed: Float
+    var speedRamp: EditorSpeedRamp?
     var volume: Float
     var cropAspect: EditorCropAspect
     var reframeMode: EditorReframeMode
@@ -168,6 +169,7 @@ struct EditorClip: Identifiable, Hashable {
         trimStart: TimeInterval,
         trimEnd: TimeInterval,
         speed: Float = 1.0,
+        speedRamp: EditorSpeedRamp? = nil,
         volume: Float = 1.0,
         cropAspect: EditorCropAspect = .original,
         reframeMode: EditorReframeMode = .fit,
@@ -189,6 +191,7 @@ struct EditorClip: Identifiable, Hashable {
         self.trimStart = trimStart
         self.trimEnd = trimEnd
         self.speed = speed
+        self.speedRamp = speedRamp?.isUsable == true ? speedRamp : nil
         self.volume = volume
         self.cropAspect = cropAspect
         self.reframeMode = reframeMode
@@ -212,11 +215,16 @@ struct EditorClip: Identifiable, Hashable {
 
     /// Splits this clip at `sourceTime` (asset seconds). Returns nil if too close to either edge.
     func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorClip, right: EditorClip)? {
-        let minSpan = Self.minimumSourceSpan(speed: speed)
+        let minSpan = Self.minimumSourceSpan(speed: averageSpeed)
         guard sourceTime >= trimStart + minSpan, sourceTime <= trimEnd - minSpan else { return nil }
 
-        let splitLocalTime = (sourceTime - trimStart) / TimeInterval(max(speed, 0.001))
+        let sourceSpan = max(trimEnd - trimStart, 0)
+        let splitSourceOffset = sourceTime - trimStart
+        let splitLocalTime = timelineTime(forSourceOffset: splitSourceOffset)
         let splitKeyframes = keyframes.split(at: splitLocalTime)
+        let splitRamps = speedRamp?.split(
+            atSourceProgress: sourceSpan > 0 ? splitSourceOffset / sourceSpan : 0.5
+        )
 
         let left = EditorClip(
             asset: asset,
@@ -224,6 +232,7 @@ struct EditorClip: Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: sourceTime,
             speed: speed,
+            speedRamp: splitRamps?.left,
             volume: volume,
             cropAspect: cropAspect,
             reframeMode: reframeMode,
@@ -245,6 +254,7 @@ struct EditorClip: Identifiable, Hashable {
             trimStart: sourceTime,
             trimEnd: trimEnd,
             speed: speed,
+            speedRamp: splitRamps?.right,
             volume: volume,
             cropAspect: cropAspect,
             reframeMode: reframeMode,
@@ -269,15 +279,50 @@ struct EditorClip: Identifiable, Hashable {
     /// Duration after trim + speed (timeline seconds for this clip).
     var duration: TimeInterval {
         let trimmed = max(0, trimEnd - trimStart)
+        if let speedRamp {
+            return speedRamp.timelineDuration(forSourceDuration: trimmed)
+        }
         return speed > 0 ? trimmed / TimeInterval(speed) : trimmed
+    }
+
+    /// Effective constant rate for UI gestures that operate in source pixels.
+    /// Rendering and seeking still use the complete ramp plan.
+    var averageSpeed: Float {
+        let trimmed = max(0, trimEnd - trimStart)
+        guard duration > 0 else { return max(speed, 0.001) }
+        return Float(trimmed / duration)
     }
 
     /// Local playback time within this clip (source timeline), derived from exported `localTime * speed + trimStart`.
     func sourceTime(forExportedLocal local: TimeInterval) -> TimeInterval {
-        min(
+        let trimmed = max(0, trimEnd - trimStart)
+        if let speedRamp {
+            return min(
+                max(
+                    trimStart + speedRamp.sourceOffset(
+                        forTimelineTime: local,
+                        sourceDuration: trimmed
+                    ),
+                    trimStart
+                ),
+                trimEnd
+            )
+        }
+        return min(
             max(trimStart + local * TimeInterval(speed), trimStart),
             trimEnd
         )
+    }
+
+    func timelineTime(forSourceOffset sourceOffset: TimeInterval) -> TimeInterval {
+        let trimmed = max(0, trimEnd - trimStart)
+        if let speedRamp {
+            return speedRamp.timelineTime(
+                forSourceOffset: sourceOffset,
+                sourceDuration: trimmed
+            )
+        }
+        return sourceOffset / TimeInterval(max(speed, 0.001))
     }
 
     static func == (lhs: EditorClip, rhs: EditorClip) -> Bool {
@@ -286,6 +331,7 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.trimStart == rhs.trimStart
             && lhs.trimEnd == rhs.trimEnd
             && lhs.speed == rhs.speed
+            && lhs.speedRamp == rhs.speedRamp
             && lhs.volume == rhs.volume
             && lhs.cropAspect == rhs.cropAspect
             && lhs.reframeMode == rhs.reframeMode

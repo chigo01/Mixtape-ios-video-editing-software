@@ -15,6 +15,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var speed: Float
+    var speedRamp: EditorSpeedRamp?
     var volume: Float
     var cropAspect: EditorCropAspect
     var reframeMode: EditorReframeMode
@@ -37,6 +38,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimStart = clip.trimStart
         trimEnd = clip.trimEnd
         speed = clip.speed
+        speedRamp = clip.speedRamp
         volume = clip.volume
         cropAspect = clip.cropAspect
         reframeMode = clip.reframeMode
@@ -61,6 +63,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
         speed = try c.decode(Float.self, forKey: .speed)
+        speedRamp = try c.decodeIfPresent(EditorSpeedRamp.self, forKey: .speedRamp)
         volume = try c.decode(Float.self, forKey: .volume)
         cropAspect = try c.decodeIfPresent(EditorCropAspect.self, forKey: .cropAspect) ?? .original
         reframeMode = try c.decodeIfPresent(EditorReframeMode.self, forKey: .reframeMode) ?? .fit
@@ -495,7 +498,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var formattedDuration: String {
         let total = Int(clips.reduce(0.0) { partial, clip in
             let trimmed = max(0, clip.trimEnd - clip.trimStart)
-            let timeline = clip.speed > 0 ? trimmed / TimeInterval(clip.speed) : trimmed
+            let timeline = clip.speedRamp?.timelineDuration(forSourceDuration: trimmed)
+                ?? (clip.speed > 0 ? trimmed / TimeInterval(clip.speed) : trimmed)
             return partial + timeline
         }.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
@@ -553,6 +557,7 @@ enum EditorProjectResolver {
                 trimStart: item.trimStart,
                 trimEnd: item.trimEnd,
                 speed: item.speed,
+                speedRamp: item.speedRamp,
                 volume: item.volume,
                 cropAspect: item.cropAspect,
                 reframeMode: item.reframeMode,

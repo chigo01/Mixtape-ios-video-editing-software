@@ -202,6 +202,31 @@ struct EditorScreen: View {
         }
         .editorSheet(
             isPresented: Binding(
+                get: { vm.selectedTool == .speed },
+                set: { newValue in
+                    guard !newValue, vm.selectedTool == .speed else { return }
+                    // Route dismissal through the tool lifecycle so a drag-to-close
+                    // commits the current speed edit as one undoable operation.
+                    vm.selectTool(.speed)
+                }
+            ),
+            iPadHeight: .fraction(0.62)
+        ) {
+            ScrollView {
+                SpeedToolPanel(vm: vm)
+                    // A bounded canvas keeps controls comfortably reachable on
+                    // wide iPads instead of stretching the curve edge to edge.
+                    .frame(maxWidth: 920)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .presentationDetents([.fraction(0.62), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
                 get: {
                     vm.selectedTool == .crop
                         && (vm.selectedClipID != nil || vm.selectedOverlayClipID != nil)
@@ -333,12 +358,6 @@ struct EditorScreen: View {
 
     @ViewBuilder
     private var activeInlineTool: some View {
-        if vm.selectedTool == .speed {
-            SpeedToolPanel(vm: vm)
-                .padding(.top, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-
         if vm.selectedTool == .duration {
             PhotoDurationToolPanel(vm: vm)
                 .padding(.top, 8)

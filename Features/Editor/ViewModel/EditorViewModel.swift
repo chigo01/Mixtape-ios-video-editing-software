@@ -257,6 +257,25 @@ final class EditorViewModel {
         return clips.first { $0.id == id }
     }
 
+    /// Current playhead expressed in the selected clip's normalized source time.
+    /// The curve editor uses source progress because ramp control points are
+    /// attached to media content rather than a duration that changes as speeds move.
+    var selectedClipSourceProgress: Double? {
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return nil }
+        let clip = clips[index]
+        let localTimeline = min(
+            max(0, timelinePosition - timelineOffsetForClipIndex(index)),
+            clip.duration
+        )
+        let sourceSpan = max(clip.trimEnd - clip.trimStart, 0)
+        guard sourceSpan > 0 else { return 0 }
+        return min(
+            max((clip.sourceTime(forExportedLocal: localTimeline) - clip.trimStart) / sourceSpan, 0),
+            1
+        )
+    }
+
     var canDeleteSelectedClip: Bool {
         selectedClipID != nil && clips.count > 1
     }
@@ -1708,8 +1727,10 @@ final class EditorViewModel {
 
     func setSpeed(clipID: UUID, speed: Float) {
         guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        if speedUndoSnapshot == nil { speedUndoSnapshot = currentSnapshot() }
         var clip = clips[idx]
         clip.speed = min(max(speed, 0.25), 3.0)
+        clip.speedRamp = nil
         clips[idx] = clip
         timelinePosition = min(timelinePosition, totalDuration)
         invalidateComposition()
@@ -1720,6 +1741,128 @@ final class EditorViewModel {
         finalizeSpeedEditUndo()
         speedUndoSnapshot = currentSnapshot()
         Task { await alignPlaybackToTimeline() }
+    }
+
+    func applySpeedRampPreset(_ preset: EditorSpeedRampPreset, clipID: UUID) {
+        updateSpeedRamp(clipID: clipID) { _ in preset.ramp }
+        commitSpeedRampEdit()
+    }
+
+    func enableSpeedRamp(clipID: UUID) {
+        updateSpeedRamp(clipID: clipID) { current in
+            current ?? EditorSpeedRamp(
+                points: [
+                    EditorSpeedRampPoint(position: 0, speed: 1),
+                    EditorSpeedRampPoint(position: 0.5, speed: 1),
+                    EditorSpeedRampPoint(position: 1, speed: 1)
+                ],
+                interpolation: .smooth
+            )
+        }
+        commitSpeedRampEdit()
+    }
+
+    func setSpeedRampInterpolation(
+        _ interpolation: EditorSpeedRampInterpolation,
+        clipID: UUID
+    ) {
+        updateSpeedRamp(clipID: clipID) { current in
+            EditorSpeedRamp(
+                points: current?.points ?? EditorSpeedRampPreset.montage.ramp.points,
+                interpolation: interpolation
+            )
+        }
+        commitSpeedRampEdit()
+    }
+
+    func setSpeedRampPoint(
+        clipID: UUID,
+        index: Int,
+        position: Double,
+        speed: Float
+    ) {
+        updateSpeedRamp(clipID: clipID) { current in
+            var ramp = current ?? EditorSpeedRampPreset.montage.ramp
+            guard ramp.points.indices.contains(index) else { return ramp }
+            let lowerBound = index > 0 ? ramp.points[index - 1].position + 0.02 : 0
+            let upperBound = index < ramp.points.count - 1
+                ? ramp.points[index + 1].position - 0.02
+                : 1
+            let resolvedPosition: Double
+            if index == 0 {
+                resolvedPosition = 0
+            } else if index == ramp.points.count - 1 {
+                resolvedPosition = 1
+            } else {
+                resolvedPosition = min(max(position, lowerBound), upperBound)
+            }
+            ramp.points[index] = EditorSpeedRampPoint(
+                position: resolvedPosition,
+                speed: speed
+            )
+            return EditorSpeedRamp(points: ramp.points, interpolation: ramp.interpolation)
+        }
+    }
+
+    func addSpeedRampPoint(clipID: UUID, position: Double) {
+        updateSpeedRamp(clipID: clipID) { current in
+            var ramp = current ?? EditorSpeedRamp(
+                points: [
+                    EditorSpeedRampPoint(position: 0, speed: 1),
+                    EditorSpeedRampPoint(position: 1, speed: 1)
+                ]
+            )
+            let p = min(max(position, 0.04), 0.96)
+            guard !ramp.points.contains(where: { abs($0.position - p) < 0.025 }) else {
+                return ramp
+            }
+            ramp.points.append(
+                EditorSpeedRampPoint(position: p, speed: ramp.speed(atSourceProgress: p))
+            )
+            return EditorSpeedRamp(points: ramp.points, interpolation: ramp.interpolation)
+        }
+        commitSpeedRampEdit()
+    }
+
+    func removeSpeedRampPoint(clipID: UUID, index: Int) {
+        updateSpeedRamp(clipID: clipID) { current in
+            guard var ramp = current,
+                  index > 0,
+                  index < ramp.points.count - 1,
+                  ramp.points.count > 2 else { return current }
+            ramp.points.remove(at: index)
+            return EditorSpeedRamp(points: ramp.points, interpolation: ramp.interpolation)
+        }
+        commitSpeedRampEdit()
+    }
+
+    func clearSpeedRamp(clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        if speedUndoSnapshot == nil { speedUndoSnapshot = currentSnapshot() }
+        clips[index].speedRamp = nil
+        clips[index].speed = 1
+        timelinePosition = min(timelinePosition, totalDuration)
+        invalidateComposition()
+        commitSpeedRampEdit()
+    }
+
+    func commitSpeedRampEdit() {
+        finalizeSpeedEditUndo()
+        speedUndoSnapshot = currentSnapshot()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func updateSpeedRamp(
+        clipID: UUID,
+        transform: (EditorSpeedRamp?) -> EditorSpeedRamp?
+    ) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }), clips[index].isVideo else {
+            return
+        }
+        if speedUndoSnapshot == nil { speedUndoSnapshot = currentSnapshot() }
+        clips[index].speedRamp = transform(clips[index].speedRamp)
+        timelinePosition = min(timelinePosition, totalDuration)
+        invalidateComposition()
     }
 
     // MARK: Photo duration
@@ -2123,7 +2266,7 @@ final class EditorViewModel {
 
         guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
         var clip = clips[idx]
-        let minSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
+        let minSpan = EditorClip.minimumSourceSpan(speed: clip.averageSpeed)
 
         let start: TimeInterval
         let end: TimeInterval
@@ -2140,7 +2283,7 @@ final class EditorViewModel {
         var resolvedEnd = end
         if let baseline = trimUndoSnapshot?.clips.first(where: { $0.id == clipID }) {
             let clipStart = timelineOffsetForClipIndex(idx)
-            let speed = TimeInterval(max(clip.speed, 0.001))
+            let speed = TimeInterval(max(clip.averageSpeed, 0.001))
             let snappedEnd = snappedTime(clipStart + (end - start) / speed, excluding: clipID)
             let snappedSpan = max(minSpan, (snappedEnd - clipStart) * speed)
             if abs(start - baseline.trimStart) > abs(end - baseline.trimEnd) {
@@ -2232,6 +2375,7 @@ final class EditorViewModel {
         let copy = EditorClip(
             asset: source.asset, originalDuration: source.originalDuration,
             trimStart: source.trimStart, trimEnd: source.trimEnd, speed: source.speed,
+            speedRamp: source.speedRamp,
             volume: source.volume, cropAspect: source.cropAspect, reframeMode: source.reframeMode,
             rotationQuarterTurns: source.rotationQuarterTurns, straightenDegrees: source.straightenDegrees,
             isFlippedHorizontally: source.isFlippedHorizontally,
@@ -2256,11 +2400,13 @@ final class EditorViewModel {
         let old = clips[index]
         let rawDuration = media.asset.mediaType == .video ? media.asset.duration : EditorClip.photoDefaultDuration
         let sourceSpan = min(old.trimEnd - old.trimStart, rawDuration)
-        let start = min(old.trimStart, max(0, rawDuration - EditorClip.minimumSourceSpan(speed: old.speed)))
-        let end = min(rawDuration, max(start + EditorClip.minimumSourceSpan(speed: old.speed), start + sourceSpan))
+        let start = min(old.trimStart, max(0, rawDuration - EditorClip.minimumSourceSpan(speed: old.averageSpeed)))
+        let end = min(rawDuration, max(start + EditorClip.minimumSourceSpan(speed: old.averageSpeed), start + sourceSpan))
         clips[index] = EditorClip(
             id: old.id, asset: media.asset, originalDuration: rawDuration,
-            trimStart: start, trimEnd: end, speed: old.speed, volume: old.volume,
+            trimStart: start, trimEnd: end, speed: old.speed,
+            speedRamp: media.asset.mediaType == .video ? old.speedRamp : nil,
+            volume: old.volume,
             cropAspect: old.cropAspect, reframeMode: old.reframeMode,
             rotationQuarterTurns: old.rotationQuarterTurns, straightenDegrees: old.straightenDegrees,
             isFlippedHorizontally: old.isFlippedHorizontally,
@@ -2268,7 +2414,7 @@ final class EditorViewModel {
             reframeXOffset: old.reframeXOffset, reframeYOffset: old.reframeYOffset,
             colorAdjustment: old.colorAdjustment, keyframes: old.keyframes,
             transitionKind: old.transitionKind,
-            transitionDuration: min(old.transitionDuration, max(0, (end - start) / Double(old.speed)))
+            transitionDuration: min(old.transitionDuration, old.duration)
         )
         timelinePosition = timelineOffsetForClipIndex(index)
         invalidateComposition(); scheduleSave()
@@ -2862,7 +3008,7 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)"
