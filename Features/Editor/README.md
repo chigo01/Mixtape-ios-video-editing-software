@@ -394,19 +394,25 @@ use the same selected duration.
 
 **Persistence:** Saved as **`SavedTextOverlay`** inside `EditorProject` JSON. Restored in `EditorViewModel.init(project:)`.
 
-### 6.9 Background audio (CapCut-style)
+### 6.9 Background audio — multi-track (CapCut-style)
 
-**Model:** `EditorAudioClip` (`Model/EditorAudioClip.swift`) — imported file URL, `timelineStart`, `trimStart`/`trimEnd`, `volume`, `split(atSourceTime:)`.
+**Model:** `EditorAudioClip` (`Model/EditorAudioClip.swift`) — imported file URL, `timelineStart`, `trimStart`/`trimEnd`, `laneIndex`, `volume`, `split(atSourceTime:)`.
 
-**Adding audio:** Tap **+** on the audio lane → **`AudioPickerView`** sheet → file copied to app documents → `loadAudioClip(from:insertAfterIndex:)`.
+**Lanes:** `laneIndex` mirrors `EditorOverlayClip.laneIndex` — each lane is an independent track, and clips on different lanes are free to **overlap in time**. That is what makes it possible to drop a second piece of audio at the same playhead as an existing clip instead of being pushed to the end of a single track.
 
-**Timeline lane:** `EditorTimeline.audioRow` renders bars per clip (`AudioClipThumb`). Select for trim handles; **drag body** to move; **drag handles** to trim (parent scroll disabled while trimming).
+**Adding audio:** two entry points, both opening the shared **`AudioPickerView`** sheet:
+- The pinned **+** on the audio lane stack (`EditorTimeline`, lane 0) or the empty-state **Add Audio** button → **`loadAudioClip(from:insertion:)`** with **`.newTrackAtPlayhead`** — allocates a new `laneIndex` (`(audioClips.map(\.laneIndex).max() ?? -1) + 1`) and starts the clip at `timelinePosition`, so it can sit alongside whatever is already playing.
+- The small **+** that sits right after a clip's trailing edge → **`.afterClip(id)`** — appends back-to-back on that clip's own lane (the CapCut "extend this track" gesture), unaffected by the playhead.
 
-**Contextual bar:** **`EditorAudioActionBar`** — SPLIT (at playhead), VOLUME (opens **`VolumeToolPanel`**), DELETE.
+**Timeline lanes:** `EditorTimeline.audioLanes` groups clips by `laneIndex` the same way `overlayLanePlacements` groups video overlays, rendering one row per track (`AudioClipThumb`) inside a capped-height vertical scroller (~2 tracks tall; more tracks scroll rather than pushing the rest of the timeline chrome down). Select a clip for trim handles; **drag body** to move (including across lanes visually — the model only stores `laneIndex`, so moving a clip does not currently reassign its lane); **drag handles** to trim (parent scroll disabled while trimming).
 
-**Composition:** each clip → separate composition audio track + per-track volume in **`AVAudioMix`**. Timeline can extend past video when music is longer.
+**Contextual bar:** **`EditorAudioActionBar`** — ADD AUDIO (same "Browse Sound Library" / "Import from Files" chooser as the lane's own **+**, new track at the playhead), SPLIT (at playhead, same lane), VOLUME (opens **`VolumeToolPanel`**), KEYFRAME, DUPLICATE (same lane), DELETE.
 
-**Persistence:** `SavedAudioClip[]` in `EditorProject`; legacy `SavedAudioTrack` migrates to one clip on decode.
+**Waveforms:** `Services/AudioWaveformGenerator.swift` decodes real peak-amplitude data per clip (cached in memory + on disk, keyed by a stable hash of the file path) instead of the placeholder noise earlier versions drew — see **Priority 13** in §13 for what's shipped vs. still open (meters, gain staging).
+
+**Composition:** every clip — regardless of lane — already becomes its own composition audio track with its own `AVAudioMixInputParameters` (per-clip volume, keyframed volume ramps, fade in/out). Lanes are a **timeline-UI grouping only**; overlapping clips on different lanes were always mixable at the composition/export layer, they just had no way to be placed or displayed without colliding before this change. Timeline extends past video when music runs long.
+
+**Persistence:** `SavedAudioClip[]` in `EditorProject`, including `laneIndex` (decodes to `0` for projects saved before multi-track support); legacy `SavedAudioTrack` migrates to one clip on decode.
 
 **Layout:** `TimelineLayout` positions video clips using `videoDuration`; ruler width uses `timelineExtent` (= `totalDuration`).
 
@@ -752,7 +758,7 @@ through project save/reopen, and has reasonable device-performance coverage.
 |------|--------------------|
 | **Timeline** | Continuous playback; trim, split, reorder, insert, delete, speed, volume, photo duration, per-clip crop/reframe, filmstrips, video/text/audio overlay lanes, and extended timelines. |
 | **Transitions** | 105 opening/cut/closing transitions with live preview, duration, Apply to all cuts, undo, persistence, and export parity; 35 use the isolated GPU compositor. |
-| **Audio** | Imported multi-clip audio lane with trim, move, split, volume, fade in/out, and export mixing. |
+| **Audio** | Imported **multi-track** audio — clips on independent, overlappable lanes with trim, move, split, duplicate, volume, volume keyframes, fade in/out, and export mixing. New tracks drop at the playhead so a second clip never has to collide with or displace an existing one. |
 | **Text** | Styled text overlays with timeline trim/move, preview positioning that matches between the inline card, fullscreen preview, and export, undo, persistence, and export burn-in. |
 | **Video overlays** | Picture-in-picture video with trim/move/split/delete, preview drag/pinch transforms, layer ordering, 16 blend modes, feathered visibility masks, chroma key with spill suppression, audio, undo, persistence, and GPU preview/export parity. |
 | **Projects** | Autosaved JSON projects, resume, home rename, delete confirmation, PhotoKit rehydration, and modified-date ordering. |
@@ -814,7 +820,29 @@ through project save/reopen, and has reasonable device-performance coverage.
 - Imported audio and embedded clip audio already render through the project mix.
 - Imported audio clips already support timeline placement, trim, move, split, duplicate,
   delete, per-clip volume, volume keyframes, and independent fade-in/fade-out.
-- Preview, persistence, undo/redo, project reopen, and export already share these edits.
+- Audio clips already live on independent, overlappable **tracks** (`EditorAudioClip.laneIndex`,
+  mirroring `EditorOverlayClip.laneIndex`). Importing always opens a new track at the current
+  playhead (`EditorViewModel.loadAudioClip(from:insertion:)`, `.newTrackAtPlayhead`); the small
+  **+** after a clip's trailing edge instead extends that clip's own track back-to-back
+  (`.afterClip`). `EditorTimeline` renders one row per track in a height-capped, vertically
+  scrollable stack. See **§6.9**.
+- Every audio clip — regardless of track — already renders on its own composition audio track
+  with independent `AVAudioMixInputParameters` (volume, keyframed volume ramps, fades), so
+  overlapping tracks already mix correctly in preview and export; Priority 15's mixer/automation
+  work builds UI on top of this, not new rendering plumbing.
+- Preview, persistence (`SavedAudioClip.laneIndex`, backward-compatible), undo/redo, project
+  reopen, and export already share these edits.
+- A Priority 20 sound library — bundled starter SFX plus live Freesound search, merged in one
+  browser (browse/search/preview/favorite/download-cache/insert-at-playhead) — already ships. See
+  the Priority 20 entry below for exactly what's covered and what's not.
+- Priority 13's waveform half already ships: `Services/AudioWaveformGenerator.swift` decodes real
+  PCM peak data from an `EditorAudioClip.fileURL` (via `AVAudioFile`), downsamples to a fixed
+  bucket count, and caches results in memory + on disk (`Library/Caches/MixtapeWaveforms/`, keyed
+  by an FNV-1a hash of the file path — stable across launches, unlike `String.hashValue`) so a
+  clip's waveform is decoded once, not on every re-render. `AudioClipThumb` loads it via
+  `.task(id: clip.fileURL)`, replacing the fake procedural noise `EditorAudioClip.waveform` used
+  to carry. Meters, gain staging, and voiceover/generated-speech waveforms (those features don't
+  exist yet) remain open — see the Priority 13 entry below.
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
@@ -844,6 +872,107 @@ through project save/reopen, and has reasonable device-performance coverage.
   dismissal, and never blocks ordinary timeline editing.
 - “Complete” always means identical preview/export output, persistence, undo/redo,
   split/duplicate behavior, accessibility, iPad adaptation, and tested audio routing.
+
+#### Priority 13 — Waveforms (shipped); meters and gain staging (not built)
+
+**Shipped:** real, cached waveforms for every `EditorAudioClip` — `Services/AudioWaveformGenerator.swift`
+is an `actor` that opens the clip's `fileURL` with `AVAudioFile`, reads it in chunks into an
+`AVAudioPCMBuffer`, and computes a per-bucket peak amplitude (max absolute sample across all
+channels) downsampled to a fixed bucket count, normalized 0...1. Results are cached both in memory
+and on disk (`Library/Caches/MixtapeWaveforms/*.json`, keyed by a stable FNV-1a hash of the file
+path — plain `String.hashValue` is randomized per process launch and would silently defeat a disk
+cache) so the file is decoded once regardless of how many times the clip scrolls in/out of view or
+the app relaunches. A file that fails to decode (missing, unsupported format, mid-copy) falls back
+to a flat placeholder shape rather than throwing, so a lane never renders broken. `AudioClipThumb`
+(`EditorTimeline.swift`) loads it via `.task(id: clip.fileURL)` into local `@State`, replacing the
+fake procedural noise `EditorAudioClip.waveform` used to carry as decoration (that property has
+been removed — nothing else referenced it, and it was never persisted).
+
+**Not built:** peak/RMS/true-peak meters, clipping indicators, and clip/track/master gain staging
+with pre/post-fader metering. These need either a live audio tap on the playback graph (e.g. an
+`MTAudioProcessingTap` on the shared `AVAudioMix`) for real-time meters, or per-frame analysis of
+exported/rendered audio for offline meters — both are real-time-audio-DSP work with correctness
+that's hard to verify without testing actual audio output on a device, unlike the waveform/UI work
+above. Track and master gain also don't exist as concepts yet — today only per-clip `volume` exists
+(on `EditorAudioClip`, `EditorClip`, `EditorOverlayClip`); a track/master bus would need a real
+mixer-graph addition to `EditorCompositionBuilder`'s `AVAudioMix` construction, which is exactly
+the kind of structural change Priority 15 (audio mixer and automation) already covers — building
+gain staging here would duplicate that work rather than prepare for it. Waveforms for voiceover
+and generated speech are also out of scope simply because neither feature exists yet (Priorities
+14 and 22); `AudioWaveformGenerator` already works for whatever file those produce once they land,
+since it only needs a `fileURL`.
+
+#### Priority 20 — Sound library (SFX)
+
+**Shipped: bundled starter SFX + live Freesound search, merged in one browser.** No Music or
+Brand tabs — Freesound (freesound.org) is a community sample/field-recording/SFX database, not a
+curated background-music catalog, so a "Music" tab with nothing behind it would just be confusing
+chrome. If a real music catalog gets licensed later, `EditorAudioLibrarySource` and
+`EditorAudioLibraryProviding` are the extension points; nothing about them assumes SFX-only.
+
+**What's shipped:**
+
+- **Bundled pack:** `Features/Editor/AudioLibrary/catalog.json` + `AudioLibrary/SFX/*.wav` — 12
+  **originally synthesized** sounds (sine oscillators and filtered noise; no third-party samples,
+  so no licensing burden) across five categories, generated by `Tools/gen_sfx.py` (kept outside
+  `Features/Editor/AudioLibrary` so the script itself is never copied into the app bundle — only
+  its output is) and bundled via a folder reference in `Mixtape.xcodeproj`.
+- **Remote search:** `Services/FreesoundAudioLibraryProvider.swift` hits the Freesound text-search
+  API (`Authorization: Token …` header) for whatever the user types, mapping each result's license
+  URL to CC0 / CC BY / CC BY-SA / CC BY-NC(-SA) / Sampling+, with unrecognized licenses defaulting
+  to "attribution required" rather than silently treating them as free-and-clear. The API key is
+  **hardcoded** in that file (an explicit product decision — it lands in git history the moment
+  this is committed; rotate at https://freesound.org/apiv2/apply/ if that becomes a problem, or
+  move it to a gitignored config file, which doesn't require touching the rest of the file).
+- **Cache:** `Services/AudioLibraryCache.swift` — an `actor` downloading Freesound previews into
+  `Application Support/MixtapeAudioLibraryCache/`, keyed by sound id so the same sound inserted
+  into two different projects downloads once and both share the file. Budget-capped (300MB,
+  oldest-accessed evicted first) and independent of any single project's clip lifecycle —
+  `EditorViewModel.releaseAudioFileIfUnused` explicitly skips both this directory and the app
+  bundle path, so deleting a clip from one project never deletes a file another project (or a
+  future re-insert) still needs. Trade-off: a project left unopened long enough could in principle
+  reopen missing a library clip if its cache entry got evicted meanwhile — the same "silently drop
+  a clip with a missing backing file" fallback `SavedAudioClip.toAudioClip()` already applies to
+  missing imported audio, not a new failure mode. A real fix is Phase 5 Priority 31 (missing-media
+  relink), out of scope here.
+- **Model:** `Model/EditorAudioLibraryItem.swift` — source-agnostic `EditorAudioLibraryItem`
+  (id, title, category, duration, tags, `source`, `license`), `EditorAudioLibraryCategory` (the
+  filter chips), `EditorAudioLibraryLicense`, and the `@MainActor` `EditorAudioLibraryProviding`
+  protocol both providers conform to (`BundledAudioLibraryProvider`, `FreesoundAudioLibraryProvider`)
+  — `AudioLibraryViewModel` never needs to know which one it's talking to.
+- **ViewModel:** `ViewModel/AudioLibraryViewModel.swift` — merges both providers' results,
+  debounced remote search (driven by the view's `.task(id:)`, not a `didSet` — `@Observable`
+  doesn't support property observers), favorites (a `Set<String>` of ids in `UserDefaults` —
+  local-only metadata over the catalog, not a copy of any item), and single-item audition via a
+  dedicated `AVPlayer` (streams Freesound previews directly, or plays a bundled/cached file — one
+  playback path for both, unlike an earlier `AVAudioPlayer`-only version that couldn't stream) that
+  never touches the project's own composition player or playhead.
+- **UI:** `View/Components/AudioLibraryPickerView.swift` — search field, category chips (tapping
+  one seeds the search query so one field drives both local filtering and the remote query),
+  "Bundled" / "Freesound" sections, per-row cached/offline indicator, and an attribution
+  confirmation alert that blocks insertion of any item whose license requires it until the user
+  sees the required credit text.
+- **Entry point:** the audio lane's **+** opens a `confirmationDialog` ("Browse Sound Library" /
+  "Import from Files") instead of jumping straight to the Files picker — see `AudioSourceSheets`
+  in `EditorScreen.swift`, pulled out as its own `ViewModifier` because `EditorScreen.body` is
+  already one large expression; three more inline sheet modifiers pushed the type checker over its
+  complexity budget.
+- **Insert at playhead:** `EditorViewModel.insertAudioLibraryItem(title:fileURL:duration:attribution:insertion:)`
+  reuses the exact same lane/timeline-placement logic as imported audio
+  (`resolveAudioInsertion(_:)`, shared with `loadAudioClip`) — `.newTrackAtPlayhead` by default, so
+  a sound effect drops at the playhead on its own track without disturbing existing audio, or
+  `.afterClip` when inserted from a track's own "extend" button. Required attribution text (if any)
+  is stored on `EditorAudioClip.attribution` (persisted via `SavedAudioClip`, backward-compatible)
+  so it isn't lost once the clip leaves the library sheet. From insertion onward the clip is a
+  completely normal `EditorAudioClip` — trim, move, split, duplicate, volume, keyframes, undo, and
+  persistence all work on it with no library-specific code. This is why the multi-track work above
+  had to land first: without independent, overlappable tracks, a sound effect dropped under
+  existing background music would have had nowhere to go but after it.
+
+**Not built:** a licensed music catalog (Artlist/Epidemic/Soundstripe-style — needs an account,
+licensing agreement, and a product decision, not just engineering), Brand Music (needs whatever
+account/organization concept the app eventually adopts for team features), and surfacing stored
+attribution anywhere at export time (currently only shown at insert time).
 
 ### Phase 4 — titles, captions, and reusable creative assets
 

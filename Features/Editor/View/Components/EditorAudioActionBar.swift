@@ -8,6 +8,7 @@
 import SwiftUI
 
 enum EditorAudioAction: String, CaseIterable, Identifiable {
+    case add
     case split
     case volume
     case keyframe
@@ -18,6 +19,7 @@ enum EditorAudioAction: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .add: return "ADD AUDIO"
         case .split: return "SPLIT"
         case .volume: return "VOLUME"
         case .keyframe: return "KEYFRAME"
@@ -28,6 +30,7 @@ enum EditorAudioAction: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .add: return "plus.circle.fill"
         case .split: return "scissors"
         case .volume: return "speaker.wave.2.fill"
         case .keyframe: return "diamond.fill"
@@ -41,6 +44,10 @@ enum EditorAudioAction: String, CaseIterable, Identifiable {
 
 struct EditorAudioActionBar: View {
     let vm: EditorViewModel
+    /// Opens the same "Browse Sound Library" / "Import from Files" chooser as the timeline's own
+    /// **+** buttons, always inserting a new track at the current playhead — reachable from here
+    /// too so adding another sound doesn't require deselecting the current clip first.
+    var onAddAudio: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
@@ -67,6 +74,10 @@ struct EditorAudioActionBar: View {
                                 || (action == .keyframe && vm.selectedTool == .keyframe),
                             isDisabled: action == .delete && vm.selectedAudioClip == nil
                         ) {
+                            if action == .add {
+                                onAddAudio()
+                                return
+                            }
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 vm.performAudioAction(action)
                             }

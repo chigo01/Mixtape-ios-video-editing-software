@@ -204,10 +204,12 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
+    var laneIndex: Int
     var volume: Float
     var fadeInDuration: TimeInterval
     var fadeOutDuration: TimeInterval
     var keyframes: EditorKeyframeTracks
+    var attribution: String?
 
     init(from clip: EditorAudioClip) {
         id = clip.id
@@ -217,10 +219,12 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         trimStart = clip.trimStart
         trimEnd = clip.trimEnd
         timelineStart = clip.timelineStart
+        laneIndex = clip.laneIndex
         volume = clip.volume
         fadeInDuration = clip.fadeInDuration
         fadeOutDuration = clip.fadeOutDuration
         keyframes = clip.keyframes
+        attribution = clip.attribution
     }
 
     init(from decoder: Decoder) throws {
@@ -232,10 +236,12 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
         timelineStart = try c.decode(TimeInterval.self, forKey: .timelineStart)
+        laneIndex = try c.decodeIfPresent(Int.self, forKey: .laneIndex) ?? 0
         volume = try c.decode(Float.self, forKey: .volume)
         fadeInDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeInDuration) ?? 0
         fadeOutDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeOutDuration) ?? 0
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
+        attribution = try c.decodeIfPresent(String.self, forKey: .attribution)
     }
 
     func toAudioClip() -> EditorAudioClip? {
@@ -249,10 +255,12 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             timelineStart: timelineStart,
+            laneIndex: laneIndex,
             volume: volume,
             fadeInDuration: fadeInDuration,
             fadeOutDuration: fadeOutDuration,
-            keyframes: keyframes
+            keyframes: keyframes,
+            attribution: attribution
         )
     }
 }

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "sfx.click",
+      "title": "Click",
+      "category": "ui",
+      "fileName": "click.wav",
+      "durationSeconds": 0.07,
+      "tags": ["ui", "button", "tap"]
+    },
+    {
+      "id": "sfx.pop",
+      "title": "Pop",
+      "category": "ui",
+      "fileName": "pop.wav",
+      "durationSeconds": 0.16,
+      "tags": ["ui", "bubble", "comedy"]
+    },
+    {
+      "id": "sfx.notification",
+      "title": "Notification",
+      "category": "ui",
+      "fileName": "notification.wav",
+      "durationSeconds": 0.32,
+      "tags": ["ui", "alert", "message"]
+    },
+    {
+      "id": "sfx.chime",
+      "title": "Chime",
+      "category": "ui",
+      "fileName": "chime.wav",
+      "durationSeconds": 1.6,
+      "tags": ["ui", "success", "bell"]
+    },
+    {
+      "id": "sfx.whoosh_short",
+      "title": "Whoosh Short",
+      "category": "whoosh",
+      "fileName": "whoosh_short.wav",
+      "durationSeconds": 0.7,
+      "tags": ["whoosh", "swipe", "transition"]
+    },
+    {
+      "id": "sfx.whoosh_long",
+      "title": "Whoosh Long",
+      "category": "whoosh",
+      "fileName": "whoosh_long.wav",
+      "durationSeconds": 1.6,
+      "tags": ["whoosh", "sweep", "transition"]
+    },
+    {
+      "id": "sfx.transition_swoosh",
+      "title": "Transition Swoosh",
+      "category": "transitions",
+      "fileName": "transition_swoosh.wav",
+      "durationSeconds": 1.0,
+      "tags": ["transition", "swoosh", "cut"]
+    },
+    {
+      "id": "sfx.riser",
+      "title": "Riser",
+      "category": "transitions",
+      "fileName": "riser.wav",
+      "durationSeconds": 2.0,
+      "tags": ["riser", "buildup", "cinematic", "tension"]
+    },
+    {
+      "id": "sfx.impact",
+      "title": "Impact",
+      "category": "cinematic",
+      "fileName": "impact.wav",
+      "durationSeconds": 0.65,
+      "tags": ["impact", "hit", "boom", "cinematic"]
+    },
+    {
+      "id": "sfx.drum_hit",
+      "title": "Drum Hit",
+      "category": "cinematic",
+      "fileName": "drum_hit.wav",
+      "durationSeconds": 0.3,
+      "tags": ["drum", "hit", "accent"]
+    },
+    {
+      "id": "sfx.sparkle",
+      "title": "Sparkle",
+      "category": "foley",
+      "fileName": "sparkle.wav",
+      "durationSeconds": 0.72,
+      "tags": ["sparkle", "shimmer", "magic"]
+    },
+    {
+      "id": "sfx.camera_shutter",
+      "title": "Camera Shutter",
+      "category": "foley",
+      "fileName": "camera_shutter.wav",
+      "durationSeconds": 0.14,
+      "tags": ["camera", "shutter", "photo", "foley"]
+    }
+  ]
+}

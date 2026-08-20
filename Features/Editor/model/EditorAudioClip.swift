@@ -13,11 +13,19 @@ struct EditorAudioClip: Identifiable, Hashable {
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
+    /// Which audio track this clip renders on. Clips on different lanes are free to overlap
+    /// in time — each becomes an independent composition audio track (see `EditorCompositionBuilder`),
+    /// so overlapping lanes mix together rather than colliding. Mirrors `EditorOverlayClip.laneIndex`.
+    var laneIndex: Int
     var volume: Float
     var fadeInDuration: TimeInterval
     var fadeOutDuration: TimeInterval
     var keyframes: EditorKeyframeTracks
-    let waveform: [CGFloat]
+    /// Required-attribution text for clips inserted from a Creative Commons source (e.g.
+    /// Freesound CC-BY results) — `nil` for imported files, bundled library sounds (CC0-
+    /// equivalent, originally synthesized), and anything else with no attribution obligation.
+    /// Surfaced in the audio action bar so it isn't lost once the clip leaves the library sheet.
+    var attribution: String?
 
     init(
         id: UUID = UUID(),
@@ -27,10 +35,12 @@ struct EditorAudioClip: Identifiable, Hashable {
         trimStart: TimeInterval = 0,
         trimEnd: TimeInterval? = nil,
         timelineStart: TimeInterval = 0,
+        laneIndex: Int = 0,
         volume: Float = 1.0,
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
-        keyframes: EditorKeyframeTracks = .empty
+        keyframes: EditorKeyframeTracks = .empty,
+        attribution: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -39,11 +49,12 @@ struct EditorAudioClip: Identifiable, Hashable {
         self.trimStart = trimStart
         self.trimEnd = trimEnd ?? originalDuration
         self.timelineStart = timelineStart
+        self.laneIndex = laneIndex
         self.volume = volume
         self.fadeInDuration = min(max(0, fadeInDuration), self.trimEnd - self.trimStart)
         self.fadeOutDuration = min(max(0, fadeOutDuration), self.trimEnd - self.trimStart)
         self.keyframes = keyframes
-        self.waveform = Self.generateWaveform(seed: title.hashValue, count: 96)
+        self.attribution = attribution
     }
 
     static let minimumSpan: TimeInterval = 0.25
@@ -70,10 +81,12 @@ struct EditorAudioClip: Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: sourceTime,
             timelineStart: timelineStart,
+            laneIndex: laneIndex,
             volume: volume,
             fadeInDuration: min(fadeInDuration, sourceTime - trimStart),
             fadeOutDuration: 0,
-            keyframes: splitKeyframes.left
+            keyframes: splitKeyframes.left,
+            attribution: attribution
         )
         let right = EditorAudioClip(
             title: title,
@@ -82,35 +95,17 @@ struct EditorAudioClip: Identifiable, Hashable {
             trimStart: sourceTime,
             trimEnd: trimEnd,
             timelineStart: timelineStart + left.duration,
+            laneIndex: laneIndex,
             volume: volume,
             fadeInDuration: 0,
             fadeOutDuration: min(fadeOutDuration, trimEnd - sourceTime),
-            keyframes: splitKeyframes.right
+            keyframes: splitKeyframes.right,
+            attribution: attribution
         )
         return (left, right)
     }
 
     func sourceTime(forTimelineLocal local: TimeInterval) -> TimeInterval {
         min(max(trimStart + local, trimStart), trimEnd)
-    }
-
-    private static func generateWaveform(seed: Int, count: Int) -> [CGFloat] {
-        var rng = SeededGenerator(seed: UInt64(bitPattern: Int64(seed)))
-        return (0..<count).map { i in
-            let envelope = sin(.pi * Double(i) / Double(max(count - 1, 1)))
-            let noise = Double.random(in: 0.35...1.0, using: &rng)
-            return CGFloat(max(0.12, envelope * noise))
-        }
-    }
-}
-
-private struct SeededGenerator: RandomNumberGenerator {
-    private var state: UInt64
-    init(seed: UInt64) { self.state = seed == 0 ? 0xDEAD_BEEF : seed }
-    mutating func next() -> UInt64 {
-        state ^= state << 13
-        state ^= state >> 7
-        state ^= state << 17
-        return state
     }
 }

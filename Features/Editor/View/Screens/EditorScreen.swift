@@ -15,11 +15,13 @@ struct EditorScreen: View {
     @State private var isFullscreenPreview = false
     @State private var isMediaPickerPresented = false
     @State private var isAudioPickerPresented = false
+    @State private var isAudioSourceChooserPresented = false
+    @State private var isAudioLibraryPickerPresented = false
     @State private var isOverlayPickerPresented = false
     @State private var isOverlayTracksExpanded = false
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
-    @State private var insertAfterAudioIndex: Int?
+    @State private var insertAfterAudioClipID: UUID?
     @State private var isReplacingClip = false
     @State private var isReplacingOverlayClip = false
     @State private var transitionTarget: EditorTransitionTarget?
@@ -97,21 +99,15 @@ struct EditorScreen: View {
                 }
             )
         }
-        .editorSheet(
-            isPresented: $isAudioPickerPresented,
-            iPadHeight: .fraction(0.82)
-        ) {
-            AudioPickerView(
-                onPick: { url in
-                    isAudioPickerPresented = false
-                    vm.loadAudioClip(from: url, insertAfterIndex: insertAfterAudioIndex)
-                    insertAfterAudioIndex = nil
-                },
-                onCancel: {
-                    isAudioPickerPresented = false
-                }
+        .modifier(
+            AudioSourceSheets(
+                vm: vm,
+                isAudioSourceChooserPresented: $isAudioSourceChooserPresented,
+                isAudioLibraryPickerPresented: $isAudioLibraryPickerPresented,
+                isAudioPickerPresented: $isAudioPickerPresented,
+                insertAfterAudioClipID: $insertAfterAudioClipID
             )
-        }
+        )
         .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .keyframe },
@@ -462,9 +458,13 @@ struct EditorScreen: View {
                 vm.beginTransitionEditing()
                 transitionTarget = .cut(afterClipAt: clipIndex)
             },
-            onAddAudioClip: { audioIndex in
-                insertAfterAudioIndex = audioIndex
-                isAudioPickerPresented = true
+            onAddAudioTrack: {
+                insertAfterAudioClipID = nil
+                isAudioSourceChooserPresented = true
+            },
+            onInsertAudioAfterClip: { clipID in
+                insertAfterAudioClipID = clipID
+                isAudioSourceChooserPresented = true
             },
             onAddOverlayClip: {
                 isOverlayPickerPresented = true
@@ -486,7 +486,13 @@ struct EditorScreen: View {
                     onBack: { isOverlayTracksExpanded = false }
                 )
             } else if vm.selectedAudioClipID != nil {
-                EditorAudioActionBar(vm: vm)
+                EditorAudioActionBar(
+                    vm: vm,
+                    onAddAudio: {
+                        insertAfterAudioClipID = nil
+                        isAudioSourceChooserPresented = true
+                    }
+                )
             } else if vm.selectedClipID != nil {
                 EditorClipActionBar(vm: vm, onReplace: {
                     isReplacingClip = true
@@ -972,5 +978,68 @@ private struct EditorFullscreenPreviewSheet: View {
             guard let image else { return }
             Task { @MainActor in posterImage = image }
         }
+    }
+}
+
+/// Bundles the "Add Audio" source chooser and its two sheets (Files import, sound library) as
+/// one `ViewModifier` rather than three chained modifiers directly on `EditorScreen.body` —
+/// `body` is already a large single expression, and adding more inline modifiers there pushed
+/// the type checker over its complexity budget ("unable to type-check ... in reasonable time").
+private struct AudioSourceSheets: ViewModifier {
+    let vm: EditorViewModel
+    @Binding var isAudioSourceChooserPresented: Bool
+    @Binding var isAudioLibraryPickerPresented: Bool
+    @Binding var isAudioPickerPresented: Bool
+    @Binding var insertAfterAudioClipID: UUID?
+
+    private var pendingInsertion: EditorViewModel.AudioInsertion {
+        if let clipID = insertAfterAudioClipID { return .afterClip(clipID) }
+        return .newTrackAtPlayhead
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Add Audio",
+                isPresented: $isAudioSourceChooserPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Browse Sound Library") { isAudioLibraryPickerPresented = true }
+                Button("Import from Files") { isAudioPickerPresented = true }
+                Button("Cancel", role: .cancel) { insertAfterAudioClipID = nil }
+            }
+            .editorSheet(
+                isPresented: $isAudioLibraryPickerPresented,
+                iPadHeight: .fraction(0.82)
+            ) {
+                AudioLibraryPickerView(
+                    vm: vm,
+                    insertion: pendingInsertion,
+                    onInsert: {
+                        isAudioLibraryPickerPresented = false
+                        insertAfterAudioClipID = nil
+                    },
+                    onCancel: {
+                        isAudioLibraryPickerPresented = false
+                        insertAfterAudioClipID = nil
+                    }
+                )
+            }
+            .editorSheet(
+                isPresented: $isAudioPickerPresented,
+                iPadHeight: .fraction(0.82)
+            ) {
+                AudioPickerView(
+                    onPick: { url in
+                        isAudioPickerPresented = false
+                        vm.loadAudioClip(from: url, insertion: pendingInsertion)
+                        insertAfterAudioClipID = nil
+                    },
+                    onCancel: {
+                        isAudioPickerPresented = false
+                        insertAfterAudioClipID = nil
+                    }
+                )
+            }
     }
 }

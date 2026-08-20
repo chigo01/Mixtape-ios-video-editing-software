@@ -807,6 +807,10 @@ final class EditorViewModel {
 
     func performAudioAction(_ action: EditorAudioAction) {
         switch action {
+        case .add:
+            // Handled by EditorAudioActionBar's onAddAudio closure before this is ever called —
+            // adding a clip needs to present a picker sheet, which the view owns, not the vm.
+            break
         case .delete:
             deleteSelectedAudioClip()
         case .split:
@@ -3435,7 +3439,32 @@ final class EditorViewModel {
 
     // MARK: Audio Clips
 
-    func loadAudioClip(from sourceURL: URL, insertAfterIndex: Int? = nil) {
+    enum AudioInsertion {
+        /// Adds a brand-new audio track (lane) positioned at the current playhead, so it can
+        /// sit alongside — and overlap — whatever is already on the timeline. This is how you
+        /// add a second piece of audio "at that particular playhead."
+        case newTrackAtPlayhead
+        /// Appends immediately after an existing clip, on that clip's own lane (CapCut-style
+        /// "extend this track" via the insert button between two clips in the same lane).
+        case afterClip(UUID)
+    }
+
+    /// Resolves where a newly-added audio clip should sit: which lane, and at what timeline
+    /// second. Shared by user-imported files (`loadAudioClip`) and library items
+    /// (`insertAudioLibraryItem`) so both sources place clips identically.
+    private func resolveAudioInsertion(_ insertion: AudioInsertion) -> (timelineStart: TimeInterval, laneIndex: Int) {
+        switch insertion {
+        case .newTrackAtPlayhead:
+            return (timelinePosition, (audioClips.map(\.laneIndex).max() ?? -1) + 1)
+        case .afterClip(let clipID):
+            if let source = audioClips.first(where: { $0.id == clipID }) {
+                return (source.timelineEnd, source.laneIndex)
+            }
+            return (timelinePosition, (audioClips.map(\.laneIndex).max() ?? -1) + 1)
+        }
+    }
+
+    func loadAudioClip(from sourceURL: URL, insertion: AudioInsertion = .newTrackAtPlayhead) {
         guard sourceURL.startAccessingSecurityScopedResource() else { return }
         defer { sourceURL.stopAccessingSecurityScopedResource() }
 
@@ -3463,38 +3492,16 @@ final class EditorViewModel {
             await MainActor.run {
                 registerUndoIfNeeded()
                 let title = sourceURL.deletingPathExtension().lastPathComponent
-                let sorted = sortedAudioClips
-                let timelineStart: TimeInterval
-                let insertAt: Int
-
-                if let idx = insertAfterIndex, idx >= 0, idx < sorted.count {
-                    timelineStart = sorted[idx].timelineEnd
-                    insertAt = idx + 1
-                } else if let last = sorted.last {
-                    timelineStart = last.timelineEnd
-                    insertAt = audioClips.count
-                } else {
-                    timelineStart = 0
-                    insertAt = audioClips.count
-                }
+                let (timelineStart, laneIndex) = resolveAudioInsertion(insertion)
 
                 let clip = EditorAudioClip(
                     title: title,
                     fileURL: dest,
                     originalDuration: originalDuration,
-                    timelineStart: timelineStart
+                    timelineStart: timelineStart,
+                    laneIndex: laneIndex
                 )
-
-                if insertAt >= audioClips.count {
-                    audioClips.append(clip)
-                } else {
-                    let targetID = sorted[insertAt].id
-                    if let rawIndex = audioClips.firstIndex(where: { $0.id == targetID }) {
-                        audioClips.insert(clip, at: rawIndex)
-                    } else {
-                        audioClips.append(clip)
-                    }
-                }
+                audioClips.append(clip)
 
                 selectAudioClip(clip.id)
                 invalidateComposition()
@@ -3502,6 +3509,38 @@ final class EditorViewModel {
                 Task { await alignPlaybackToTimeline() }
             }
         }
+    }
+
+    /// Inserts a sound/music library item (`AudioLibraryPickerView`) as a normal timeline clip.
+    /// Library items already live inside the app bundle — no security-scoped access, no copy
+    /// into `MixtapeAudio/` needed, since the bundle file is permanently available. From here
+    /// on the inserted clip is indistinguishable from an imported one: trim, move, split,
+    /// duplicate, volume, keyframes, undo, and persistence all just work.
+    func insertAudioLibraryItem(
+        title: String,
+        fileURL: URL,
+        duration: TimeInterval,
+        attribution: String? = nil,
+        insertion: AudioInsertion = .newTrackAtPlayhead
+    ) {
+        registerUndoIfNeeded()
+        let (timelineStart, laneIndex) = resolveAudioInsertion(insertion)
+
+        let clip = EditorAudioClip(
+            title: title,
+            fileURL: fileURL,
+            originalDuration: duration,
+            timelineStart: timelineStart,
+            laneIndex: laneIndex,
+            attribution: attribution
+        )
+        audioClips.append(clip)
+
+        selectAudioClip(clip.id)
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     func deleteSelectedAudioClip() {
@@ -3525,8 +3564,10 @@ final class EditorViewModel {
             title: source.title + " Copy", fileURL: source.fileURL,
             originalDuration: source.originalDuration, trimStart: source.trimStart,
             trimEnd: source.trimEnd, timelineStart: source.timelineEnd,
+            laneIndex: source.laneIndex,
             volume: source.volume, fadeInDuration: source.fadeInDuration,
-            fadeOutDuration: source.fadeOutDuration, keyframes: source.keyframes
+            fadeOutDuration: source.fadeOutDuration, keyframes: source.keyframes,
+            attribution: source.attribution
         )
         audioClips.insert(copy, at: index + 1)
         selectedAudioClipID = copy.id
@@ -3661,6 +3702,12 @@ final class EditorViewModel {
     }
 
     private func releaseAudioFileIfUnused(_ url: URL) {
+        // Bundled library clips point at read-only files inside the app bundle — never ours to
+        // delete. Freesound-sourced clips point at the shared AudioLibraryCache, which may be
+        // referenced by other projects too; that cache manages its own eviction independently
+        // (see AudioLibraryCache), so per-project deletion must never touch it directly.
+        guard !url.path.hasPrefix(Bundle.main.bundlePath) else { return }
+        guard !url.path.contains("/MixtapeAudioLibraryCache/") else { return }
         let stillUsed = audioClips.contains { $0.fileURL == url }
         guard !stillUsed else { return }
         try? FileManager.default.removeItem(at: url)

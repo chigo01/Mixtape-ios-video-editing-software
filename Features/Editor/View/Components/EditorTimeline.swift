@@ -16,6 +16,12 @@ private struct OverlayLanePlacement: Identifiable {
     var id: UUID { clip.id }
 }
 
+private struct AudioLanePlacement: Identifiable {
+    let clip: EditorAudioClip
+    let lane: Int
+    var id: UUID { clip.id }
+}
+
 struct EditorTimeline: View {
     let vm: EditorViewModel
     @Binding var isOverlayTracksExpanded: Bool
@@ -23,7 +29,8 @@ struct EditorTimeline: View {
     var onSelectOpeningTransition: () -> Void = {}
     var onSelectClosingTransition: () -> Void = {}
     var onSelectTransition: (Int) -> Void = { _ in }
-    var onAddAudioClip: (Int?) -> Void = { _ in }
+    var onAddAudioTrack: () -> Void = {}
+    var onInsertAudioAfterClip: (UUID) -> Void = { _ in }
     var onAddOverlayClip: () -> Void = {}
 
     private let pixelsPerSecond: CGFloat = 18
@@ -32,6 +39,7 @@ struct EditorTimeline: View {
     private let scrubRailHeight: CGFloat = 24
     private let clipsLaneHeight: CGFloat = 52
     private let audioLaneHeight: CGFloat = 28
+    private let audioLaneSpacing: CGFloat = 5
     private let overlayLaneHeight: CGFloat = 40
     private let overlayLaneSpacing: CGFloat = 6
     /// Require this much drag on filmstrips before scrubbing claims the gesture (keeps horizontal scroll natural).
@@ -87,13 +95,46 @@ struct EditorTimeline: View {
         guard !vm.overlayClips.isEmpty else { return 0 }
         return isOverlayTracksExpanded ? expandedOverlayViewportHeight : overlayLaneHeight
     }
-    private var audioLaneResolvedHeight: CGFloat { audioLaneHeight }
+    /// Groups audio clips into display lanes the same way `overlayLanePlacements` does for
+    /// video overlays — each `laneIndex` becomes an independent track, so a second audio clip
+    /// can sit at the same playhead as an existing one instead of colliding with it.
+    private var audioLanePlacements: [AudioLanePlacement] {
+        let logicalLanes = Array(Set(vm.audioClips.map(\.laneIndex))).sorted()
+        let displayLaneByLogicalLane = Dictionary(
+            uniqueKeysWithValues: logicalLanes.enumerated().map { ($0.element, $0.offset) }
+        )
+        return vm.audioClips
+            .sorted {
+                if $0.laneIndex == $1.laneIndex {
+                    return $0.timelineStart < $1.timelineStart
+                }
+                return $0.laneIndex < $1.laneIndex
+            }
+            .map { clip in
+                AudioLanePlacement(clip: clip, lane: displayLaneByLogicalLane[clip.laneIndex] ?? 0)
+            }
+    }
+
+    private var audioLaneCount: Int {
+        max(1, (audioLanePlacements.map(\.lane).max() ?? -1) + 1)
+    }
+
+    private var audioLaneResolvedHeight: CGFloat {
+        CGFloat(audioLaneCount) * audioLaneHeight
+            + CGFloat(max(0, audioLaneCount - 1)) * audioLaneSpacing
+    }
+
+    /// Caps on-screen height at ~2 tracks tall; additional tracks scroll vertically instead of
+    /// pushing the rest of the timeline chrome down.
+    private var audioViewportHeight: CGFloat {
+        min(audioLaneResolvedHeight, audioLaneHeight * 2 + audioLaneSpacing)
+    }
 
     private var playheadStackHeight: CGFloat {
         4 + rulerLabelHeight + scrubRailHeight
             + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
             + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
-            + (isOverlayTracksExpanded ? 0 : 8 + audioLaneResolvedHeight)
+            + (isOverlayTracksExpanded ? 0 : 8 + audioViewportHeight)
     }
 
     private var layout: TimelineLayout {
@@ -134,7 +175,7 @@ struct EditorTimeline: View {
 
                         if !isOverlayTracksExpanded {
                             audioRow(totalWidth: totalWidth, layout: layout)
-                                .frame(height: audioLaneResolvedHeight, alignment: .leading)
+                                .frame(height: audioViewportHeight, alignment: .leading)
                         }
 
                         // Fills space below tracks (and future overlay lanes) so horizontal pan works
@@ -542,76 +583,123 @@ struct EditorTimeline: View {
     // MARK: Audio
 
     private func audioRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
-        let sorted = vm.sortedAudioClips
+        Group {
+            if vm.audioClips.isEmpty {
+                emptyAudioRow(totalWidth: totalWidth)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    audioLanes(totalWidth: totalWidth)
+                }
+                .frame(width: totalWidth, height: audioViewportHeight, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .clipped()
+            }
+        }
+        .frame(width: totalWidth, height: audioViewportHeight, alignment: .topLeading)
+        .clipped()
+    }
 
-        return ZStack(alignment: .topLeading) {
+    private func emptyAudioRow(totalWidth: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.white.opacity(0.04))
                 .frame(width: totalWidth, height: audioLaneHeight)
 
-            if sorted.isEmpty {
-                Button {
-                    onAddAudioClip(nil)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("Add Audio")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 12)
-                    .frame(height: audioLaneHeight)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.white.opacity(0.1))
-                    )
+            Button {
+                onAddAudioTrack()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("Add Audio")
+                        .font(.system(size: 11, weight: .semibold))
                 }
-                .buttonStyle(.plain)
-            } else {
-                // Insert buttons sit under clips so they don't cover trim handles.
-                ForEach(Array(sorted.enumerated()), id: \.element.id) { index, clip in
-                    let slotX = CGFloat(clip.timelineEnd) * pixelsPerSecond + insertSlotWidth / 2
-                    if slotX < totalWidth - 20 {
-                        audioInsertButton(insertAfterIndex: index)
-                            .offset(x: slotX, y: (audioLaneHeight - 24) / 2)
-                            .zIndex(0)
-                    }
-                }
-
-                ForEach(sorted) { clip in
-                    AudioClipThumb(
-                        clip: clip,
-                        pixelsPerSecond: pixelsPerSecond,
-                        scrubMinimumDistance: audioScrubMinimumDistance,
-                        laneHeight: audioLaneHeight,
-                        isSelected: vm.selectedAudioClipID == clip.id,
-                        isTrimming: $isAudioTrimming,
-                        isMoving: $isAudioMoving,
-                        onSelect: { vm.selectAudioClip(clip.id) },
-                        onScrub: { vm.setTimelinePositionForScrub($0) },
-                        onScrubCommit: { vm.commitTimelineAfterScrub() },
-                        onTrimChanged: { start, end in
-                            vm.setAudioTrim(clipID: clip.id, trimStart: start, trimEnd: end)
-                        },
-                        onTrimEnded: { vm.commitAudioTrim(clipID: clip.id) },
-                        onMove: { start in
-                            vm.setAudioTimelineStart(clipID: clip.id, timelineStart: start)
-                        },
-                        onMoveEnded: { vm.commitAudioMove() }
-                    )
-                    .zIndex(vm.selectedAudioClipID == clip.id ? 10 : 1)
-                }
+                .foregroundColor(.white.opacity(0.8))
+                .padding(.horizontal, 12)
+                .frame(height: audioLaneHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.1))
+                )
             }
+            .buttonStyle(.plain)
         }
         .frame(width: totalWidth, height: audioLaneHeight, alignment: .leading)
-        .clipped()
     }
 
-    private func audioInsertButton(insertAfterIndex: Int) -> some View {
+    /// Each lane is an independent audio track. Lane 0 carries a pinned **+** that always adds
+    /// a brand-new track at the current playhead, so a second (third, fourth, …) audio clip can
+    /// land wherever the playhead is instead of being forced to the end of a single lane.
+    private func audioLanes(totalWidth: CGFloat) -> some View {
+        LazyVStack(alignment: .leading, spacing: audioLaneSpacing) {
+            ForEach(0..<audioLaneCount, id: \.self) { lane in
+                let laneClips = audioLanePlacements
+                    .filter { $0.lane == lane }
+                    .map(\.clip)
+                    .sorted { $0.timelineStart < $1.timelineStart }
+
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+
+                    ForEach(laneClips) { clip in
+                        let slotX = CGFloat(clip.timelineEnd) * pixelsPerSecond + insertSlotWidth / 2
+                        if slotX < totalWidth - 20 {
+                            audioInsertButton(afterClipID: clip.id)
+                                .offset(x: slotX, y: (audioLaneHeight - 24) / 2)
+                                .zIndex(0)
+                        }
+                    }
+
+                    ForEach(laneClips) { clip in
+                        AudioClipThumb(
+                            clip: clip,
+                            pixelsPerSecond: pixelsPerSecond,
+                            scrubMinimumDistance: audioScrubMinimumDistance,
+                            laneHeight: audioLaneHeight,
+                            isSelected: vm.selectedAudioClipID == clip.id,
+                            isTrimming: $isAudioTrimming,
+                            isMoving: $isAudioMoving,
+                            onSelect: { vm.selectAudioClip(clip.id) },
+                            onScrub: { vm.setTimelinePositionForScrub($0) },
+                            onScrubCommit: { vm.commitTimelineAfterScrub() },
+                            onTrimChanged: { start, end in
+                                vm.setAudioTrim(clipID: clip.id, trimStart: start, trimEnd: end)
+                            },
+                            onTrimEnded: { vm.commitAudioTrim(clipID: clip.id) },
+                            onMove: { start in
+                                vm.setAudioTimelineStart(clipID: clip.id, timelineStart: start)
+                            },
+                            onMoveEnded: { vm.commitAudioMove() }
+                        )
+                        .zIndex(vm.selectedAudioClipID == clip.id ? 10 : 1)
+                    }
+
+                    if lane == 0 {
+                        Button(action: onAddAudioTrack) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.black)
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(Color.appColors.primaryColor))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: max(0, totalWidth - 26), y: (audioLaneHeight - 22) / 2)
+                        .zIndex(20)
+                        .accessibilityLabel("Add audio track")
+                    }
+                }
+                .frame(width: totalWidth, height: audioLaneHeight)
+                .id(lane)
+            }
+        }
+        .frame(width: totalWidth, height: audioLaneResolvedHeight, alignment: .leading)
+    }
+
+    private func audioInsertButton(afterClipID: UUID) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onAddAudioClip(insertAfterIndex)
+            onInsertAudioAfterClip(afterClipID)
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 10, weight: .bold))
@@ -621,7 +709,7 @@ struct EditorTimeline: View {
                 .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Add audio")
+        .accessibilityLabel("Add audio after this clip")
     }
 }
 
@@ -763,6 +851,10 @@ private struct AudioClipThumb: View {
 
     @State private var trimBaseline: (timelineStart: TimeInterval, trimStart: TimeInterval)?
     @State private var moveBaselineTimelineStart: TimeInterval?
+    /// Real peak-amplitude samples loaded async from `AudioWaveformGenerator` (Priority 13) —
+    /// starts flat/placeholder-shaped and fills in once the file's been analyzed (cached after
+    /// the first time, so this is usually instant on subsequent renders).
+    @State private var waveformSamples: [CGFloat] = []
 
     private var width: CGFloat {
         max(44, CGFloat(clip.duration) * pixelsPerSecond)
@@ -825,9 +917,12 @@ private struct AudioClipThumb: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.appColors.primaryColor.opacity(isSelected ? 0.28 : 0.18))
 
-            WaveformShape(samples: clip.waveform)
+            WaveformShape(samples: waveformSamples)
                 .stroke(Color.appColors.primaryColor.opacity(0.95), lineWidth: 1)
                 .padding(.vertical, 6)
+                .task(id: clip.fileURL) {
+                    waveformSamples = await AudioWaveformGenerator.shared.waveform(for: clip.fileURL)
+                }
 
             HStack(spacing: 5) {
                 Image(systemName: "music.note")
