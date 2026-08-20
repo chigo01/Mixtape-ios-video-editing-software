@@ -214,6 +214,12 @@ struct EditorTextOverlay: Identifiable, Hashable {
     var xOffset: CGFloat
     var yOffset: CGFloat
     var keyframes: EditorKeyframeTracks
+    var attachedClipID: UUID?
+    var attachedTrackID: UUID?
+    var attachRotation: Bool
+    var attachScale: Bool
+    /// Display-only rotation contributed by an attached planar track.
+    var trackedRotationDegrees: Double
 
     init(
         id: UUID = UUID(),
@@ -229,7 +235,12 @@ struct EditorTextOverlay: Identifiable, Hashable {
         verticalAlignment: TextOverlayVAlignment = .center,
         xOffset: CGFloat = 0,
         yOffset: CGFloat = 0,
-        keyframes: EditorKeyframeTracks = .empty
+        keyframes: EditorKeyframeTracks = .empty,
+        attachedClipID: UUID? = nil,
+        attachedTrackID: UUID? = nil,
+        attachRotation: Bool = false,
+        attachScale: Bool = false,
+        trackedRotationDegrees: Double = 0
     ) {
         self.id = id
         self.text = text
@@ -245,17 +256,25 @@ struct EditorTextOverlay: Identifiable, Hashable {
         self.xOffset = xOffset
         self.yOffset = yOffset
         self.keyframes = keyframes
+        self.attachedClipID = attachedClipID
+        self.attachedTrackID = attachedTrackID
+        self.attachRotation = attachRotation
+        self.attachScale = attachScale
+        self.trackedRotationDegrees = trackedRotationDegrees
     }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
 
     /// The resolved SwiftUI Font for rendering on the preview.
-    func resolvedFont() -> Font {
+    /// `sizeScale` maps a stored point size onto a live canvas that is not
+    /// screen-width (inline preview vs fullscreen vs export).
+    func resolvedFont(sizeScale: CGFloat = 1) -> Font {
+        let size = max(fontSize * sizeScale, 1)
         let baseFont: Font
         if fontFamily == .system {
-            baseFont = .system(size: fontSize, weight: .regular)
+            baseFont = .system(size: size, weight: .regular)
         } else {
-            baseFont = .custom(fontFamily.rawValue, size: fontSize)
+            baseFont = .custom(fontFamily.rawValue, size: size)
         }
 
         switch fontStyle {
@@ -289,5 +308,57 @@ struct EditorTextOverlay: Identifiable, Hashable {
             for: .textScale, at: localTime, default: 1
         ))
         return result
+    }
+
+    func applyingTrack(
+        _ sample: EditorMotionTrackSample,
+        seed: EditorMotionTrackSample,
+        canvasSize: CGSize
+    ) -> EditorTextOverlay {
+        var result = self
+        result.xOffset += CGFloat(sample.x - seed.x) * canvasSize.width
+        result.yOffset += CGFloat(sample.y - seed.y) * canvasSize.height
+        if attachScale {
+            let ratio = sample.scale / max(seed.scale, 0.000_001)
+            result.fontSize = max(fontSize * CGFloat(ratio), 8)
+        }
+        if attachRotation {
+            result.trackedRotationDegrees = (sample.rotation - seed.rotation) * 180 / .pi
+        }
+        return result
+    }
+
+    var isAttachedToTrack: Bool {
+        attachedClipID != nil && attachedTrackID != nil
+    }
+}
+
+/// Shared layout contract for live preview and export.
+/// Offsets and font sizes are stored in points as if the canvas were
+/// `UIScreen.main.bounds.width` wide (what `EditorTextOverlayRenderer` uses).
+/// Live canvases scale those values by `canvas.width / referenceWidth`.
+enum EditorTextOverlayLayout {
+    static let canvasSpaceName = "textOverlayCanvas"
+    static let previewPadding: CGFloat = 12
+
+    static var referenceWidth: CGFloat {
+        max(UIScreen.main.bounds.width, 1)
+    }
+
+    static func canvasScale(for canvasSize: CGSize) -> CGFloat {
+        canvasSize.width / referenceWidth
+    }
+
+    static func referenceCanvasSize(aspectRatio: CGFloat) -> CGSize {
+        let width = referenceWidth
+        return CGSize(width: width, height: width / max(aspectRatio, 0.000_001))
+    }
+
+    static func referenceCanvasSize(matching liveCanvas: CGSize) -> CGSize {
+        let width = referenceWidth
+        return CGSize(
+            width: width,
+            height: width * liveCanvas.height / max(liveCanvas.width, 1)
+        )
     }
 }

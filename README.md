@@ -48,7 +48,9 @@ and configurable video export across iPhone and adaptive iPad layouts.
 - 35 GPU transitions rendered by an isolated Metal-backed Core Image compositor.
 - Orientation-safe portrait, landscape, rotated, video, and generated-photo rendering.
 - Text overlays with fonts, color, size, opacity, alignment, position, timeline trim,
-  timeline movement, and direct preview dragging.
+  timeline movement, and direct preview dragging. Stored offsets are screen-width
+  points scaled to the live canvas, so the inline card, fullscreen preview, and
+  export place the glyph on the same part of the frame.
 - CapCut-style photo and video overlays with PhotoKit import, picture-in-picture
   compositing, timeline trim/move/split/delete, speed, volume, opacity, direct preview
   positioning, pinch resize, automatic stacked lanes for overlapping overlays,
@@ -61,6 +63,9 @@ and configurable video export across iPhone and adaptive iPad layouts.
 - Forty categorized looks, twenty primary color controls, selective HSL, RGB/master
   curves, lift/gamma/gain/offset wheels, and waveform, parade, vectorscope, and
   histogram monitoring with copy/paste and apply-to-all workflows.
+- Reusable point and planar motion tracks with transform smoothing, tracked text
+  and overlay graphics, and clip stabilization (Smooth or Lock, optical-flow
+  camera path, auto crop, edge fill) shared by preview and export.
 
 ### Audio
 
@@ -145,22 +150,24 @@ pipeline, feature guide, and engineering notes, see
   continuously sampling every frame during playback.
 - Editing is single-selection, with one primary video lane plus multiple independently
   ordered photo-or-video overlay layers.
-- There are no speed-ramp, reverse, stabilization, or chroma-key tools yet.
+- Reverse generation is not implemented yet.
 - Embedded video audio does not yet display a waveform.
 - Projects are local-only and do not yet support packaged media relinking or iCloud sync.
 - Automated render-regression and performance test coverage is still limited.
 
 ## Roadmap
 
-Phase 1, the Phase 2 keyframe engine, and multi-layer video are complete. The next professional milestones are:
+Phase 1, the Phase 2 keyframe engine, multi-layer video, compositing, and
+motion tracking are complete. The next professional milestones are:
 
 1. Reverse playback, freeze frames, and optical-flow options.
-2. Blend modes, masks, chroma key, stabilization, and tracking.
-3. Audio waveforms, meters, ducking, voiceover recording, EQ, and noise reduction.
-4. Captions, stickers, text animation, and reusable title/template systems.
-5. Proxy media, render caching, background export, and memory/performance budgets.
-6. Project packaging, media relinking, schema migration, recovery, and iCloud sync.
-7. Unit, UI, golden-frame, orientation, export, and long-project stress tests.
+2. Professional audio: waveforms/meters, voiceover studio, mixer automation,
+   cleanup/mastering, ducking and beat tools, licensed sound libraries, text-to-speech,
+   translation/dubbing, stem delivery, and sample-accurate preview/export parity.
+3. Captions, stickers, text animation, and reusable title/template systems.
+4. Proxy media, render caching, background export, and memory/performance budgets.
+5. Project packaging, media relinking, schema migration, recovery, and iCloud sync.
+6. Unit, UI, golden-frame, orientation, export, and long-project stress tests.
 
 The detailed, prioritized backlog is maintained in
 [Features/Editor/README.md#13-professional-editor-roadmap](Features/Editor/README.md#13-professional-editor-roadmap).

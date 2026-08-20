@@ -14,8 +14,11 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
     case crop
     case volume
     case filter
+    case compositing
     case text
     case keyframe
+    case stabilize
+    case track
     case duplicate
     case replace
     case delete
@@ -30,8 +33,11 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .crop: return "CROP"
         case .volume: return "VOLUME"
         case .filter: return "ADJUST"
+        case .compositing: return "COMPOSITE"
         case .text: return "TEXT"
         case .keyframe: return "KEYFRAME"
+        case .stabilize: return "STABILIZE"
+        case .track: return "TRACK"
         case .duplicate: return "DUPLICATE"
         case .replace: return "REPLACE"
         case .delete: return "DELETE"
@@ -46,8 +52,11 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
+        case .compositing: return "square.3.layers.3d"
         case .text: return "textformat"
         case .keyframe: return "diamond.fill"
+        case .stabilize: return "gyroscope"
+        case .track: return "viewfinder"
         case .duplicate: return "plus.square.on.square"
         case .replace: return "arrow.triangle.2.circlepath"
         case .delete: return "trash"
@@ -89,7 +98,7 @@ struct EditorClipActionBar: View {
                         ClipActionButton(
                             action: action,
                             isSelected: action.tool.map { vm.selectedTool == $0 } ?? false,
-                            isDisabled: action == .delete && !vm.canDeleteSelectedClip
+                            isDisabled: isDisabled(action)
                         ) {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 if action == .replace { onReplace() } else { vm.performClipAction(action) }
@@ -114,6 +123,14 @@ struct EditorClipActionBar: View {
                 )
         )
     }
+
+    private func isDisabled(_ action: EditorClipAction) -> Bool {
+        switch action {
+        case .delete: return !vm.canDeleteSelectedClip
+        case .stabilize: return !vm.canStabilizeSelectedClip
+        default: return false
+        }
+    }
 }
 
 extension EditorClipAction {
@@ -125,8 +142,11 @@ extension EditorClipAction {
         case .crop: return .crop
         case .volume: return .volume
         case .filter: return .filter
+        case .compositing: return .compositing
         case .text: return .text
         case .keyframe: return .keyframe
+        case .stabilize: return .stabilize
+        case .track: return .track
         case .duplicate, .replace: return nil
         case .delete: return nil
         }
@@ -178,6 +198,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case crop
     case volume
     case filter
+    case compositing
     case opacity
     case smaller
     case larger
@@ -186,6 +207,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case reset
     case text
     case keyframe
+    case stabilize
+    case track
     case duplicate
     case replace
     case delete
@@ -200,6 +223,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return "CROP"
         case .volume: return "VOLUME"
         case .filter: return "ADJUST"
+        case .compositing: return "COMPOSITE"
         case .opacity: return "OPACITY"
         case .smaller: return "SMALLER"
         case .larger: return "LARGER"
@@ -208,6 +232,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .reset: return "RESET"
         case .text: return "TEXT"
         case .keyframe: return "KEYFRAME"
+        case .stabilize: return "STABILIZE"
+        case .track: return "TRACK"
         case .duplicate: return "DUPLICATE"
         case .replace: return "REPLACE"
         case .delete: return "DELETE"
@@ -222,6 +248,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
+        case .compositing: return "square.3.layers.3d"
         case .opacity: return "circle.lefthalf.filled"
         case .smaller: return "minus.magnifyingglass"
         case .larger: return "plus.magnifyingglass"
@@ -230,6 +257,8 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .reset: return "arrow.counterclockwise"
         case .text: return "textformat"
         case .keyframe: return "diamond.fill"
+        case .stabilize: return "gyroscope"
+        case .track: return "viewfinder"
         case .duplicate: return "plus.square.on.square"
         case .replace: return "arrow.triangle.2.circlepath"
         case .delete: return "trash"
@@ -243,9 +272,12 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return .crop
         case .volume: return .volume
         case .filter: return .filter
+        case .compositing: return .compositing
         case .opacity: return .opacity
         case .text: return .text
         case .keyframe: return .keyframe
+        case .stabilize: return .stabilize
+        case .track: return .track
         default: return nil
         }
     }
@@ -320,6 +352,7 @@ struct EditorOverlayActionBar: View {
         switch action {
         case .sendBackward: return !vm.canSendSelectedOverlayBackward
         case .bringForward: return !vm.canBringSelectedOverlayForward
+        case .stabilize: return !vm.canStabilizeSelectedClip
         default: return false
         }
     }
@@ -340,6 +373,8 @@ struct EditorOverlayActionBar: View {
             vm.selectTool(.volume)
         case .filter:
             vm.selectTool(.filter)
+        case .compositing:
+            vm.selectTool(.compositing)
         case .opacity:
             vm.selectTool(.opacity)
         case .smaller:
@@ -360,6 +395,10 @@ struct EditorOverlayActionBar: View {
             vm.performToolAction(.text)
         case .keyframe:
             vm.selectTool(.keyframe)
+        case .stabilize:
+            vm.selectTool(.stabilize)
+        case .track:
+            vm.selectTool(.track)
         case .duplicate:
             vm.duplicateSelectedOverlayClip()
         case .replace:

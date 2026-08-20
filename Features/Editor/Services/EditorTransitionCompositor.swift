@@ -55,7 +55,9 @@ struct EditorOverlayRenderLayer {
     let transform: CGAffineTransform
     let opacity: Float
     let colorAdjustment: EditorColorAdjustment
+    let compositing: EditorOverlayCompositing
     let animation: EditorRenderKeyframeAnimation?
+    let trackedMotion: EditorRenderTrackedMotion?
 }
 
 /// Immutable adapter between reusable editor tracks and frame rendering.
@@ -139,7 +141,9 @@ final class EditorTransitionRenderInstruction:
     let overlayLayers: [EditorOverlayRenderLayer]
     let baseTransform: CGAffineTransform
     let animation: EditorRenderKeyframeAnimation?
+    let stabilization: EditorRenderStabilization?
     let colorAdjustment: EditorColorAdjustment
+    let compositing: EditorOverlayCompositing
     let incomingKind: EditorTransitionKind
     let outgoingKind: EditorTransitionKind
     let incomingDuration: TimeInterval
@@ -156,7 +160,9 @@ final class EditorTransitionRenderInstruction:
         overlayLayers: [EditorOverlayRenderLayer],
         baseTransform: CGAffineTransform,
         animation: EditorRenderKeyframeAnimation?,
+        stabilization: EditorRenderStabilization?,
         colorAdjustment: EditorColorAdjustment,
+        compositing: EditorOverlayCompositing,
         incomingKind: EditorTransitionKind,
         outgoingKind: EditorTransitionKind,
         incomingDuration: TimeInterval,
@@ -173,7 +179,9 @@ final class EditorTransitionRenderInstruction:
         self.overlayLayers = overlayLayers
         self.baseTransform = baseTransform
         self.animation = animation
+        self.stabilization = stabilization
         self.colorAdjustment = colorAdjustment
+        self.compositing = compositing
         self.incomingKind = incomingKind
         self.outgoingKind = outgoingKind
         self.incomingDuration = incomingDuration
@@ -186,7 +194,10 @@ final class EditorTransitionRenderInstruction:
         self.containsTweening = incomingDuration > 0
             || outgoingDuration > 0
             || animation?.hasVisualAnimation == true
-            || overlayLayers.contains { $0.animation?.hasVisualAnimation == true }
+            || stabilization?.isActive == true
+            || overlayLayers.contains {
+                $0.animation?.hasVisualAnimation == true || $0.trackedMotion?.isActive == true
+            }
 
         var trackIDs = [NSNumber(value: foregroundTrackID)]
         if let backgroundTrackID {
@@ -237,14 +248,30 @@ final class EditorTransitionRenderInstruction:
         _ state: EditorTransitionRenderState,
         localTime: TimeInterval
     ) -> EditorTransitionRenderState {
-        guard let animation else { return state }
+        let duration = max(timeRange.duration.seconds, 0.000_001)
+        let progress = min(max(localTime / duration, 0), 1)
+        var transform = state.transform
+        if let stabilization, stabilization.isActive {
+            transform = transform.concatenating(
+                stabilization.transform(at: progress, renderSize: renderSize)
+            )
+        }
+        guard let animation else {
+            return EditorTransitionRenderState(
+                kind: state.kind,
+                progress: state.progress,
+                intensity: state.intensity,
+                visibility: state.visibility,
+                transform: transform
+            )
+        }
         return EditorTransitionRenderState(
             kind: state.kind,
             progress: state.progress,
             intensity: state.intensity,
             visibility: state.visibility * animation.opacity(at: localTime),
             transform: animation.transform(
-                base: state.transform,
+                base: transform,
                 at: localTime,
                 renderSize: renderSize
             )
@@ -410,8 +437,19 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     animatedColor,
                     to: CIImage(cvPixelBuffer: foregroundBuffer)
                 )
-                    .transformed(by: imageTransform)
-                    .cropped(to: extent)
+                foreground = EditorOverlayCompositingRenderer.applyChromaKey(
+                    instruction.compositing.chromaKey,
+                    to: foreground
+                )
+                foreground = EditorOverlayCompositingRenderer.applyLumaKey(
+                    instruction.compositing.lumaKey,
+                    to: foreground
+                )
+                foreground = foreground.transformed(by: imageTransform)
+                if instruction.stabilization?.settings.fillEdges == true {
+                    foreground = foreground.clampedToExtent()
+                }
+                foreground = foreground.cropped(to: extent)
 
                 if animatedColor.masks.contains(where: \.isEffective) {
                     foreground = EditorColorGradeRenderer.applyMasks(
@@ -421,6 +459,11 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     )
                 }
 
+                foreground = EditorOverlayCompositingRenderer.applyMask(
+                    instruction.compositing.mask,
+                    to: foreground
+                )
+
                 foreground = EditorTransitionEffectRenderer.apply(
                     state: state,
                     to: foreground,
@@ -428,12 +471,18 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     extent: extent
                 )
                 foreground = foreground.applyingOpacity(state.visibility)
-                composed = foreground
-                    .applyingFilter(
-                        "CISourceOverCompositing",
-                        parameters: [kCIInputBackgroundImageKey: background]
-                    )
-                    .cropped(to: extent)
+                let primaryBackground = EditorOverlayCompositingRenderer.backgroundWithShadow(
+                    from: foreground,
+                    over: background,
+                    settings: instruction.compositing.shadow,
+                    extent: extent
+                )
+                composed = EditorOverlayCompositingRenderer.composite(
+                    foreground,
+                    over: primaryBackground,
+                    using: instruction.compositing.blendMode,
+                    extent: extent
+                )
             }
 
             for overlay in instruction.overlayLayers
@@ -445,12 +494,21 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     width: CVPixelBufferGetWidth(overlayBuffer),
                     height: CVPixelBufferGetHeight(overlayBuffer)
                 )
+                var overlayTransform = overlay.animation?.transform(
+                    base: overlay.transform,
+                    at: max(0, (request.compositionTime - overlay.timeRange.start).seconds),
+                    renderSize: instruction.renderSize
+                ) ?? overlay.transform
+                if let trackedMotion = overlay.trackedMotion, trackedMotion.isActive {
+                    overlayTransform = overlayTransform.concatenating(
+                        trackedMotion.extraTransform(
+                            at: request.compositionTime,
+                            renderSize: instruction.renderSize
+                        )
+                    )
+                }
                 let imageTransform = coreImageTransform(
-                    from: overlay.animation?.transform(
-                        base: overlay.transform,
-                        at: max(0, (request.compositionTime - overlay.timeRange.start).seconds),
-                        renderSize: instruction.renderSize
-                    ) ?? overlay.transform,
+                    from: overlayTransform,
                     sourceSize: sourceSize,
                     renderSize: instruction.renderSize
                 )
@@ -466,6 +524,15 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     overlayColor,
                     to: CIImage(cvPixelBuffer: overlayBuffer)
                 )
+                overlayImage = EditorOverlayCompositingRenderer.applyChromaKey(
+                    overlay.compositing.chromaKey,
+                    to: overlayImage
+                )
+                overlayImage = EditorOverlayCompositingRenderer.applyLumaKey(
+                    overlay.compositing.lumaKey,
+                    to: overlayImage
+                )
+                overlayImage = overlayImage
                     .transformed(by: imageTransform)
                     .cropped(to: extent)
 
@@ -480,15 +547,26 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     )
                 }
 
+                overlayImage = EditorOverlayCompositingRenderer.applyMask(
+                    overlay.compositing.mask,
+                    to: overlayImage
+                )
+
                 overlayImage = overlayImage.applyingOpacity(
                     overlay.animation?.opacity(at: overlayLocalTime) ?? CGFloat(overlay.opacity)
                 )
-                composed = overlayImage
-                    .applyingFilter(
-                        "CISourceOverCompositing",
-                        parameters: [kCIInputBackgroundImageKey: composed]
-                    )
-                    .cropped(to: extent)
+                let overlayBackground = EditorOverlayCompositingRenderer.backgroundWithShadow(
+                    from: overlayImage,
+                    over: composed,
+                    settings: overlay.compositing.shadow,
+                    extent: extent
+                )
+                composed = EditorOverlayCompositingRenderer.composite(
+                    overlayImage,
+                    over: overlayBackground,
+                    using: overlay.compositing.blendMode,
+                    extent: extent
+                )
             }
 
             ciContext.render(

@@ -25,7 +25,7 @@ struct EditorScreen: View {
     @State private var transitionTarget: EditorTransitionTarget?
     @Environment(\.dismiss) private var dismiss
 
-    private let editorChromeMinHeight: CGFloat = 268
+    private let editorChromeMinHeight: CGFloat = 248
     private let previewHorizontalInset: CGFloat = 16
 
     init(project: EditorProject) {
@@ -286,6 +286,73 @@ struct EditorScreen: View {
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
+        .editorSheet(
+            isPresented: Binding(
+                get: {
+                    vm.selectedTool == .compositing
+                        && (vm.selectedOverlayClipID != nil || vm.selectedClipID != nil)
+                },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .compositing {
+                        vm.selectTool(.compositing)
+                    }
+                }
+            ),
+            iPadHeight: .fraction(0.68)
+        ) {
+            OverlayCompositingToolPanel(
+                vm: vm,
+                isEmbedded: UIDevice.current.userInterfaceIdiom == .pad,
+                onDone: { vm.selectedTool = nil }
+            )
+            .presentationDetents([.fraction(0.68), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .track },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .track {
+                        vm.selectTool(.track)
+                    }
+                }
+            ),
+            iPadHeight: .fixed(340)
+        ) {
+            MotionTrackingToolPanel(
+                vm: vm,
+                isEmbedded: UIDevice.current.userInterfaceIdiom == .pad,
+                onDone: { vm.selectedTool = nil }
+            )
+            .presentationDetents([.height(340), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .stabilize },
+                set: { newValue in
+                    if !newValue && vm.selectedTool == .stabilize {
+                        vm.selectTool(.stabilize)
+                    }
+                }
+            ),
+            iPadHeight: .fixed(520)
+        ) {
+            MotionTrackingToolPanel(
+                vm: vm,
+                isEmbedded: UIDevice.current.userInterfaceIdiom == .pad,
+                lockedToStabilize: true,
+                onDone: { vm.selectedTool = nil }
+            )
+            .presentationDetents([.height(520), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
         .task {
             await Task.yield()
             guard !Task.isCancelled else { return }
@@ -452,7 +519,7 @@ struct EditorScreen: View {
 
     private func inlinePreviewHeight(in geo: GeometryProxy) -> CGFloat {
         let maxByChrome = geo.size.height - editorChromeMinHeight
-        let maxByFraction = geo.size.height * 0.54
+        let maxByFraction = geo.size.height * 0.60
         return max(220, min(maxByChrome, maxByFraction))
     }
 }
@@ -775,24 +842,12 @@ private struct EditorFullscreenPreviewSheet: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            Group {
-                if let posterImage, !showingVideoLayer {
-                    Image(uiImage: posterImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                if showingVideoLayer, let player = vm.player {
-                    PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .ignoresSafeArea()
-                }
-            }
-
-            // Text overlays rendered on top of video/poster
-            EditorTextOverlayLayerView(vm: vm)
-
-            EditorOverlaySelectionLayer(vm: vm)
+            // Locked to the same aspect ratio and fit behavior as the inline
+            // preview so overlay positions line up at every playhead position
+            // instead of drifting when the canvas is cropped to fill the screen.
+            canvasSurface
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .aspectRatio(vm.canvasSettings.aspectRatio, contentMode: .fit)
 
             VStack(spacing: 0) {
                 HStack {
@@ -820,6 +875,26 @@ private struct EditorFullscreenPreviewSheet: View {
         .onChange(of: vm.playbackClipID) { _, _ in loadPoster() }
         .onChange(of: vm.selectedClipID) { _, _ in
             if vm.playbackInfo == nil { loadPoster() }
+        }
+    }
+
+    private var canvasSurface: some View {
+        ZStack {
+            if let posterImage, !showingVideoLayer {
+                Image(uiImage: posterImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if showingVideoLayer, let player = vm.player {
+                PlayerLayerView(player: player, videoGravity: .resizeAspect)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Text overlays rendered on top of video/poster
+            EditorTextOverlayLayerView(vm: vm)
+
+            EditorOverlaySelectionLayer(vm: vm)
         }
     }
 

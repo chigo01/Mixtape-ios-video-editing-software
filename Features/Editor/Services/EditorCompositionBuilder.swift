@@ -29,7 +29,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -64,7 +64,9 @@ enum EditorCompositionBuilder {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
         let colorAdjustment: EditorColorAdjustment
+        let compositing: EditorOverlayCompositing
         let animation: EditorRenderKeyframeAnimation?
+        let stabilization: EditorRenderStabilization?
         let transitionIn: EditorTransitionKind
         let transitionOut: EditorTransitionKind
         let fadeInDuration: TimeInterval
@@ -77,7 +79,9 @@ enum EditorCompositionBuilder {
         let transform: CGAffineTransform
         let opacity: Float
         let colorAdjustment: EditorColorAdjustment
+        let compositing: EditorOverlayCompositing
         let animation: EditorRenderKeyframeAnimation?
+        let trackedMotion: EditorRenderTrackedMotion?
     }
 
     private struct BackgroundVideoTracks {
@@ -295,7 +299,13 @@ enum EditorCompositionBuilder {
                             ),
                             opacity: Float(overlay.opacity),
                             colorAdjustment: overlay.colorAdjustment,
-                            animation: renderAnimation(for: overlay)
+                            compositing: overlay.compositing,
+                            animation: renderAnimation(for: overlay),
+                            trackedMotion: trackedMotion(
+                                for: overlay,
+                                clips: clips,
+                                overlayClips: overlayClips
+                            )
                         )
                     )
                 } catch {
@@ -353,6 +363,8 @@ enum EditorCompositionBuilder {
                     addTextAnimations(
                         to: textLayer,
                         overlay: overlay,
+                        clips: clips,
+                        overlayClips: overlayClips,
                         totalDuration: totalDuration,
                         renderSize: renderSize
                     )
@@ -553,6 +565,8 @@ enum EditorCompositionBuilder {
     private static func addTextAnimations(
         to layer: CALayer,
         overlay: EditorTextOverlay,
+        clips: [EditorClip],
+        overlayClips: [EditorOverlayClip],
         totalDuration: TimeInterval,
         renderSize: CGSize
     ) {
@@ -561,7 +575,15 @@ enum EditorCompositionBuilder {
         var keyTimes: [NSNumber] = []
         var opacities: [NSNumber] = []
         var transforms: [NSValue] = []
-        let screenScale = renderSize.width / max(UIScreen.main.bounds.width, 1)
+        let screenScale = renderSize.width / EditorTextOverlayLayout.referenceWidth
+        let previewCanvas = EditorTextOverlayLayout.referenceCanvasSize(
+            matching: renderSize
+        )
+        let attachment = textAttachment(
+            for: overlay,
+            clips: clips,
+            overlayClips: overlayClips
+        )
 
         for index in 0...sampleCount {
             let globalTime = totalDuration * Double(index) / Double(sampleCount)
@@ -574,26 +596,38 @@ enum EditorCompositionBuilder {
                     default: overlay.opacity
                 )
                 : 0
-            let x = overlay.keyframes.value(
+            var x = overlay.keyframes.value(
                 for: .textPositionX,
                 at: localTime,
                 default: Double(overlay.xOffset)
             )
-            let y = overlay.keyframes.value(
+            var y = overlay.keyframes.value(
                 for: .textPositionY,
                 at: localTime,
                 default: Double(overlay.yOffset)
             )
-            let scale = overlay.keyframes.value(
+            var scale = overlay.keyframes.value(
                 for: .textScale,
                 at: localTime,
                 default: 1
             )
-            let rotation = overlay.keyframes.value(
+            var rotation = overlay.keyframes.value(
                 for: .textRotation,
                 at: localTime,
                 default: 0
             )
+            if let attachment {
+                let compositionTime = CMTime(seconds: globalTime, preferredTimescale: timescale)
+                let sample = attachment.resolved(at: compositionTime)
+                x += (sample.x - attachment.seedX) * Double(previewCanvas.width)
+                y += (sample.y - attachment.seedY) * Double(previewCanvas.height)
+                if overlay.attachScale {
+                    scale *= sample.scale / max(attachment.seedScale, 0.000_001)
+                }
+                if overlay.attachRotation {
+                    rotation += (sample.rotation - attachment.seedRotation) * 180 / .pi
+                }
+            }
             var transform = CATransform3DMakeTranslation(
                 CGFloat(x - Double(overlay.xOffset)) * screenScale,
                 CGFloat(y - Double(overlay.yOffset)) * screenScale,
@@ -761,7 +795,9 @@ enum EditorCompositionBuilder {
                 timeRange: holdRange,
                 transform: last.transform,
                 colorAdjustment: last.colorAdjustment,
+                compositing: last.compositing,
                 animation: nil,
+                stabilization: last.stabilization,
                 transitionIn: .none,
                 transitionOut: .none,
                 fadeInDuration: 0,
@@ -799,7 +835,11 @@ enum EditorCompositionBuilder {
             timeRange: timeRange,
             transform: transform,
             colorAdjustment: clips[clipIndex].colorAdjustment,
+            compositing: clips[clipIndex].compositing,
             animation: renderAnimation(for: clips[clipIndex]),
+            stabilization: clips[clipIndex].stabilization.isActive
+                ? EditorRenderStabilization(settings: clips[clipIndex].stabilization)
+                : nil,
             transitionIn: transitionIn,
             transitionOut: transitionOut,
             fadeInDuration: clipIndex == 0
@@ -832,11 +872,16 @@ enum EditorCompositionBuilder {
 
         let needsGPUCompositor = segments.contains {
             !$0.colorAdjustment.isNeutral
+                || $0.compositing.requiresGPUCompositor
                 || $0.transitionIn.usesGPUCompositor
                 || $0.transitionOut.usesGPUCompositor
                 || $0.animation?.hasVisualAnimation == true
+                || $0.stabilization?.isActive == true
         } || overlaySegments.contains {
-            !$0.colorAdjustment.isNeutral || $0.animation?.hasVisualAnimation == true
+            !$0.colorAdjustment.isNeutral
+                || $0.compositing.requiresGPUCompositor
+                || $0.animation?.hasVisualAnimation == true
+                || $0.trackedMotion?.isActive == true
         } || canvasSettings.backgroundKind == .blur
         if needsGPUCompositor {
             composition.customVideoCompositorClass = EditorTransitionCompositor.self
@@ -858,12 +903,16 @@ enum EditorCompositionBuilder {
                             transform: $0.transform,
                             opacity: $0.opacity,
                             colorAdjustment: $0.colorAdjustment,
-                            animation: $0.animation
+                            compositing: $0.compositing,
+                            animation: $0.animation,
+                            trackedMotion: $0.trackedMotion
                         )
                     },
                     baseTransform: segment.transform,
                     animation: segment.animation,
+                    stabilization: segment.stabilization,
                     colorAdjustment: segment.colorAdjustment,
+                    compositing: segment.compositing,
                     incomingKind: segment.transitionIn,
                     outgoingKind: segment.transitionOut,
                     incomingDuration: segment.fadeInDuration,
@@ -1017,6 +1066,89 @@ enum EditorCompositionBuilder {
             baseCropX: Double(clip.reframeXOffset),
             baseCropY: Double(clip.reframeYOffset),
             baseCropScale: Double(clip.reframeScale)
+        )
+    }
+
+    private static func trackedMotion(
+        for overlay: EditorOverlayClip,
+        clips: [EditorClip],
+        overlayClips: [EditorOverlayClip]
+    ) -> EditorRenderTrackedMotion? {
+        guard let clipID = overlay.attachedClipID,
+              let trackID = overlay.attachedTrackID else { return nil }
+        return renderTrackedMotion(
+            clipID: clipID,
+            trackID: trackID,
+            attachRotation: overlay.attachRotation,
+            attachScale: overlay.attachScale,
+            clips: clips,
+            overlayClips: overlayClips
+        )
+    }
+
+    private static func textAttachment(
+        for overlay: EditorTextOverlay,
+        clips: [EditorClip],
+        overlayClips: [EditorOverlayClip]
+    ) -> EditorRenderTrackedMotion? {
+        guard let clipID = overlay.attachedClipID,
+              let trackID = overlay.attachedTrackID else { return nil }
+        return renderTrackedMotion(
+            clipID: clipID,
+            trackID: trackID,
+            attachRotation: overlay.attachRotation,
+            attachScale: overlay.attachScale,
+            clips: clips,
+            overlayClips: overlayClips
+        )
+    }
+
+    private static func renderTrackedMotion(
+        clipID: UUID,
+        trackID: UUID,
+        attachRotation: Bool,
+        attachScale: Bool,
+        clips: [EditorClip],
+        overlayClips: [EditorOverlayClip]
+    ) -> EditorRenderTrackedMotion? {
+        var cursor: TimeInterval = 0
+        var hostTimeRange: CMTimeRange?
+        var track: EditorMotionTrack?
+        for clip in clips {
+            if clip.id == clipID, let found = clip.motionTracks.first(where: { $0.id == trackID }) {
+                track = found
+                hostTimeRange = CMTimeRange(
+                    start: CMTime(seconds: cursor, preferredTimescale: timescale),
+                    duration: CMTime(seconds: max(clip.duration, 0.001), preferredTimescale: timescale)
+                )
+                break
+            }
+            cursor += clip.duration
+        }
+        if track == nil {
+            for overlay in overlayClips where overlay.id == clipID {
+                guard let found = overlay.motionTracks.first(where: { $0.id == trackID }) else {
+                    continue
+                }
+                track = found
+                hostTimeRange = CMTimeRange(
+                    start: CMTime(seconds: overlay.timelineStart, preferredTimescale: timescale),
+                    duration: CMTime(seconds: max(overlay.duration, 0.001), preferredTimescale: timescale)
+                )
+                break
+            }
+        }
+        guard let track, let hostTimeRange, track.isTracked else { return nil }
+        return EditorRenderTrackedMotion(
+            hostTimeRange: hostTimeRange,
+            samples: track.samples,
+            seedX: track.seedX,
+            seedY: track.seedY,
+            seedRotation: track.seedRotation,
+            seedScale: 1,
+            smoothing: track.smoothing,
+            attachRotation: attachRotation,
+            attachScale: attachScale
         )
     }
 

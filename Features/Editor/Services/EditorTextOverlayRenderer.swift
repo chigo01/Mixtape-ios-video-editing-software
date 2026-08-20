@@ -33,7 +33,7 @@ struct EditorTextOverlayExportView: View {
 
                 if overlay.verticalAlignment != .bottom { Spacer(minLength: 0) }
             }
-            .padding(12)
+            .padding(EditorTextOverlayLayout.previewPadding)
         }
         .frame(width: screenWidth, height: screenWidth * (renderSize.height / renderSize.width))
         .scaleEffect(scale)
@@ -80,7 +80,7 @@ struct EditorTextOverlayExportView: View {
 @MainActor
 enum EditorTextOverlayRenderer {
     static func render(overlay: EditorTextOverlay, renderSize: CGSize) -> UIImage? {
-        let screenWidth = UIScreen.main.bounds.width
+        let screenWidth = EditorTextOverlayLayout.referenceWidth
         let view = EditorTextOverlayExportView(
             overlay: overlay,
             renderSize: renderSize,

@@ -59,6 +59,14 @@
 		C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00AA15C01000000000A /* EditorKeyframe.swift */; };
 		C010C00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */; };
 		C010C00DA15C01000000000D /* EditorSpeedRamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00DA15C01000000000D /* EditorSpeedRamp.swift */; };
+		C020C001A15C020000000001 /* EditorOverlayCompositing.swift in Sources */ = {isa = PBXBuildFile; fileRef = C020D001A15C020000000001 /* EditorOverlayCompositing.swift */; };
+		C020C002A15C020000000002 /* EditorOverlayCompositingRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C020D002A15C020000000002 /* EditorOverlayCompositingRenderer.swift */; };
+		C020C003A15C020000000003 /* OverlayCompositingToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C020D003A15C020000000003 /* OverlayCompositingToolPanel.swift */; };
+		C020C004A15C020000000004 /* CompositingMaskSelectionLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C020D004A15C020000000004 /* CompositingMaskSelectionLayer.swift */; };
+		C030C001A15C030000000001 /* EditorMotionTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = C030D001A15C030000000001 /* EditorMotionTracking.swift */; };
+		C030C002A15C030000000002 /* EditorMotionTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C030D002A15C030000000002 /* EditorMotionTracker.swift */; };
+		C030C003A15C030000000003 /* MotionTrackingToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C030D003A15C030000000003 /* MotionTrackingToolPanel.swift */; };
+		C030C004A15C030000000004 /* MotionTrackingSelectionLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C030D004A15C030000000004 /* MotionTrackingSelectionLayer.swift */; };
 		C010C00BA15C01000000000B /* KeyframeToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C010D00BA15C01000000000B /* KeyframeToolPanel.swift */; };
 		CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677962FACE5BD00531EBF /* ProjectListScreen.swift */; };
 		CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */; };
@@ -132,6 +140,14 @@
 		C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAdaptiveBottomSheet.swift; sourceTree = "<group>"; };
 		C010D00BA15C01000000000B /* KeyframeToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyframeToolPanel.swift; sourceTree = "<group>"; };
 		C010D00DA15C01000000000D /* EditorSpeedRamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSpeedRamp.swift; sourceTree = "<group>"; };
+		C020D001A15C020000000001 /* EditorOverlayCompositing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorOverlayCompositing.swift; sourceTree = "<group>"; };
+		C020D002A15C020000000002 /* EditorOverlayCompositingRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorOverlayCompositingRenderer.swift; sourceTree = "<group>"; };
+		C020D003A15C020000000003 /* OverlayCompositingToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCompositingToolPanel.swift; sourceTree = "<group>"; };
+		C020D004A15C020000000004 /* CompositingMaskSelectionLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompositingMaskSelectionLayer.swift; sourceTree = "<group>"; };
+		C030D001A15C030000000001 /* EditorMotionTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorMotionTracking.swift; sourceTree = "<group>"; };
+		C030D002A15C030000000002 /* EditorMotionTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorMotionTracker.swift; sourceTree = "<group>"; };
+		C030D003A15C030000000003 /* MotionTrackingToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionTrackingToolPanel.swift; sourceTree = "<group>"; };
+		C030D004A15C030000000004 /* MotionTrackingSelectionLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionTrackingSelectionLayer.swift; sourceTree = "<group>"; };
 		CED6779B2FACEC0E00531EBF /* ProjectMockModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMockModel.swift; sourceTree = "<group>"; };
 		CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlobalBackgroundScaffold.swift; sourceTree = "<group>"; };
 		CED677A02FAD0DD200531EBF /* SizedBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SizedBox.swift; sourceTree = "<group>"; };
@@ -241,6 +257,8 @@
 				C010D001A15C010000000001 /* EditorColorGrade.swift */,
 				C010D00AA15C01000000000A /* EditorKeyframe.swift */,
 				C010D00DA15C01000000000D /* EditorSpeedRamp.swift */,
+				C020D001A15C020000000001 /* EditorOverlayCompositing.swift */,
+				C030D001A15C030000000001 /* EditorMotionTracking.swift */,
 				BA0EDF00DEAFB001CAFE001C /* EditorTransition.swift */,
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
@@ -280,6 +298,10 @@
 				C010D008A15C010000000008 /* ColorMaskControls.swift */,
 				C010D00CA15C01000000000C /* EditorAdaptiveBottomSheet.swift */,
 				C010D00BA15C01000000000B /* KeyframeToolPanel.swift */,
+				C020D003A15C020000000003 /* OverlayCompositingToolPanel.swift */,
+				C020D004A15C020000000004 /* CompositingMaskSelectionLayer.swift */,
+				C030D003A15C030000000003 /* MotionTrackingToolPanel.swift */,
+				C030D004A15C030000000004 /* MotionTrackingSelectionLayer.swift */,
 				80BD65BF4472826A783449A0 /* AudioPickerView.swift */,
 			);
 			path = Components;
@@ -291,9 +313,11 @@
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 				BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */,
 				C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */,
+				C020D002A15C020000000002 /* EditorOverlayCompositingRenderer.swift */,
 				C010D005A15C010000000005 /* EditorColorScopeAnalyzer.swift */,
 				C010D007A15C010000000007 /* EditorFaceMaskDetector.swift */,
 				C010D009A15C010000000009 /* EditorColorMaskTracker.swift */,
+				C030D002A15C030000000002 /* EditorMotionTracker.swift */,
 				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
 				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
@@ -524,6 +548,9 @@
 				C010C001A15C010000000001 /* EditorColorGrade.swift in Sources */,
 				C010C00AA15C01000000000A /* EditorKeyframe.swift in Sources */,
 				C010C00DA15C01000000000D /* EditorSpeedRamp.swift in Sources */,
+				C020C001A15C020000000001 /* EditorOverlayCompositing.swift in Sources */,
+				C030C001A15C030000000001 /* EditorMotionTracking.swift in Sources */,
+				C030C002A15C030000000002 /* EditorMotionTracker.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011C /* EditorTransition.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0103 /* EditorTextOverlay.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0104 /* EditorAudioClip.swift in Sources */,
@@ -532,6 +559,7 @@
 				BA0EDF00DEAFB001CAFE010C /* EditorCompositionBuilder.swift in Sources */,
 				BA0EDF00DEAFB001CAFE011B /* EditorTransitionCompositor.swift in Sources */,
 				C010C002A15C010000000002 /* EditorColorGradeRenderer.swift in Sources */,
+				C020C002A15C020000000002 /* EditorOverlayCompositingRenderer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0106 /* EditorTopBar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0107 /* EditorPreviewPlayer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0108 /* EditorTimeline.swift in Sources */,
@@ -543,6 +571,10 @@
 				BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0113 /* ClipThumbnailService.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0114 /* SpeedToolPanel.swift in Sources */,
+				C020C003A15C020000000003 /* OverlayCompositingToolPanel.swift in Sources */,
+				C020C004A15C020000000004 /* CompositingMaskSelectionLayer.swift in Sources */,
+				C030C003A15C030000000003 /* MotionTrackingToolPanel.swift in Sources */,
+				C030C004A15C030000000004 /* MotionTrackingSelectionLayer.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0115 /* ClipFilmstripView.swift in Sources */,
 				CED677A02FADDF701531EBF /* EditorProject.swift in Sources */,
 				CED677A12FADDF711531EBF /* ProjectStore.swift in Sources */,

@@ -110,7 +110,7 @@ So: **scrubbing the ruler** or **moving the playhead** updates `timelinePosition
 EditorScreen
 ├── EditorTopBar             ← back, undo/redo, Export → EditorExportScreen
 ├── EditorPreviewPlayer      ← 9:16 card, AVPlayerLayer, overlay transform handles, text, HUD
-├── SpeedToolPanel           ← when SPEED tool active (inline above timeline)
+├── SpeedToolPanel           ← adaptive bottom sheet for normal/curve speed editing
 ├── CropReframeToolPanel     ← crop/aspect, fit/fill, rotate/flip, straighten, scale
 ├── EditorTimeline           ← ruler, text, primary clip, video overlay, and audio lanes
 ├── EditorBottomToolbar      ← default tools (split, speed, volume, text, overlay)
@@ -122,6 +122,8 @@ EditorScreen
 VolumeToolPanel              ← bottom sheet when VOLUME tool active (primary, overlay, or audio)
 ColorAdjustmentToolPanel     ← Filters/Adjust/HSL/Curves/Wheels/Masks/Scopes with live GPU preview
 OverlayOpacityToolPanel      ← bottom sheet for selected-overlay transparency
+OverlayCompositingToolPanel  ← Blend/Mask/Chroma sheet for primary and overlay clips
+MotionTrackingToolPanel      ← Stabilize (camera shake) and Track (CapCut-style subject tracking)
 TextOverlayEditorSheet       ← bottom sheet (styles, fonts, position); live-syncs to preview
 AudioPickerView              ← sheet to import MP3/M4A etc. onto the audio lane
 
@@ -207,8 +209,10 @@ Text is **not** part of the preview `AVMutableComposition`. Instead:
 
 | Context | How text appears |
 |---------|------------------|
-| **Editor preview** (inline + fullscreen) | SwiftUI layer — **`EditorTextOverlayLayerView`** composited on top of `PlayerLayerView` / poster. Visibility follows `overlay.isVisible(at: timelinePosition)`. |
-| **Export** | Burned in via **`EditorCompositionBuilder.build(from:textOverlays:)`** → **`EditorTextOverlayRenderer`** (SwiftUI → `UIImage` via `ImageRenderer`) → **`AVVideoCompositionCoreAnimationTool`** with per-overlay opacity keyframes timed to `startTime`/`endTime`. |
+| **Editor preview** (inline + fullscreen) | SwiftUI layer — **`EditorTextOverlayLayerView`** composited on top of `PlayerLayerView` / poster. Visibility follows `overlay.isVisible(at: timelinePosition)`. Both canvases scale stored offsets and font size through **`EditorTextOverlayLayout`** so the glyph sits on the same part of the frame. |
+| **Export** | Burned in via **`EditorCompositionBuilder.build(from:textOverlays:)`** → **`EditorTextOverlayRenderer`** (SwiftUI → `UIImage` via `ImageRenderer`) → **`AVVideoCompositionCoreAnimationTool`** with per-overlay opacity keyframes timed to `startTime`/`endTime`. The renderer layouts at **`EditorTextOverlayLayout.referenceWidth`** (screen width) then `scaleEffect`s up to the export pixel size. |
+
+**Coordinate contract:** `xOffset` / `yOffset` and `fontSize` are stored in **points as if the canvas were screen-width** — the same space export already used. Live canvases multiply those values by `canvas.width / referenceWidth`. That is why the small inline card and the expanded preview now agree, instead of treating a 50 pt drag as a huge shift on the small card and a small one on the full-screen canvas. Motion-track seed conversion uses that same reference size, not the live `GeometryReader` size.
 
 Preview rebuilds (`makePlayerItem`) call `build(from: clips)` **without** overlays — that is intentional. Only export passes `textOverlays`.
 
@@ -226,16 +230,15 @@ Core Animation tool because AVPlayer rejects that offline-only configuration.
 
 ## 5. Preview layout and fullscreen
 
-- **Stage aspect ratio:** `EditorPreviewLayout.aspectWidthOverHeight` in `EditorClip.swift` (9∶16) — fixed editor canvas for every asset.
-- **CapCut-style inline card:** `EditorScreen` constrains the preview with `maxWidth` (screen − 32pt inset) and `maxHeight` (~54% of screen). `EditorPreviewPlayer` uses `.aspectRatio(9:16, .fit)` so the card sizes itself with natural side margins — not edge-to-edge stretch.
-- **Video gravity:** inline uses `.resizeAspect` (letterbox inside the 9:16 frame); fullscreen sheet uses `.resizeAspectFill`.
+- **Stage aspect ratio:** `vm.canvasSettings.aspectRatio` (`EditorCanvasSettings` in `EditorClip.swift`) — project-level 9∶16, 16∶9, 1∶1, 4∶5, or custom. `EditorPreviewLayout.defaultAspectWidthOverHeight` is only the 9∶16 fallback constant.
+- **CapCut-style inline card:** `EditorScreen` constrains the preview with `maxWidth` (screen − 32pt inset) and `maxHeight` (~60% of screen, or chrome-limited). `EditorPreviewPlayer` uses `.aspectRatio(vm.canvasSettings.aspectRatio, .fit)` so the card sizes itself with natural side margins — not edge-to-edge stretch.
+- **Video gravity:** inline and fullscreen both use `.resizeAspect` (letterbox inside the canvas). Fullscreen previously used `.resizeAspectFill`, which cropped the frame and made text land on a different part of the picture than the small card.
 
-**Fullscreen:** Tapping the expand control calls `onFullscreen`, which presents a `fullScreenCover` with `EditorFullscreenPreviewSheet`. The **same** `EditorViewModel` (and thus the same `AVPlayer` when applicable) is used so playback state continues.
+**Fullscreen:** Tapping the expand control calls `onFullscreen`, which presents a `fullScreenCover` with `EditorFullscreenPreviewSheet`. The **same** `EditorViewModel` (and thus the same `AVPlayer` when applicable) is used so playback state continues. The sheet’s `canvasSurface` is `.aspectRatio(..., .fit)` — the same fitted canvas as the inline card — with close/scrubber chrome **outside** that canvas so overlay math is not stretched to fill the phone.
 
-**`PlayerLayerView`** accepts `videoGravity`:
+**`PlayerLayerView`** accepts `videoGravity`. Both the inline player and the fullscreen canvas pass `.resizeAspect`. The host `UIView` has `isUserInteractionEnabled = false` so pans aimed at text/masks/crop chrome are not eaten by the video layer.
 
-- Inline: `.resizeAspect` (letterboxed).
-- Fullscreen: `.resizeAspectFill` (fills the screen, may crop).
+**Text overlay chrome** (`EditorTextOverlayLayerView`) is the same view on both canvases. See **§4.5** and **§12.7** for the shared point → canvas scale and the drag gesture.
 
 **Docs:**
 
@@ -379,7 +382,7 @@ use the same selected duration.
 
 ### 6.8 Text overlays (timeline + editing)
 
-**Model:** `EditorTextOverlay` (`Model/EditorTextOverlay.swift`) — text, `startTime`/`endTime`, font family/style/size, color, opacity, alignment, `xOffset`/`yOffset`.
+**Model:** `EditorTextOverlay` (`Model/EditorTextOverlay.swift`) — text, `startTime`/`endTime`, font family/style/size, color, opacity, alignment, `xOffset`/`yOffset`. Offsets and font size are **screen-width points** (`EditorTextOverlayLayout`); live preview scales them to the current canvas. Media overlays stay normalized (−0.75…0.75 of canvas); do not mix the two.
 
 **Adding text:** Tap **TEXT** in `EditorBottomToolbar` or `EditorClipActionBar` → `addTextOverlay()` creates a 3-second overlay at the playhead → opens **`TextOverlayEditorSheet`**.
 
@@ -449,9 +452,11 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `ViewModel/EditorViewModel.swift` | Timeline, playback, video/text/audio overlays, `projectTitle`, undo, export, auto-save. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
 | `Model/EditorSpeedRamp.swift` | Persisted curve points, presets, interpolation, source/timeline mapping, split logic, and deterministic render segments. |
+| `Model/EditorOverlayCompositing.swift` | Backward-compatible blend-mode, visibility-mask, and chroma-key settings for overlay layers. |
 | `Services/EditorCompositionBuilder.swift` | Shared preview/export composition; primary and overlay video tracks, transforms, transitions, audio mix, backing tracks, and extended timelines. |
 | `Services/EditorTransitionCompositor.swift` | Metal-backed custom compositor; invokes color grading, transitions, and overlay composition. |
 | `Services/EditorColorGradeRenderer.swift` | Core Image primary controls, 40 filter recipes, cached 3D LUT HSL/RGB-curves/wheels, detail and grain effects. |
+| `Services/EditorOverlayCompositingRenderer.swift` | Cached chroma cube, spill suppression, visibility mattes, and Core Image blend-mode routing shared by preview/export. |
 | `Services/EditorColorScopeAnalyzer.swift` | Downsampled post-grade pixel analysis for waveform, parade, vectorscope, histogram, and clipping percentages. |
 | `Services/EditorFaceMaskDetector.swift` | Vision-assisted face detection that creates editable power-window suggestions from the current composed program frame. |
 | `Services/EditorColorMaskTracker.swift` | Bidirectional Vision object tracking that samples clip-relative power-window motion for preview and export. |
@@ -467,12 +472,18 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/ColorGradeControls.swift` | Reusable interactive tone-curve graph and DaVinci-style color-wheel controls. |
 | `View/Components/ColorScopeViews.swift` | SwiftUI Canvas scope plots, vectorscope guides, and shadow/highlight clipping readouts. |
 | `View/Components/ColorMaskControls.swift` | Resolve-inspired power windows drawn directly over the program preview, including draggable polygon vertices. |
+| `View/Components/OverlayCompositingToolPanel.swift` | Adaptive Blend, Mask, Key, and Shadow editor for primary and overlay clips. |
+| `View/Components/CompositingMaskSelectionLayer.swift` | Direct-preview polygon path with draggable custom mask points. |
+| `Model/EditorMotionTracking.swift` | CapCut-style tracking box, Gaussian smoothing, stabilization settings, and render adapters. |
+| `Services/EditorMotionTracker.swift` | Vision object tracking (generic box, with a hand-pose landmark path for hand subjects) and camera-path analysis on downsampled frames, sampled near source frame rate. |
+| `View/Components/MotionTrackingToolPanel.swift` | Stabilize workspace for clips; Track workspace (place box → Start tracking → auto-attaches) for the selected overlay or text. |
+| `View/Components/MotionTrackingSelectionLayer.swift` | Direct-preview point crosshair and planar rectangle placement. |
 | `View/Components/AudioPickerView.swift` | Document picker for background music import. |
 | `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected. |
 | `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
 | `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`) — clips, text, and audio. |
-| `View/Components/EditorPreviewPlayer.swift` | Inline preview, overlay drag/pinch selection layer, text layer, HUD, `PlayerLayerView`. |
-| `View/Components/EditorTextOverlayLayerView.swift` | SwiftUI text composited over preview (inline + fullscreen). |
+| `View/Components/EditorPreviewPlayer.swift` | Inline preview, overlay drag/pinch selection layer, text layer, HUD, `PlayerLayerView` (not hittable; overlays own pans). |
+| `View/Components/EditorTextOverlayLayerView.swift` | SwiftUI text over inline + fullscreen preview; scales stored points to the live canvas; named-space drag. |
 | `View/Components/TextOverlayEditorSheet.swift` | Bottom sheet for text content + style controls. |
 | `View/Components/EditorClipActionBar.swift` | Contextual primary-clip and video-overlay action bars. |
 | `View/Components/EditorTextActionBar.swift` | Contextual toolbar when a text overlay is selected. |
@@ -480,7 +491,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `Model/EditorClip.swift` | Primary and overlay clip models; trim/split, color grade, overlay timing/transform, preview aspect. |
 | `Model/EditorColorGrade.swift` | Codable filter catalog, primary controls, eight-band HSL, master/R/G/B curves, and lift/gamma/gain/offset values. |
 | `Model/EditorTransition.swift` | Single transition catalog: 105 stable identifiers plus picker title, icon, category, renderer routing, and opening/cut/closing targets. |
-| `Model/EditorTextOverlay.swift` | Text overlay model + style enums. |
+| `Model/EditorTextOverlay.swift` | Text overlay model, style enums, and `EditorTextOverlayLayout` (shared preview/export point space). |
 | `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume, fade in/out). |
 | `Model/EditorTimelineSnapshot.swift` | Undo snapshot for primary/overlay clips, endpoints, playhead, selections, text, and audio. |
 | `Model/EditorTool.swift` | Tool enum, including selected-clip color adjustment routing. |
@@ -532,7 +543,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 7. Select a clip → drag trim handles → **`commitTrimEdit`** → watch composition rebuild.
 8. Park playhead mid-clip → **SPLIT** → play through the cut and notice **no player swap** (same composition, two source ranges).
 9. In the simulator: scrub ruler vs drag filmstrip vs tap-to-select vs trim handle drag — map each to the gesture / hit-test code.
-10. Tap **TEXT** → edit in **`TextOverlayEditorSheet`** → scrub through the overlay's time range and confirm preview text appears/disappears. Export and confirm text is burned into the file.
+10. Tap **TEXT** → edit in **`TextOverlayEditorSheet`** → scrub through the overlay's time range and confirm preview text appears/disappears. Drag the selected glyph on the **inline** card, then open fullscreen and confirm it sits on the same part of the frame. Export and confirm text is burned into the file.
 11. Select a clip → use **`EditorClipActionBar`** → **DELETE** (with 2+ clips) or **reorder** via long-press drag.
 12. Open an opening, cut, and closing transition → preview GPU and standard styles → confirm cancel, undo, persistence, and export parity.
 13. Tap **Export** → preview/scrub on **`EditorExportScreen`** → set project name → configure settings → export → confirm Photos + Share (filename = sanitized project title).
@@ -570,11 +581,11 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Card polish** | Whole card tappable; scrim overlay removed | `ProjectCardView` (`contentShape`) | Hit-testing clipped images |
 | **Swipe-back restore** | Edge swipe pops despite hidden nav bars | `Core/SwipeBackEnabler.swift` | `interactivePopGestureRecognizer` delegate |
 | **Clip reorder** | Long-press + drag to move clips forward/backward on timeline | `ClipReorderGestureView`, `EditorTimeline.clipsRow`, `EditorViewModel.moveClip` | `UILongPressGestureRecognizer` as continuous gesture, `@Observable` UIKit→SwiftUI bridge, `interactiveSpring` |
-| **Text overlays** | Add/edit/delete overlays; timeline lane; preview layer; export burn-in | `EditorTextOverlay`, `TextOverlayEditorSheet`, `EditorTextOverlayLayerView`, `EditorTextOverlayRenderer`, `EditorCompositionBuilder` | SwiftUI overlay vs `AVVideoCompositionCoreAnimationTool` |
+| **Text overlays** | Add/edit/delete overlays; timeline lane; preview layer; export burn-in | `EditorTextOverlay`, `EditorTextOverlayLayout`, `TextOverlayEditorSheet`, `EditorTextOverlayLayerView`, `EditorTextOverlayRenderer`, `EditorCompositionBuilder` | SwiftUI overlay vs `AVVideoCompositionCoreAnimationTool`; shared screen-width point space |
 | **Video overlays** | Add, trim, move, split, resize, position, reset, delete, persist, and export picture-in-picture clips | `EditorOverlayClip`, `EditorTimeline`, `EditorOverlaySelectionLayer`, `EditorCompositionBuilder` | Multi-track `AVMutableComposition` + standard/custom video compositing |
 | **Contextual toolbars** | Clip-selected and text-selected bottom bars (CapCut-style) | `EditorClipActionBar`, `EditorTextActionBar`, `EditorScreen` | Conditional chrome swapping |
 | **Clip delete** | Remove selected clip (min 2 clips); playhead + selection adjust | `EditorClipActionBar`, `deleteSelectedClip` | Array editing + composition invalidation |
-| **Text preview drag** | Drag selected overlay on preview to reposition | `EditorTextOverlayLayerView`, `beginTextOverlayPositionDrag` | `DragGesture` + offset undo batching |
+| **Text preview drag** | Drag selected overlay on inline or fullscreen preview; finger 1:1; same relative spot on both canvases | `EditorTextOverlayLayerView`, `beginTextOverlayPositionDrag`, `updateTextOverlayPositionDrag` | Named-space `DragGesture`; `contentShape` before offset; translation ÷ canvas scale |
 | **Text style undo** | Sheet edits + position drag register one undo step | `beginTextOverlayEdit`, `finalizeTextOverlayEdit`, `TextOverlayEditorSheet` | Memento pattern (same as speed/trim) |
 | **Background audio** | Import, trim, move, split, delete; multi-clip lane | `EditorAudioClip`, `AudioClipThumb`, `EditorAudioActionBar`, `AudioPickerView` | Multi-track `AVMutableComposition` + `AVAudioMix` |
 | **Volume tool** | Per-clip and per-audio volume with live preview | `VolumeToolPanel`, `commitVolume`, `commitAudioVolume` | `AVAudioMixInputParameters` |
@@ -587,6 +598,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Audio edge fades** | Per-audio-clip fade-in/out controls and render ramps | `EditorAudioClip`, `VolumeToolPanel`, `EditorCompositionBuilder` | `AVAudioMixInputParameters.setVolumeRamp` |
 | **Transition catalog** | 105 categorized opening/cut/closing choices in a separate model file | `EditorTransition`, `EditorScreen` | Stable persisted identifiers, metadata-driven UI |
 | **GPU transition engine** | 35 blur/color/distortion/mask effects with orientation-safe rendering | `EditorTransitionCompositor`, `EditorCompositionBuilder` | Custom `AVVideoCompositing`, Core Image, Metal |
+| **Motion tracking** | CapCut-style tracking box, smoothing, tracked text/overlays, and clip stabilization crop | `EditorMotionTracking`, `EditorMotionTracker`, `MotionTrackingToolPanel` | Vision object tracking, image registration, inverse camera path |
 | **Green-frame prevention** | Encoded black/white backing tracks initialize every exported pixel | `EditorCompositionBuilder` | YUV surfaces, alpha, letterboxing, export parity |
 | **Opening and closing edges** | Project-level entrance/exit transitions stay on true timeline endpoints | `EditorTransitionTarget`, `EditorViewModel`, `EditorTimeline` | Endpoint state, undo, backward-compatible Codable |
 
@@ -658,10 +670,10 @@ Use this as a map of **what we built** and **why**, in learning order:
 - Tap **TEXT** (main toolbar or clip action bar) → overlay spawns at playhead (default 3 s) → **`TextOverlayEditorSheet`** opens.
 - **Styles tab:** font style chips, color palette, size slider, opacity, horizontal/vertical alignment, position offsets.
 - **Fonts tab:** system + bundled iOS font families.
-- **Preview:** `EditorTextOverlayLayerView` filters overlays by `isVisible(at: timelinePosition)` — also shown in fullscreen preview.
+- **Preview:** `EditorTextOverlayLayerView` filters overlays by `isVisible(at: timelinePosition)` and is the same view on the inline card, fullscreen sheet, and export-screen preview. Stored `xOffset` / `yOffset` / `fontSize` are screen-width points (`EditorTextOverlayLayout`); each canvas scales them by `canvas.width / referenceWidth` so the glyph does not jump when you expand the preview.
 - **Timeline:** dedicated lane above clips; tap bar to select; drag body to move; drag trim handles for `startTime`/`endTime`.
-- **Preview drag:** select a text overlay, then drag it directly on the inline or fullscreen preview to adjust `xOffset`/`yOffset` (same offsets as the sheet sliders).
-- **Export:** `EditorTextOverlayRenderer` rasterizes each overlay → `CALayer` + opacity keyframe animation in `EditorCompositionBuilder` (see **§4.5**).
+- **Preview drag:** select a text overlay, then drag the glyphs (or the orange box) on the inline or fullscreen preview. Hit-testing uses `contentShape` **before** `.offset()` so the grab target follows the visual text, not the un-offset alignment slot. The gesture lives in a named canvas coordinate space (`textOverlayCanvas`) so translation does not fight the moving view; `updateTextOverlayPositionDrag` divides that translation by the canvas scale to write reference points (the same numbers as the sheet sliders). If a text-position keyframe track already exists, the drag upserts at the playhead so `resolved()` does not ignore the finger. `PlayerHostView` is not hittable, so missed pans are not swallowed by the video layer.
+- **Export:** `EditorTextOverlayRenderer` rasterizes each overlay at `referenceWidth` then scales to the render size → `CALayer` + opacity/transform keyframe animation in `EditorCompositionBuilder` (see **§4.5**).
 - **Empty text on dismiss** auto-deletes the overlay.
 
 ### 12.8 Background audio
@@ -684,6 +696,8 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Timing and sound:** overlay speed is persisted and scales both its video and source audio in preview/export; volume controls only that overlay's source-audio mix.
 - **Canvas editing:** a selected, currently visible overlay gets an aspect-aware selection border in inline and fullscreen preview. Drag the body to reposition; pinch anywhere on the selection or drag its top-right resize handle to scale. Position and scale are saved as normalized canvas values, so 720p, 1080p, and 4K exports match the preview.
 - **Rendering:** each overlay uses its own video and optional audio composition tracks. The standard compositor receives overlay `AVMutableVideoCompositionLayerInstruction`s. GPU transition instructions carry immutable `EditorOverlayRenderLayer` values, and `EditorTransitionCompositor` composites those frames after the primary transition effect.
+- **Professional compositing:** **COMPOSITE** opens Blend, Mask, Chroma/Luma, and Shadow workspaces for primary and overlay clips. Sixteen Core Image blend modes mix against the canvas or completed lower stack. Ellipse, rectangle, linear, and 3–24 point custom polygon masks support feather, matte expansion/contraction, opacity, and inversion; polygon points drag directly on the preview. Chroma keying uses a cached 32³ chroma-distance cube with tolerance, softness, spill suppression, and edge desaturation. Luma keying isolates highlights or shadows, and post-matte shadows provide opacity, blur, distance, and direction.
+- **Performance:** neutral overlays remain on AVFoundation's standard compositor. The custom GPU compositor is enabled only when a grade, keyframe animation, blur canvas, transition, blend mode, mask, chroma key, motion attachment, or stabilization requires it. Chroma cubes are cached by settings, and slider-driven preview rebuilds are debounced.
 - **Project integrity:** `SavedOverlayClip` is decoded with defaults and `overlayClips` defaults to `[]`, so projects saved before this feature continue to open. Overlay mutations participate in snapshot undo/redo, composition fingerprints, debounced saves, reopen, and export.
 - **Current scope:** the overlay picker accepts video assets. Still-image overlays can later reuse the model after an alpha-safe image rendering path is added; the existing H.264 still generator intentionally paints an opaque canvas and is therefore not reused for overlays.
 
@@ -715,7 +729,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 - Masks can be tracked forward or backward from the current playhead. Vision follows the selected subject at a mobile-conscious adaptive sample rate; normalized motion samples are persisted with the clip and smoothly interpolated on every preview/export frame. Tracking can be cancelled or cleared without deleting the window or its local grade.
 - Power windows are manipulated on the actual editor preview: drag to position, pinch to resize, rotate from the sheet, or drag individual polygon vertices around an arbitrary object. Window mattes are applied after the clip-to-canvas transform so the UI, preview, and export share exactly the same coordinates.
 - Detect faces samples the current composed program frame, runs Apple Vision off the main thread, expands each detection into a natural portrait ellipse, and places it on that same preview frame.
-- Tracking is bounding-box based and intentionally stops when confidence becomes unreliable. Heavy occlusion, extreme motion blur, scene cuts, or a mask with too little visual detail may require restarting from a clearer frame. Manual correction keyframes and planar/perspective tracking remain future work.
+- Tracking is bounding-box based and intentionally stops when confidence becomes unreliable. Dragging or resizing a tracked mask now inserts/replaces a manual correction keyframe at the playhead and preserves surrounding Vision samples. Heavy occlusion, extreme motion blur, or scene cuts can still require correction; planar/perspective tracking remains future work.
 - Scopes are monitoring-only. They analyze a maximum-256-pixel selected-clip frame off the main thread, then draw with SwiftUI Canvas. This keeps scope work out of the playback/export graph and avoids retaining full-resolution frame buffers.
 - Waveform plots Rec.709 luma by horizontal image position. RGB parade plots each channel independently. The vectorscope uses Rec.709 chroma projection with neutral, saturation, and skin-tone guides. Histogram overlays luma and RGB distributions.
 - Source/Graded toggles make clipping introduced by the grade easy to isolate. Shadow and highlight percentages are explicit measurements from the analyzed frame.
@@ -739,13 +753,14 @@ through project save/reopen, and has reasonable device-performance coverage.
 | **Timeline** | Continuous playback; trim, split, reorder, insert, delete, speed, volume, photo duration, per-clip crop/reframe, filmstrips, video/text/audio overlay lanes, and extended timelines. |
 | **Transitions** | 105 opening/cut/closing transitions with live preview, duration, Apply to all cuts, undo, persistence, and export parity; 35 use the isolated GPU compositor. |
 | **Audio** | Imported multi-clip audio lane with trim, move, split, volume, fade in/out, and export mixing. |
-| **Text** | Styled text overlays with timeline trim/move, preview positioning, undo, persistence, and export burn-in. |
-| **Video overlays** | Picture-in-picture video with trim/move/split/delete, preview drag/pinch transforms, audio, undo, persistence, and standard/GPU export parity. |
+| **Text** | Styled text overlays with timeline trim/move, preview positioning that matches between the inline card, fullscreen preview, and export, undo, persistence, and export burn-in. |
+| **Video overlays** | Picture-in-picture video with trim/move/split/delete, preview drag/pinch transforms, layer ordering, 16 blend modes, feathered visibility masks, chroma key with spill suppression, audio, undo, persistence, and GPU preview/export parity. |
 | **Projects** | Autosaved JSON projects, resume, home rename, delete confirmation, PhotoKit rehydration, and modified-date ordering. |
 | **Export** | Preview, project filename, 720p/1080p/4K, 24–120 fps, bitrate tiers, MP4/MOV, optional HDR/HEVC, progress, cancellation, Photos, and Share. |
 | **Color** | 40 looks in seven categories; 20 primary controls; eight-band HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; up to eight face/manual secondary masks with independent skin/local corrections, clean-view overlay hiding, and bidirectional subject tracking; waveform, RGB parade, vectorscope, and histogram monitoring; reset/copy/paste/apply-to-all, undo, backward-compatible persistence, and GPU preview/export parity. |
 | **Rendering safety** | Orientation normalization, SDR GPU working space, and encoded black/white backing tracks that prevent green or uninitialized export frames. |
 | **Keyframes** | Reusable local-time scalar tracks with hold, linear, easing, and custom cubic Bézier curves; contextual graph editing for clip, overlay, audio, and text animation; undo, persistence, split handling, and shared preview/export sampling. |
+| **Motion** | CapCut-style tracking box (drag onto a subject → Start tracking → auto-attaches the selected text/overlay), transform smoothing, and adjustable clip stabilization crop with GPU preview/export parity. |
 
 ### Phase 1 — complete the core editing toolkit
 
@@ -766,8 +781,8 @@ through project save/reopen, and has reasonable device-performance coverage.
 | 8 | **Speed ramps — complete** | Normal/Curve modes, six presets, editable points, linear/smooth interpolation, 0.1×–8× range, source/timeline remapping, split-safe persistence, undo, timeline feedback, and shared preview/export segment rendering. |
 | 9 | **Reverse and freeze frame** | Cached reverse media generation, cancellable progress, freeze insertion, audio policy, and project relinking. |
 | 10 | **Multi-layer video — complete** | Multiple video-overlay tracks render in a persistent back-to-front stack. Each layer has independent trim/move, opacity, transforms, keyframes, and audio controls; contextual Send Back/Bring Front actions are undoable and export matches preview ordering. |
-| 11 | **Blend, mask, and chroma key** | Per-clip color masks, local corrections, bidirectional tracked motion samples, interpolation, and GPU export parity are complete. Remaining: manual tracking-correction keyframes, overlay/effect masks, blend modes, green-screen keying, and spill suppression. |
-| 12 | **Stabilization and motion tracking** | Color-mask subject tracking is complete. Remaining: reusable point/planar tracking, transform smoothing, tracked text/stickers, and adjustable stabilization crop. |
+| 11 | **Blend, mask, and chroma key — complete** | Sixteen blend modes on primary and overlay clips; ellipse, rectangle, linear, and direct-preview custom polygon masks with feather and matte cleanup; chroma and luma keying with spill suppression; configurable layer shadows; manual correction keyframes for tracked color masks; backward-compatible persistence, undo, debounced live preview, and identical GPU export. |
+| 12 | **Stabilization and motion tracking — complete** | Reusable point and planar tracks; Gaussian transform smoothing; tracked text and overlay graphics; Vision camera-path analysis with smoothness and crop sliders; undo, persistence, split-safe samples, and identical GPU preview/export. |
 
 #### Keyframe engine
 
@@ -783,38 +798,75 @@ through project save/reopen, and has reasonable device-performance coverage.
 - **Rendering:** the composition builder sorts overlay lanes back-to-front before creating render segments and audio tracks. Both the GPU compositor and standard AVFoundation fallback consume that deterministic order, keeping preview and export consistent.
 - **Project integrity:** layer order is included in saved project data, clip equality, composition invalidation fingerprints, autosave, and backward-compatible decoding.
 
+#### Stabilization and motion tracking
+
+- **Track (CapCut flow):** select a text or video/photo overlay → **TRACK** → a box seeds onto the overlay's current position on the underlying video. Drag it onto the subject (corner handles resize), tap **Start tracking**, and tracking runs bidirectionally across the overlay's on-screen range and auto-attaches — no separate track list or attach step. Sampling runs near the source clip's own frame rate (not a fixed low rate) so fast subject motion doesn't outrun what the tracker can follow between frames, and a full run always covers the entire requested range — weak/low-confidence frames hold the last known position and keep retrying rather than abandoning the rest of the clip.
+- **Hand tracking:** if the seed box lands on a detected hand, tracking automatically switches to Vision hand-pose landmarks (wrist/knuckle joints) instead of generic box correlation — each frame is an independent, stateless detection, so a brief miss just pauses instead of drifting onto the wrong static region and staying there. Every other subject (objects, faces, logos, stickers) keeps using bounding-box tracking. Rotation is estimated from a crop around the tracked box only (not the full frame), so background motion doesn't bleed into the subject's own spin; scale uses the geometric mean of the box's width/height ratio so an unchanged box reads as 1×, not inflated.
+- **Smoothing:** the resolved path uses Light Gaussian smoothing by default (denoise Vision jitter without lagging behind fast motion). The same smoother is used by preview overlays, GPU compositing, and offline text burn-in.
+- **Follow rotation / Follow scale:** toggles on the Track panel; position is always followed. Dragging the graphic after attaching preserves the offset from the tracked feature.
+- **Stabilize:** Analyze Motion builds a clip-local camera path from optical-flow median translation (falling back to Vision translational registration) with tightly gated rotation. **Smooth** keeps pans and inverts high-frequency jitter; **Lock** blends that path toward the clip’s mean pose for a tripod look. Auto crop is computed from the residual so the warp stays covered; Fill edges clamps pixels instead of showing empty canvas. Strength, mode, and crop are live over the same samples — re-analyze after this change.
+- **Project integrity:** tracks, attachments, and stabilization participate in undo/redo, autosave, fingerprints, duplication, split remapping, and backward-compatible decoding. Replacing media clears source-specific motion samples.
+
 ### Phase 3 — professional audio
+
+#### Already shipped — do not rebuild
+
+- Imported audio and embedded clip audio already render through the project mix.
+- Imported audio clips already support timeline placement, trim, move, split, duplicate,
+  delete, per-clip volume, volume keyframes, and independent fade-in/fade-out.
+- Preview, persistence, undo/redo, project reopen, and export already share these edits.
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 13 | **Waveforms and meters** | Cached waveforms for imported and embedded clip audio, peak/RMS meters, clipping indication, and zoom-aware drawing. |
-| 14 | **Voiceover recording** | Countdown, monitoring, punch-in, permission/error handling, waveform creation, and automatic timeline placement. |
-| 15 | **Audio automation** | Volume keyframes, pan, crossfades, mute/solo, track gain, and master limiting. |
-| 16 | **Audio cleanup** | Noise reduction, EQ, compressor, de-esser, normalize/loudness target, and speech enhancement presets. |
-| 17 | **Ducking and beat tools** | Speech/music detection, adjustable auto-ducking, BPM/beat markers, snap-to-beat, and assisted beat cuts. |
+| 13 | **Waveforms, meters, and gain staging** | Generate cached, zoom-aware waveforms for imported audio, voiceovers, generated speech, and embedded video audio. Show peak/RMS/true-peak meters, clipping indicators, clip gain, track gain, master gain, and pre/post-fader metering without blocking timeline interaction. |
+| 14 | **Professional voiceover studio** | Record directly at the playhead with tap/hold modes, count-in, teleprompter, input-level meter, mic/input selection, monitoring, latency compensation, punch-in/out, multiple takes, take naming, comping, retry/delete, and automatic waveform placement. Permissions, interruptions, Bluetooth routes, headphones, and failed recordings have explicit recovery UI. |
+| 15 | **Audio mixer and automation** | Add track headers and a compact mixer with gain, pan, mute, solo, routing, buses, audio roles, and master output. Pan and effect parameters join existing volume keyframes; automation supports write/read/bypass, crossfades, copy/paste, and sample-accurate preview/export parity. |
+| 16 | **Dialogue cleanup and voice enhancement** | Non-destructive voice isolation, broadband noise reduction, de-reverb, de-hum, wind reduction, click/pop repair, gate, de-esser, plosive control, and one-tap speech enhancement. Every processor exposes strength, preview/bypass, reset, and sensible speech presets without destroying the source recording. |
+| 17 | **EQ, dynamics, and mastering** | Per-clip/track parametric EQ with high/low-pass filters, compressor, expander, limiter, and optional multiband dynamics. Provide visual response curves, gain-reduction meters, safe presets, loudness normalization, LUFS-I/LRA/true-peak readouts, and platform targets with overload-safe final limiting. |
+| 18 | **Ducking, crossfades, and dialogue mixing** | Detect dialogue, music, and effects; automatically duck selected beds with adjustable depth, threshold, attack, hold, and release. Add editable equal-power/linear crossfades, room-tone fill, dialogue matching, and side-chain audition so automatic results remain fully editable. |
+| 19 | **Beat, rhythm, and music analysis** | Detect BPM, downbeats, beats, transients, musical bars, and likely sections; render an editable beat grid; add/remove markers; snap edits to beats; create assisted beat cuts; and retime selected montages while preserving manual edits. Report analysis confidence and allow half/double-time correction. |
+| 20 | **Sound, music, SFX, and brand library** | Search and browse categorized music and sound effects (including trending, cinematic, transitions, comedy, ambience, foley, swooshes, and ASMR), preview in context, favorite/bookmark, download/cache, and insert at the playhead. Show duration, waveform, BPM, key, mood, license/attribution, download state, and offline availability. Brand Music supports team-owned tracks and reusable brand collections. |
+| 21 | **Extract, separate, and reshape audio** | Extract audio from video into an editable lane; isolate dialogue, music, vocals, drums, bass, and ambience where supported; mute or retain the embedded source; and preserve sync. Add high-quality time stretch, speed, pitch shift, formant preservation, reverse audio, channel conversion, phase-safe mono/stereo handling, and source-quality warnings. |
+| 22 | **Text to speech and generated narration** | Provide a script editor with line/segment splitting, character count, undo/redo, pronunciation dictionary, and writing assists (improve, expand, shorten, rewrite, and translate). Browse and preview voices; control language, speaker, style/emotion, speed, pitch, pauses, and emphasis; regenerate a selected segment; and create synchronized narration plus editable captions with cancellable progress. Multi-speaker scripts and custom/consented voices include clear provenance and privacy controls. |
+| 23 | **Audio translation and dubbing** | Detect the source language, transcribe into editable speaker-labelled segments, choose target languages, translate, and generate timing-matched dubbed tracks. Preserve speaker identity only with authorization, provide neutral fallback voices, optionally retain ambience, generate translated captions, expose per-segment review/regeneration, and show progress, estimated cost, consent, and failure recovery. |
+| 24 | **Professional delivery and audio integrity** | Export audio-only files and full-mix or role-based stems (dialogue/music/effects/voiceover) with AAC/PCM options, sample rate, bit depth, channel layout, dither, loudness target, and metadata. The preview engine and offline renderer use the same processing graph; edits remain sample-accurate across splits, speed ramps, device routes, save/reopen, and export-range renders. |
+
+#### Phase 3 product rules
+
+- Audio tools use the same bottom-sheet conventions as color, speed, and compositing,
+  with adaptive iPhone/iPad layouts, live audition, bypass, reset, undo/redo, and clear
+  processing progress. No tool permanently alters the source file.
+- Generated, translated, downloaded, or recorded audio becomes a normal timeline clip:
+  movable, trimmable, splittable, keyframeable, relinkable, and exportable.
+- Cloud/AI features must disclose network use, estimated credits or limits, cancellation,
+  retention/privacy behavior, licensing, and voice-consent requirements before processing.
+- Long-running analysis and generation is cancellable and resumable, survives sheet
+  dismissal, and never blocks ordinary timeline editing.
+- “Complete” always means identical preview/export output, persistence, undo/redo,
+  split/duplicate behavior, accessibility, iPad adaptation, and tested audio routing.
 
 ### Phase 4 — titles, captions, and reusable creative assets
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 18 | **Text animation** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability. |
-| 19 | **Captions** | Speech transcription, editable timed segments, word highlighting, caption styles, safe zones, and SRT import/export. |
-| 20 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
-| 21 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
-| 22 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
+| 25 | **Text animation** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability. |
+| 26 | **Captions** | Speech transcription, editable timed segments, word highlighting, caption styles, safe zones, and SRT import/export. |
+| 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
+| 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
+| 29 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
 
 ### Phase 5 — reliability, performance, and project portability
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 23 | **Proxy and render cache** | Background proxy generation, cache invalidation by edit fingerprint, low-storage controls, and full-resolution export. |
-| 24 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
-| 25 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
-| 26 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |
-| 27 | **Color management** | Scopes are complete for representative SDR graded frames. Remaining: explicit SDR/HDR pipeline, transfer functions, wide-gamut handling, tone mapping, metadata validation, continuous-playback scope sampling, and HDR-aware scope scales. |
-| 28 | **Automated quality suite** | Unit tests, UI flows, golden-frame renders, orientation matrices, audio timing tests, export probes, and long-project stress tests. |
-| 29 | **Performance budgets** | Signposted preview/export stages, frame-drop and memory targets, thermal testing, cancellation latency, and regression dashboards. |
-| 30 | **iCloud and collaboration readiness** | Conflict-safe project sync, asset availability states, deterministic document IDs, and future collaboration-friendly edit operations. |
+| 30 | **Proxy and render cache** | Background proxy generation, cache invalidation by edit fingerprint, low-storage controls, and full-resolution export. |
+| 31 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
+| 32 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
+| 33 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |
+| 34 | **Color management** | Scopes are complete for representative SDR graded frames. Remaining: explicit SDR/HDR pipeline, transfer functions, wide-gamut handling, tone mapping, metadata validation, continuous-playback scope sampling, and HDR-aware scope scales. |
+| 35 | **Automated quality suite** | Unit tests, UI flows, golden-frame renders, orientation matrices, audio timing tests, export probes, and long-project stress tests. |
+| 36 | **Performance budgets** | Signposted preview/export stages, frame-drop and memory targets, thermal testing, cancellation latency, and regression dashboards. |
+| 37 | **iCloud and collaboration readiness** | Conflict-safe project sync, asset availability states, deterministic document IDs, and future collaboration-friendly edit operations. |
 
 ### Platform polish
 

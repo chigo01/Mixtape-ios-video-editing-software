@@ -71,6 +71,8 @@ struct EditorPreviewPlayer: View {
             EditorColorMaskSelectionLayer(vm: vm)
             EditorReframeSelectionLayer(vm: vm)
             EditorOverlaySelectionLayer(vm: vm)
+            CompositingMaskSelectionLayer(vm: vm)
+            MotionTrackingSelectionLayer(vm: vm)
 
             // Text overlays rendered on top of video/poster
             textOverlayLayer
@@ -279,11 +281,12 @@ struct EditorOverlaySelectionLayer: View {
 
     private var selectedVisibleOverlay: EditorOverlayClip? {
         guard vm.selectedTool != .crop,
+              vm.selectedTool != .track,
               !(vm.selectedTool == .filter && vm.isColorMaskEditing),
               let clip = vm.selectedOverlayClip,
               vm.timelinePosition >= clip.timelineStart,
               vm.timelinePosition < clip.timelineEnd else { return nil }
-        return clip.resolved(at: vm.timelinePosition)
+        return vm.resolvedOverlayClip(clip, at: vm.timelinePosition)
     }
 
     var body: some View {
@@ -418,6 +421,10 @@ struct PlayerLayerView: UIViewRepresentable {
         v.playerLayer.player = player
         v.playerLayer.videoGravity = videoGravity
         v.backgroundColor = .black
+        // Overlay chrome (text, masks, crop) is SwiftUI on top of this
+        // layer. Leaving the UIView hittable eats pans that miss a
+        // glyph's layout slot.
+        v.isUserInteractionEnabled = false
         return v
     }
 
@@ -426,6 +433,7 @@ struct PlayerLayerView: UIViewRepresentable {
             uiView.playerLayer.player = player
         }
         uiView.playerLayer.videoGravity = videoGravity
+        uiView.isUserInteractionEnabled = false
         uiView.setNeedsLayout()
     }
 }

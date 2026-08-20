@@ -147,7 +147,10 @@ struct EditorClip: Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
+    var motionTracks: [EditorMotionTrack]
+    var stabilization: EditorStabilizationSettings
     /// Transition rendered at the cut after this clip.
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
@@ -181,7 +184,10 @@ struct EditorClip: Identifiable, Hashable {
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
         colorAdjustment: EditorColorAdjustment = .neutral,
+        compositing: EditorOverlayCompositing = .standard,
         keyframes: EditorKeyframeTracks = .empty,
+        motionTracks: [EditorMotionTrack] = [],
+        stabilization: EditorStabilizationSettings = .disabled,
         transitionKind: EditorTransitionKind = .none,
         transitionDuration: TimeInterval = 0
     ) {
@@ -203,7 +209,12 @@ struct EditorClip: Identifiable, Hashable {
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
         self.colorAdjustment = colorAdjustment
+        var sanitizedCompositing = compositing
+        sanitizedCompositing.sanitize()
+        self.compositing = sanitizedCompositing
         self.keyframes = keyframes
+        self.motionTracks = motionTracks
+        self.stabilization = stabilization
         self.transitionKind = transitionDuration > 0 ? transitionKind : .none
         self.transitionDuration = max(0, transitionDuration)
     }
@@ -225,8 +236,12 @@ struct EditorClip: Identifiable, Hashable {
         let splitRamps = speedRamp?.split(
             atSourceProgress: sourceSpan > 0 ? splitSourceOffset / sourceSpan : 0.5
         )
+        let splitProgress = duration > 0 ? splitLocalTime / duration : 0.5
+        let splitTracks = motionTracks.map { $0.split(at: splitProgress) }
+        let splitStabilization = stabilization.split(at: splitProgress)
 
         let left = EditorClip(
+            id: id,
             asset: asset,
             originalDuration: originalDuration,
             trimStart: trimStart,
@@ -244,7 +259,10 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            compositing: compositing,
             keyframes: splitKeyframes.left,
+            motionTracks: splitTracks.map(\.left),
+            stabilization: splitStabilization.left,
             transitionKind: .none,
             transitionDuration: 0
         )
@@ -266,7 +284,10 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            compositing: compositing,
             keyframes: splitKeyframes.right,
+            motionTracks: splitTracks.map(\.right),
+            stabilization: splitStabilization.right,
             transitionKind: transitionKind,
             transitionDuration: transitionDuration
         )
@@ -343,7 +364,10 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
             && lhs.colorAdjustment == rhs.colorAdjustment
+            && lhs.compositing == rhs.compositing
             && lhs.keyframes == rhs.keyframes
+            && lhs.motionTracks == rhs.motionTracks
+            && lhs.stabilization == rhs.stabilization
             && lhs.transitionKind == rhs.transitionKind
             && lhs.transitionDuration == rhs.transitionDuration
     }
@@ -383,7 +407,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
+    var motionTracks: [EditorMotionTrack]
+    var stabilization: EditorStabilizationSettings
+    var attachedClipID: UUID?
+    var attachedTrackID: UUID?
+    var attachRotation: Bool
+    var attachScale: Bool
 
     init(
         id: UUID = UUID(),
@@ -410,7 +441,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
         colorAdjustment: EditorColorAdjustment = .neutral,
-        keyframes: EditorKeyframeTracks = .empty
+        compositing: EditorOverlayCompositing = .standard,
+        keyframes: EditorKeyframeTracks = .empty,
+        motionTracks: [EditorMotionTrack] = [],
+        stabilization: EditorStabilizationSettings = .disabled,
+        attachedClipID: UUID? = nil,
+        attachedTrackID: UUID? = nil,
+        attachRotation: Bool = false,
+        attachScale: Bool = false
     ) {
         let duration = originalDuration
             ?? (asset.mediaType == .video ? asset.duration : EditorClip.photoDefaultDuration)
@@ -438,7 +476,16 @@ struct EditorOverlayClip: Identifiable, Hashable {
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
         self.colorAdjustment = colorAdjustment
+        var sanitizedCompositing = compositing
+        sanitizedCompositing.sanitize()
+        self.compositing = sanitizedCompositing
         self.keyframes = keyframes
+        self.motionTracks = motionTracks
+        self.stabilization = stabilization
+        self.attachedClipID = attachedClipID
+        self.attachedTrackID = attachedTrackID
+        self.attachRotation = attachRotation
+        self.attachScale = attachScale
     }
 
     var duration: TimeInterval {
@@ -493,12 +540,31 @@ struct EditorOverlayClip: Identifiable, Hashable {
         return result
     }
 
+    func applyingTrack(
+        _ sample: EditorMotionTrackSample,
+        seed: EditorMotionTrackSample
+    ) -> EditorOverlayClip {
+        var result = self
+        result.xOffset = min(max(xOffset + sample.x - seed.x, -0.75), 0.75)
+        result.yOffset = min(max(yOffset + sample.y - seed.y, -0.75), 0.75)
+        if attachScale {
+            result.scale = min(
+                max(scale * (sample.scale / max(seed.scale, 0.000_001)), 0.15),
+                1.5
+            )
+        }
+        return result
+    }
+
     func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorOverlayClip, right: EditorOverlayClip)? {
         guard sourceTime >= trimStart + Self.minimumSpan,
               sourceTime <= trimEnd - Self.minimumSpan else { return nil }
 
         let splitLocalTime = (sourceTime - trimStart) / TimeInterval(max(speed, 0.001))
         let splitKeyframes = keyframes.split(at: splitLocalTime)
+        let splitProgress = duration > 0 ? splitLocalTime / duration : 0.5
+        let splitTracks = motionTracks.map { $0.split(at: splitProgress) }
+        let splitStabilization = stabilization.split(at: splitProgress)
 
         let left = EditorOverlayClip(
             id: id,
@@ -525,7 +591,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
-            keyframes: splitKeyframes.left
+            compositing: compositing,
+            keyframes: splitKeyframes.left,
+            motionTracks: splitTracks.map(\.left),
+            stabilization: splitStabilization.left,
+            attachedClipID: attachedClipID,
+            attachedTrackID: attachedTrackID,
+            attachRotation: attachRotation,
+            attachScale: attachScale
         )
         let right = EditorOverlayClip(
             asset: asset,
@@ -551,7 +624,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
-            keyframes: splitKeyframes.right
+            compositing: compositing,
+            keyframes: splitKeyframes.right,
+            motionTracks: splitTracks.map(\.right),
+            stabilization: splitStabilization.right,
+            attachedClipID: attachedClipID,
+            attachedTrackID: attachedTrackID,
+            attachRotation: attachRotation,
+            attachScale: attachScale
         )
         return (left, right)
     }
@@ -581,7 +661,14 @@ struct EditorOverlayClip: Identifiable, Hashable {
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
             && lhs.colorAdjustment == rhs.colorAdjustment
+            && lhs.compositing == rhs.compositing
             && lhs.keyframes == rhs.keyframes
+            && lhs.motionTracks == rhs.motionTracks
+            && lhs.stabilization == rhs.stabilization
+            && lhs.attachedClipID == rhs.attachedClipID
+            && lhs.attachedTrackID == rhs.attachedTrackID
+            && lhs.attachRotation == rhs.attachRotation
+            && lhs.attachScale == rhs.attachScale
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

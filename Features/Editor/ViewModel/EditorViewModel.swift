@@ -41,6 +41,16 @@ final class EditorViewModel {
     var showsColorMaskOverlay = true
     private(set) var colorMaskTrackingDirection: EditorColorMaskTrackingDirection?
     private(set) var colorMaskTrackingMessage: String?
+    var selectedMotionTrackID: UUID?
+    private(set) var isTrackingSubject = false
+    private(set) var motionTrackingMessage: String?
+    /// Live preview canvas size in points, kept fresh by
+    /// `MotionTrackingSelectionLayer`'s `GeometryReader` while the tracking
+    /// box is on screen. Text overlay offsets themselves are stored in
+    /// `EditorTextOverlayLayout` reference points, not this size.
+    @ObservationIgnored
+    var activeTrackingCanvasSize: CGSize?
+    private(set) var stabilizationAnalysisProgress: Double?
 
     // MARK: Text overlay editing
 
@@ -102,9 +112,19 @@ final class EditorViewModel {
     @ObservationIgnored
     private var colorPreviewTask: Task<Void, Never>?
     @ObservationIgnored
+    private var overlayCompositingPreviewTask: Task<Void, Never>?
+    @ObservationIgnored
     private var colorMaskTrackingTask: Task<Void, Never>?
     @ObservationIgnored
     private var colorMaskTrackingSessionID: UUID?
+    @ObservationIgnored
+    private var motionTrackingTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var motionTrackingSessionID: UUID?
+    @ObservationIgnored
+    private var motionTrackingUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var motionPreviewTask: Task<Void, Never>?
     @ObservationIgnored
     private var reframePositionDragOrigin: (x: CGFloat, y: CGFloat)?
     @ObservationIgnored
@@ -129,6 +149,8 @@ final class EditorViewModel {
     private var overlayMoveUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
     private var overlayTransformUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var overlayCompositingUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
     private var overlayPositionDragOrigin: (x: CGFloat, y: CGFloat)?
     @ObservationIgnored
@@ -642,6 +664,14 @@ final class EditorViewModel {
         if selectedTool == .filter {
             finalizeColorAdjustmentUndo()
         }
+        if selectedTool == .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize {
+            finalizeMotionTrackingUndo()
+        }
+        cancelMotionTracking()
+        selectedMotionTrackID = nil
         selectedClipID = id
         selectedTextOverlayID = nil
         selectedAudioClipID = nil
@@ -660,6 +690,14 @@ final class EditorViewModel {
         if selectedTool == .filter {
             finalizeColorAdjustmentUndo()
         }
+        if selectedTool == .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize {
+            finalizeMotionTrackingUndo()
+        }
+        cancelMotionTracking()
+        selectedMotionTrackID = nil
         selectedAudioClipID = id
         selectedClipID = nil
         selectedTextOverlayID = nil
@@ -693,6 +731,14 @@ final class EditorViewModel {
         if selectedTool == .filter {
             finalizeColorAdjustmentUndo()
         }
+        if selectedTool == .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize {
+            finalizeMotionTrackingUndo()
+        }
+        cancelMotionTracking()
+        selectedMotionTrackID = nil
         finalizeOverlayTransform()
         selectedOverlayClipID = id
         selectedClipID = nil
@@ -719,8 +765,16 @@ final class EditorViewModel {
         if selectedTool == .filter {
             finalizeColorAdjustmentUndo()
         }
+        if selectedTool == .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize {
+            finalizeMotionTrackingUndo()
+        }
+        cancelMotionTracking()
         finalizeOverlayTransform()
         selectedColorMaskID = nil
+        selectedMotionTrackID = nil
         isColorMaskEditing = false
         selectedOverlayClipID = nil
         selectedTool = nil
@@ -739,6 +793,14 @@ final class EditorViewModel {
         if selectedTool == .filter {
             finalizeColorAdjustmentUndo()
         }
+        if selectedTool == .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize {
+            finalizeMotionTrackingUndo()
+        }
+        cancelMotionTracking()
+        selectedMotionTrackID = nil
         selectedTool = nil
         selectedClipID = nil
     }
@@ -776,10 +838,16 @@ final class EditorViewModel {
             performToolAction(.volume)
         case .filter:
             performToolAction(.filter)
+        case .compositing:
+            performToolAction(.compositing)
         case .text:
             performToolAction(.text)
         case .keyframe:
             performToolAction(.keyframe)
+        case .stabilize:
+            performToolAction(.stabilize)
+        case .track:
+            performToolAction(.track)
         case .duplicate:
             duplicateSelectedClip()
         case .replace:
@@ -815,12 +883,21 @@ final class EditorViewModel {
             selectedColorMaskID = nil
             isColorMaskEditing = false
         }
+        if selectedTool == .compositing, tool != .compositing {
+            finalizeOverlayCompositingUndo()
+        }
+        if selectedTool == .track || selectedTool == .stabilize,
+           tool != .track, tool != .stabilize {
+            finalizeMotionTrackingUndo()
+        }
 
         if selectedTool == tool {
             if tool == .speed { finalizeSpeedEditUndo() }
             if tool == .duration { finalizePhotoDurationEditUndo() }
             if tool == .crop { finalizeReframeEditUndo() }
             if tool == .filter { finalizeColorAdjustmentUndo() }
+            if tool == .compositing { finalizeOverlayCompositingUndo() }
+            if tool == .track || tool == .stabilize { finalizeMotionTrackingUndo() }
             if tool == .filter {
                 selectedColorMaskID = nil
                 isColorMaskEditing = false
@@ -850,6 +927,19 @@ final class EditorViewModel {
         }
         if tool == .filter {
             colorUndoSnapshot = currentSnapshot()
+            pausePlaybackForEdit()
+        }
+        if tool == .compositing {
+            overlayCompositingUndoSnapshot = currentSnapshot()
+            pausePlaybackForEdit()
+        }
+        if tool == .track {
+            motionTrackingUndoSnapshot = currentSnapshot()
+            pausePlaybackForEdit()
+            prepareSubjectTrackingIfNeeded()
+        }
+        if tool == .stabilize {
+            motionTrackingUndoSnapshot = currentSnapshot()
             pausePlaybackForEdit()
         }
     }
@@ -949,20 +1039,53 @@ final class EditorViewModel {
     func updateSelectedClipColorMask(_ mask: EditorColorMask) {
         var sanitized = mask
         sanitizeColorMask(&sanitized)
+        let correctionProgress = selectedColorMaskProgress
         updateSelectedClipColor { adjustment in
             guard let index = adjustment.masks.firstIndex(where: { $0.id == sanitized.id }) else {
                 return
             }
             let old = adjustment.masks[index]
-            if old.centerX != sanitized.centerX
+            let geometryChanged = old.centerX != sanitized.centerX
                 || old.centerY != sanitized.centerY
                 || old.width != sanitized.width
                 || old.height != sanitized.height
-                || old.points != sanitized.points {
-                sanitized.trackingKeyframes = []
+                || old.points != sanitized.points
+            if geometryChanged,
+               !old.trackingKeyframes.isEmpty,
+               let correctionProgress {
+                var samples = old.trackingKeyframes.filter {
+                    abs($0.progress - correctionProgress) > 0.004
+                }
+                samples.append(
+                    EditorColorMaskTrackingKeyframe(
+                        progress: correctionProgress,
+                        centerX: sanitized.centerX,
+                        centerY: sanitized.centerY,
+                        width: sanitized.width,
+                        height: sanitized.height,
+                        confidence: 1
+                    )
+                )
+                sanitized.trackingKeyframes = deduplicatedTrackingSamples(samples)
             }
             adjustment.masks[index] = sanitized
         }
+    }
+
+    private var selectedColorMaskProgress: Double? {
+        if let overlay = selectedOverlayClip {
+            guard timelinePosition >= overlay.timelineStart,
+                  timelinePosition <= overlay.timelineEnd else { return nil }
+            return min(max(
+                (timelinePosition - overlay.timelineStart) / max(overlay.duration, 0.001),
+                0
+            ), 1)
+        }
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return nil }
+        let clip = clips[index]
+        let local = timelinePosition - timelineOffsetForClipIndex(index)
+        return min(max(local / max(clip.duration, 0.001), 0), 1)
     }
 
     func removeSelectedClipColorMask(id: UUID) {
@@ -1468,7 +1591,18 @@ final class EditorViewModel {
             reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset,
             colorAdjustment: source.colorAdjustment,
-            keyframes: source.keyframes
+            compositing: source.compositing,
+            keyframes: source.keyframes,
+            motionTracks: source.motionTracks.map { track in
+                var copy = track
+                copy.id = UUID()
+                return copy
+            },
+            stabilization: source.stabilization,
+            attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID,
+            attachRotation: source.attachRotation,
+            attachScale: source.attachScale
         )
         overlayClips.insert(copy, at: index + 1)
         selectedOverlayClipID = copy.id
@@ -1518,7 +1652,12 @@ final class EditorViewModel {
             reframeXOffset: old.reframeXOffset,
             reframeYOffset: old.reframeYOffset,
             colorAdjustment: old.colorAdjustment,
-            keyframes: old.keyframes
+            compositing: old.compositing,
+            keyframes: old.keyframes,
+            attachedClipID: old.attachedClipID,
+            attachedTrackID: old.attachedTrackID,
+            attachRotation: old.attachRotation,
+            attachScale: old.attachScale
         )
         timelinePosition = min(max(old.timelineStart, timelinePosition), overlayClips[index].timelineEnd)
         invalidateComposition()
@@ -1679,6 +1818,786 @@ final class EditorViewModel {
         guard let index = overlayClips.firstIndex(where: { $0.id == id }) else { return }
         overlayClips[index].opacity = min(max(opacity, 0.05), 1)
         invalidateComposition()
+    }
+
+    var selectedCompositing: EditorOverlayCompositing? {
+        selectedOverlayClip?.compositing ?? selectedClip?.compositing
+    }
+
+    func updateSelectedCompositing(
+        _ update: (inout EditorOverlayCompositing) -> Void
+    ) {
+        if overlayCompositingUndoSnapshot == nil {
+            overlayCompositingUndoSnapshot = currentSnapshot()
+        }
+        guard var settings = selectedCompositing else { return }
+        update(&settings)
+        settings.sanitize()
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            guard settings != overlayClips[index].compositing else { return }
+            overlayClips[index].compositing = settings
+        } else if let id = selectedClipID,
+                  let index = clips.firstIndex(where: { $0.id == id }) {
+            guard settings != clips[index].compositing else { return }
+            clips[index].compositing = settings
+        } else { return }
+        invalidateComposition()
+        scheduleOverlayCompositingPreviewRefresh()
+    }
+
+    func resetSelectedCompositing() {
+        updateSelectedCompositing { $0 = .standard }
+    }
+
+    func commitOverlayCompositing() {
+        finalizeOverlayCompositingUndo()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func finalizeOverlayCompositingUndo() {
+        overlayCompositingPreviewTask?.cancel()
+        overlayCompositingPreviewTask = nil
+        let before = overlayCompositingUndoSnapshot
+        overlayCompositingUndoSnapshot = nil
+        commitOverlayUndoSnapshot(before)
+    }
+
+    private func scheduleOverlayCompositingPreviewRefresh() {
+        overlayCompositingPreviewTask?.cancel()
+        overlayCompositingPreviewTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled, let self else { return }
+            await self.alignPlaybackToTimeline()
+        }
+    }
+
+    // MARK: Motion tracking and stabilization
+
+    var isGraphicFollowTracking: Bool {
+        selectedTextOverlayID != nil || selectedOverlayClipID != nil
+    }
+
+    /// The single CapCut-style tracking box for whichever text or graphic
+    /// overlay is currently selected — the box being placed, or (once tracked)
+    /// the box already attached to that element.
+    var currentTrackingBox: EditorMotionTrack? {
+        guard let hostClip = subjectTrackingHostClip else { return nil }
+        if let id = selectedMotionTrackID {
+            return hostClip.motionTracks.first { $0.id == id }
+        }
+        if let trackID = selectedTextOverlay?.attachedTrackID
+            ?? selectedOverlayClip?.attachedTrackID {
+            return hostClip.motionTracks.first { $0.id == trackID }
+        }
+        return nil
+    }
+
+    var selectedStabilization: EditorStabilizationSettings {
+        if let clip = selectedClip { return clip.stabilization }
+        if let overlay = selectedOverlayClip { return overlay.stabilization }
+        return subjectTrackingHostClip?.stabilization ?? .disabled
+    }
+
+    var canStabilizeSelectedClip: Bool {
+        if let clip = selectedClip { return clip.isVideo }
+        if let overlay = selectedOverlayClip { return overlay.isVideo }
+        return subjectTrackingHostClip?.isVideo == true
+    }
+
+    var isMotionTracking: Bool { isTrackingSubject || stabilizationAnalysisProgress != nil }
+
+    func currentClipProgressForTracking() -> Double {
+        if isGraphicFollowTracking, let host = subjectTrackingHost {
+            let duration = max(host.clip.duration, 0.001)
+            return min(max((timelinePosition - host.start) / duration, 0), 1)
+        }
+        if let overlay = selectedOverlayClip {
+            let duration = max(overlay.duration, 0.001)
+            return min(max((timelinePosition - overlay.timelineStart) / duration, 0), 1)
+        }
+        if let info = playbackInfo,
+           selectedClipID == nil || info.clip.id == selectedClipID {
+            return min(max(info.localTime / max(info.clip.duration, 0.001), 0), 1)
+        }
+        return 0
+    }
+
+    func updateSelectedMotionTrack(_ update: (inout EditorMotionTrack) -> Void) {
+        guard let id = selectedMotionTrackID else { return }
+        beginMotionTrackingEditIfNeeded()
+        mutateSelectedMotionTracks { tracks in
+            guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
+            update(&tracks[index])
+        }
+        scheduleMotionPreviewRefresh()
+    }
+
+    func deleteSelectedMotionTrack() {
+        guard let id = selectedMotionTrackID else { return }
+        beginMotionTrackingEditIfNeeded()
+        mutateSelectedMotionTracks { tracks in
+            tracks.removeAll { $0.id == id }
+        }
+        detachMotionTrack(id)
+        selectedMotionTrackID = nil
+        commitMotionTrackingEdit()
+    }
+
+    /// CapCut-style: place the box, tap Start, track the graphic's range, attach it.
+    func startSubjectTracking() {
+        guard motionTrackingTask == nil else { return }
+        prepareSubjectTrackingIfNeeded()
+        guard let host = subjectTrackingHost,
+              let track = currentTrackingBox else {
+            motionTrackingMessage = EditorMotionTrackingError.notVideo.localizedDescription
+            return
+        }
+
+        let range = subjectTrackingRange(for: host)
+        let seedProgress = min(max(range.seed, range.start), range.end)
+        let trackID = track.id
+        let clipID = host.clip.id
+        let sessionID = UUID()
+        motionTrackingSessionID = sessionID
+        isTrackingSubject = true
+        stabilizationAnalysisProgress = 0
+        motionTrackingMessage = "Tracking subject…"
+        pausePlaybackForEdit()
+
+        var seed = track
+        seed.seedProgress = seedProgress
+        let correction = track.resolved(at: seedProgress)
+        seed.seedX = correction.x
+        seed.seedY = correction.y
+        seed.seedRotation = correction.rotation
+        seed.seedWidth = min(max(track.seedWidth * correction.scale, 0.02), 0.9)
+        seed.seedHeight = min(max(track.seedHeight * correction.scale, 0.02), 0.9)
+        let sourceAsset = host.clip.asset
+        let clipDuration = host.clip.duration
+        let sourceTime = host.sourceTime
+        let canvasAspect = canvasSettings.aspectRatio
+        let fillCanvas = host.clip.reframeMode == .fill
+        let attachText = selectedTextOverlayID != nil
+        let attachOverlay = selectedOverlayClipID != nil
+        motionTrackingTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let asset = await EditorMotionTracker.loadSourceAsset(for: sourceAsset) else {
+                    throw EditorMotionTrackingError.unavailableFrame
+                }
+                var combined: [EditorMotionTrackSample] = []
+                let backwardSpan = max(seedProgress - range.start, 0)
+                let forwardSpan = max(range.end - seedProgress, 0)
+                let totalSpan = max(backwardSpan + forwardSpan, 0.000_001)
+
+                if backwardSpan > 0.0001 {
+                    let backward = try await EditorMotionTracker.track(
+                        seed,
+                        asset: asset,
+                        sourceTime: sourceTime,
+                        startProgress: seedProgress,
+                        boundProgress: range.start,
+                        clipDuration: clipDuration,
+                        canvasAspect: canvasAspect,
+                        fillCanvas: fillCanvas,
+                        referenceScale: correction.scale,
+                        progressHandler: { progress in
+                            Task { @MainActor in
+                                if self.motionTrackingSessionID == sessionID {
+                                    self.stabilizationAnalysisProgress = progress * (backwardSpan / totalSpan)
+                                }
+                            }
+                        }
+                    )
+                    combined.append(contentsOf: backward)
+                }
+                try Task.checkCancellation()
+                if forwardSpan > 0.0001 {
+                    let forward = try await EditorMotionTracker.track(
+                        seed,
+                        asset: asset,
+                        sourceTime: sourceTime,
+                        startProgress: seedProgress,
+                        boundProgress: range.end,
+                        clipDuration: clipDuration,
+                        canvasAspect: canvasAspect,
+                        fillCanvas: fillCanvas,
+                        referenceScale: correction.scale,
+                        progressHandler: { progress in
+                            Task { @MainActor in
+                                if self.motionTrackingSessionID == sessionID {
+                                    self.stabilizationAnalysisProgress = (backwardSpan / totalSpan)
+                                        + progress * (forwardSpan / totalSpan)
+                                }
+                            }
+                        }
+                    )
+                    combined.append(contentsOf: forward)
+                }
+                try Task.checkCancellation()
+                guard self.motionTrackingSessionID == sessionID else { return }
+                self.beginMotionTrackingEditIfNeeded()
+                self.mutateMotionTracks(onClipID: clipID) { tracks in
+                    guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { return }
+                    var updated = tracks[index]
+                    updated.seedProgress = seedProgress
+                    updated.replaceSamples(combined)
+                    tracks[index] = updated
+                }
+                // Tracking is an explicit "pin this graphic to that object"
+                // action. Put the graphic's anchor on the selected subject at
+                // the seed frame, then let the recorded path drive it from
+                // there. Without this, a valid palm track can move correctly
+                // while the sticker remains visibly beside the palm because
+                // it keeps its old placement offset.
+                self.snapAttachedElementToTrackSeed(seedX: seed.seedX, seedY: seed.seedY)
+                if attachText {
+                    self.attachSelectedTextToTrack(clipID: clipID, trackID: trackID)
+                } else if attachOverlay {
+                    self.attachSelectedOverlayToTrack(clipID: clipID, trackID: trackID)
+                } else {
+                    self.commitMotionTrackingEdit()
+                }
+                self.motionTrackingMessage = "Tracking complete · the graphic will follow this subject"
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
+                if self.motionTrackingSessionID == sessionID {
+                    self.motionTrackingMessage = "Tracking cancelled"
+                }
+            } catch {
+                if self.motionTrackingSessionID == sessionID {
+                    self.motionTrackingMessage = error.localizedDescription
+                }
+            }
+            guard self.motionTrackingSessionID == sessionID else { return }
+            self.motionTrackingSessionID = nil
+            self.isTrackingSubject = false
+            self.stabilizationAnalysisProgress = nil
+            self.motionTrackingTask = nil
+        }
+    }
+
+    func prepareSubjectTrackingIfNeeded() {
+        guard isGraphicFollowTracking else { return }
+        if let text = selectedTextOverlay, !text.isVisible(at: timelinePosition) {
+            timelinePosition = text.startTime
+            Task { await alignPlaybackToTimeline() }
+        } else if let overlay = selectedOverlayClip,
+                  timelinePosition < overlay.timelineStart
+                    || timelinePosition > overlay.timelineEnd {
+            timelinePosition = overlay.timelineStart
+            Task { await alignPlaybackToTimeline() }
+        }
+        if let existing = currentTrackingBox {
+            selectedMotionTrackID = existing.id
+        } else {
+            addSubjectFollowTrack()
+        }
+    }
+
+    func clearSubjectTracking() {
+        detachSelectedAttachment()
+        if let trackID = selectedMotionTrackID {
+            deleteSelectedMotionTrack()
+            _ = trackID
+        }
+        motionTrackingMessage = "Tracking cleared"
+    }
+
+    func analyzeSelectedStabilization() {
+        guard motionTrackingTask == nil else { return }
+        let host: (id: UUID, asset: PHAsset, duration: TimeInterval, sourceTime: (Double) -> TimeInterval)
+        if let clip = selectedClip, clip.isVideo {
+            let duration = max(clip.duration, 0.001)
+            host = (
+                clip.id,
+                clip.asset,
+                duration,
+                { progress in
+                    clip.sourceTime(forExportedLocal: progress * duration)
+                }
+            )
+        } else if let overlay = selectedOverlayClip, overlay.isVideo {
+            let duration = max(overlay.duration, 0.001)
+            host = (
+                overlay.id,
+                overlay.asset,
+                duration,
+                { progress in
+                    overlay.sourceTime(forTimelineLocal: progress * duration)
+                }
+            )
+        } else if let clip = subjectTrackingHostClip, clip.isVideo {
+            let duration = max(clip.duration, 0.001)
+            host = (
+                clip.id,
+                clip.asset,
+                duration,
+                { progress in
+                    clip.sourceTime(forExportedLocal: progress * duration)
+                }
+            )
+        } else {
+            motionTrackingMessage = EditorMotionTrackingError.notVideo.localizedDescription
+            return
+        }
+
+        let sessionID = UUID()
+        motionTrackingSessionID = sessionID
+        stabilizationAnalysisProgress = 0
+        motionTrackingMessage = "Analyzing camera motion…"
+        pausePlaybackForEdit()
+
+        let sourceAsset = host.asset
+        let clipDuration = host.duration
+        let sourceTime = host.sourceTime
+        let clipID = host.id
+        motionTrackingTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard let asset = await EditorMotionTracker.loadSourceAsset(for: sourceAsset) else {
+                    throw EditorMotionTrackingError.unavailableFrame
+                }
+                let samples = try await EditorMotionTracker.analyzeStabilization(
+                    asset: asset,
+                    sourceTime: sourceTime,
+                    clipDuration: clipDuration,
+                    progressHandler: { progress in
+                        Task { @MainActor in
+                            if self.motionTrackingSessionID == sessionID {
+                                self.stabilizationAnalysisProgress = progress
+                            }
+                        }
+                    }
+                )
+                try Task.checkCancellation()
+                guard self.motionTrackingSessionID == sessionID else { return }
+                self.beginMotionTrackingEditIfNeeded()
+                self.mutateStabilization(onClipID: clipID) { settings in
+                    settings.samples = samples
+                    settings.isEnabled = true
+                    settings.autoCrop = true
+                    settings.crop = 0
+                    settings.refreshFittedCrop()
+                }
+                self.commitMotionTrackingEdit()
+                let cropPercent = Int((self.selectedStabilization.effectiveCrop * 100).rounded())
+                let modeLabel = self.selectedStabilization.mode == .lock ? "Lock" : "Smooth"
+                self.motionTrackingMessage = "\(modeLabel) ready · \(samples.count) samples · crop \(cropPercent)%"
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
+                if self.motionTrackingSessionID == sessionID {
+                    self.motionTrackingMessage = "Analysis cancelled"
+                }
+            } catch {
+                if self.motionTrackingSessionID == sessionID {
+                    self.motionTrackingMessage = error.localizedDescription
+                }
+            }
+            guard self.motionTrackingSessionID == sessionID else { return }
+            self.motionTrackingSessionID = nil
+            self.stabilizationAnalysisProgress = nil
+            self.motionTrackingTask = nil
+        }
+    }
+
+    func cancelMotionTracking() {
+        guard motionTrackingTask != nil else { return }
+        motionTrackingTask?.cancel()
+        motionTrackingTask = nil
+        motionTrackingSessionID = nil
+        isTrackingSubject = false
+        stabilizationAnalysisProgress = nil
+        motionTrackingMessage = "Tracking cancelled"
+    }
+
+    func updateSelectedStabilization(_ update: (inout EditorStabilizationSettings) -> Void) {
+        beginMotionTrackingEditIfNeeded()
+        if let id = selectedClipID ?? selectedOverlayClipID ?? subjectTrackingHostClip?.id {
+            mutateStabilization(onClipID: id) { settings in
+                update(&settings)
+                settings.refreshFittedCrop()
+            }
+        }
+        scheduleMotionPreviewRefresh()
+        scheduleSave()
+    }
+
+    func clearSelectedStabilization() {
+        beginMotionTrackingEditIfNeeded()
+        updateSelectedStabilization { $0 = .disabled }
+        commitMotionTrackingEdit()
+        motionTrackingMessage = "Stabilization cleared"
+    }
+
+    func attachSelectedTextToTrack(clipID: UUID, trackID: UUID) {
+        guard let id = selectedTextOverlayID,
+              let index = textOverlays.firstIndex(where: { $0.id == id }) else { return }
+        beginMotionTrackingEditIfNeeded()
+        textOverlays[index].attachedClipID = clipID
+        textOverlays[index].attachedTrackID = trackID
+        commitMotionTrackingEdit()
+    }
+
+    func attachSelectedOverlayToTrack(clipID: UUID, trackID: UUID) {
+        guard let id = selectedOverlayClipID,
+              let index = overlayClips.firstIndex(where: { $0.id == id }) else { return }
+        beginMotionTrackingEditIfNeeded()
+        overlayClips[index].attachedClipID = clipID
+        overlayClips[index].attachedTrackID = trackID
+        commitMotionTrackingEdit()
+    }
+
+    private func snapAttachedElementToTrackSeed(seedX: Double, seedY: Double) {
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            overlayClips[index].xOffset = min(max(seedX - 0.5, -0.75), 0.75)
+            overlayClips[index].yOffset = min(max(seedY - 0.5, -0.75), 0.75)
+        } else if let id = selectedTextOverlayID,
+                  let index = textOverlays.firstIndex(where: { $0.id == id }) {
+            let canvas = EditorTextOverlayLayout.referenceCanvasSize(
+                aspectRatio: canvasSettings.aspectRatio
+            )
+            textOverlays[index].xOffset = CGFloat(seedX - 0.5) * canvas.width
+            textOverlays[index].yOffset = CGFloat(seedY - 0.5) * canvas.height
+        }
+    }
+
+    func detachSelectedAttachment() {
+        beginMotionTrackingEditIfNeeded()
+        if let id = selectedTextOverlayID,
+           let index = textOverlays.firstIndex(where: { $0.id == id }) {
+            textOverlays[index].attachedClipID = nil
+            textOverlays[index].attachedTrackID = nil
+        }
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            overlayClips[index].attachedClipID = nil
+            overlayClips[index].attachedTrackID = nil
+        }
+        commitMotionTrackingEdit()
+    }
+
+    func setSelectedAttachmentFollowsRotation(_ follows: Bool) {
+        beginMotionTrackingEditIfNeeded()
+        if let id = selectedTextOverlayID,
+           let index = textOverlays.firstIndex(where: { $0.id == id }) {
+            textOverlays[index].attachRotation = follows
+        }
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            overlayClips[index].attachRotation = follows
+        }
+        scheduleMotionPreviewRefresh()
+        scheduleSave()
+    }
+
+    func setSelectedAttachmentFollowsScale(_ follows: Bool) {
+        beginMotionTrackingEditIfNeeded()
+        if let id = selectedTextOverlayID,
+           let index = textOverlays.firstIndex(where: { $0.id == id }) {
+            textOverlays[index].attachScale = follows
+        }
+        if let id = selectedOverlayClipID,
+           let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            overlayClips[index].attachScale = follows
+        }
+        scheduleMotionPreviewRefresh()
+        scheduleSave()
+    }
+
+    func resolvedTextOverlay(
+        _ overlay: EditorTextOverlay,
+        at time: TimeInterval,
+        canvasSize: CGSize
+    ) -> EditorTextOverlay {
+        var resolved = overlay.resolved(at: time)
+        if let sample = motionSample(
+            clipID: overlay.attachedClipID,
+            trackID: overlay.attachedTrackID,
+            at: time
+        ) {
+            resolved = resolved.applyingTrack(sample.sample, seed: sample.seed, canvasSize: canvasSize)
+        }
+        return resolved
+    }
+
+    func resolvedOverlayClip(
+        _ clip: EditorOverlayClip,
+        at time: TimeInterval
+    ) -> EditorOverlayClip {
+        var resolved = clip.resolved(at: time)
+        if let sample = motionSample(
+            clipID: clip.attachedClipID,
+            trackID: clip.attachedTrackID,
+            at: time
+        ) {
+            resolved = resolved.applyingTrack(sample.sample, seed: sample.seed)
+        }
+        return resolved
+    }
+
+    func motionSample(
+        clipID: UUID?,
+        trackID: UUID?,
+        at time: TimeInterval
+    ) -> (sample: EditorMotionTrackSample, seed: EditorMotionTrackSample)? {
+        guard let clipID, let trackID,
+              let resolved = resolvedMotionTrack(clipID: clipID, trackID: trackID) else {
+            return nil
+        }
+        let progress: Double
+        if let index = clips.firstIndex(where: { $0.id == clipID }) {
+            let start = timelineOffsetForClipIndex(index)
+            let duration = max(clips[index].duration, 0.001)
+            progress = min(max((time - start) / duration, 0), 1)
+        } else if let overlay = overlayClips.first(where: { $0.id == clipID }) {
+            progress = min(
+                max((time - overlay.timelineStart) / max(overlay.duration, 0.001), 0),
+                1
+            )
+        } else {
+            return nil
+        }
+        return (resolved.resolved(at: progress), resolved.seedSample)
+    }
+
+    func resolvedMotionTrack(clipID: UUID, trackID: UUID) -> EditorMotionTrack? {
+        if let clip = clips.first(where: { $0.id == clipID }) {
+            return clip.motionTracks.first { $0.id == trackID }
+        }
+        return overlayClips.first(where: { $0.id == clipID })?
+            .motionTracks.first { $0.id == trackID }
+    }
+
+    func commitMotionTrackingEdit() {
+        motionPreviewTask?.cancel()
+        motionPreviewTask = nil
+        finalizeMotionTrackingUndo()
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func beginMotionTrackingEditIfNeeded() {
+        if motionTrackingUndoSnapshot == nil {
+            motionTrackingUndoSnapshot = currentSnapshot()
+        }
+    }
+
+    private func finalizeMotionTrackingUndo() {
+        motionPreviewTask?.cancel()
+        motionPreviewTask = nil
+        let before = motionTrackingUndoSnapshot
+        motionTrackingUndoSnapshot = nil
+        if let before, before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+    }
+
+    private func scheduleMotionPreviewRefresh() {
+        invalidateComposition()
+        motionPreviewTask?.cancel()
+        motionPreviewTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled, let self else { return }
+            await self.alignPlaybackToTimeline()
+        }
+    }
+
+    var subjectTrackingHostClip: EditorClip? {
+        subjectTrackingHost?.clip
+    }
+
+    private var subjectTrackingHost: (
+        clip: EditorClip,
+        start: TimeInterval,
+        sourceTime: (Double) -> TimeInterval
+    )? {
+        let graphicStart: TimeInterval
+        let graphicEnd: TimeInterval
+        if let text = selectedTextOverlay {
+            graphicStart = text.startTime
+            graphicEnd = text.endTime
+        } else if let overlay = selectedOverlayClip {
+            graphicStart = overlay.timelineStart
+            graphicEnd = overlay.timelineEnd
+        } else {
+            return nil
+        }
+
+        if let info = playbackInfo, info.clip.isVideo {
+            let start = timelineOffsetForClipIndex(info.index)
+            let end = start + info.clip.duration
+            if graphicStart < end && graphicEnd > start {
+                return hostDescriptor(for: info.clip, clipStart: start)
+            }
+        }
+        var cursor: TimeInterval = 0
+        for clip in clips {
+            let end = cursor + clip.duration
+            if clip.isVideo, graphicStart < end, graphicEnd > cursor {
+                return hostDescriptor(for: clip, clipStart: cursor)
+            }
+            cursor = end
+        }
+        if let index = clips.firstIndex(where: \.isVideo) {
+            return hostDescriptor(
+                for: clips[index],
+                clipStart: timelineOffsetForClipIndex(index)
+            )
+        }
+        return nil
+    }
+
+    private func hostDescriptor(
+        for clip: EditorClip,
+        clipStart: TimeInterval
+    ) -> (clip: EditorClip, start: TimeInterval, sourceTime: (Double) -> TimeInterval) {
+        let duration = max(clip.duration, 0.001)
+        return (
+            clip,
+            clipStart,
+            { progress in
+                clip.sourceTime(forExportedLocal: progress * duration)
+            }
+        )
+    }
+
+    private func subjectTrackingRange(
+        for host: (clip: EditorClip, start: TimeInterval, sourceTime: (Double) -> TimeInterval)
+    ) -> (start: Double, end: Double, seed: Double) {
+        let duration = max(host.clip.duration, 0.001)
+        let clipEnd = host.start + host.clip.duration
+        let graphicStart: TimeInterval
+        let graphicEnd: TimeInterval
+        if let text = selectedTextOverlay {
+            graphicStart = text.startTime
+            graphicEnd = text.endTime
+        } else if let overlay = selectedOverlayClip {
+            graphicStart = overlay.timelineStart
+            graphicEnd = overlay.timelineEnd
+        } else {
+            graphicStart = host.start
+            graphicEnd = clipEnd
+        }
+        let start = min(max((max(graphicStart, host.start) - host.start) / duration, 0), 1)
+        let end = min(max((min(graphicEnd, clipEnd) - host.start) / duration, 0), 1)
+        let seed = min(max((timelinePosition - host.start) / duration, start), end)
+        return (min(start, end), max(start, end), seed)
+    }
+
+    private func addSubjectFollowTrack() {
+        beginMotionTrackingEditIfNeeded()
+        let label: String
+        if let text = selectedTextOverlay {
+            let snippet = text.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            label = snippet.isEmpty ? "Subject" : String(snippet.prefix(18))
+        } else {
+            label = "Subject"
+        }
+        var seedX = 0.5
+        var seedY = 0.5
+        var seedWidth = 0.22
+        var seedHeight = 0.16
+        if let overlay = selectedOverlayClip {
+            seedX = min(max(0.5 + overlay.xOffset, 0.08), 0.92)
+            seedY = min(max(0.5 + overlay.yOffset, 0.08), 0.92)
+            seedWidth = min(max(overlay.scale * 0.28, 0.10), 0.45)
+            seedHeight = min(max(overlay.scale * 0.36, 0.10), 0.50)
+        } else if let text = selectedTextOverlay {
+            let canvas = EditorTextOverlayLayout.referenceCanvasSize(
+                aspectRatio: canvasSettings.aspectRatio
+            )
+            seedX = min(max(0.5 + Double(text.xOffset / max(canvas.width, 1)), 0.08), 0.92)
+            seedY = min(max(0.5 + Double(text.yOffset / max(canvas.height, 1)), 0.08), 0.92)
+        }
+        let track = EditorMotionTrack(
+            name: label,
+            seedX: seedX,
+            seedY: seedY,
+            seedWidth: seedWidth,
+            seedHeight: seedHeight,
+            seedProgress: currentClipProgressForTracking()
+        )
+        mutateSelectedMotionTracks { tracks in
+            tracks.append(track)
+        }
+        selectedMotionTrackID = track.id
+        motionTrackingMessage = "Place the box on the subject, then tap Start."
+    }
+
+    private func mutateSelectedMotionTracks(_ body: (inout [EditorMotionTrack]) -> Void) {
+        guard let id = subjectTrackingHostClip?.id,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        body(&clips[index].motionTracks)
+        invalidateComposition()
+    }
+
+    private func mutateMotionTracks(
+        onClipID clipID: UUID,
+        _ body: (inout [EditorMotionTrack]) -> Void
+    ) {
+        if let index = clips.firstIndex(where: { $0.id == clipID }) {
+            body(&clips[index].motionTracks)
+        } else if let index = overlayClips.firstIndex(where: { $0.id == clipID }) {
+            body(&overlayClips[index].motionTracks)
+        }
+        invalidateComposition()
+    }
+
+    private func mutateStabilization(
+        onClipID clipID: UUID,
+        _ body: (inout EditorStabilizationSettings) -> Void
+    ) {
+        if let index = clips.firstIndex(where: { $0.id == clipID }) {
+            body(&clips[index].stabilization)
+        } else if let index = overlayClips.firstIndex(where: { $0.id == clipID }) {
+            body(&overlayClips[index].stabilization)
+        }
+        invalidateComposition()
+    }
+
+    private func detachMotionTrack(_ trackID: UUID) {
+        for index in textOverlays.indices where textOverlays[index].attachedTrackID == trackID {
+            textOverlays[index].attachedClipID = nil
+            textOverlays[index].attachedTrackID = nil
+        }
+        for index in overlayClips.indices where overlayClips[index].attachedTrackID == trackID {
+            overlayClips[index].attachedClipID = nil
+            overlayClips[index].attachedTrackID = nil
+        }
+    }
+
+    private func remapMotionAttachmentsAfterSplit(
+        left: EditorClip,
+        right: EditorClip,
+        splitTime: TimeInterval
+    ) {
+        let mappedIDs = zip(left.motionTracks, right.motionTracks).reduce(
+            into: [UUID: UUID]()
+        ) { result, pair in
+            result[pair.0.id] = pair.1.id
+        }
+        for index in textOverlays.indices {
+            guard textOverlays[index].attachedClipID == left.id,
+                  textOverlays[index].startTime >= splitTime else { continue }
+            textOverlays[index].attachedClipID = right.id
+            if let oldTrack = textOverlays[index].attachedTrackID {
+                textOverlays[index].attachedTrackID = mappedIDs[oldTrack] ?? oldTrack
+            }
+        }
+        for index in overlayClips.indices {
+            guard overlayClips[index].attachedClipID == left.id,
+                  overlayClips[index].timelineStart >= splitTime else { continue }
+            overlayClips[index].attachedClipID = right.id
+            if let oldTrack = overlayClips[index].attachedTrackID {
+                overlayClips[index].attachedTrackID = mappedIDs[oldTrack] ?? oldTrack
+            }
+        }
     }
 
     func resetSelectedOverlayTransform() {
@@ -2130,16 +3049,48 @@ final class EditorViewModel {
 
     func beginTextOverlayPositionDrag(id: UUID) {
         beginTextOverlayEdit()
-        guard textEditDragOrigin == nil,
-              let overlay = textOverlays.first(where: { $0.id == id }) else { return }
-        textEditDragOrigin = (overlay.xOffset, overlay.yOffset)
+        guard let overlay = textOverlays.first(where: { $0.id == id }) else { return }
+        let resolved = overlay.resolved(at: timelinePosition)
+        textEditDragOrigin = (resolved.xOffset, resolved.yOffset)
     }
 
-    func updateTextOverlayPositionDrag(id: UUID, translation: CGSize) {
+    func updateTextOverlayPositionDrag(
+        id: UUID,
+        translation: CGSize,
+        canvasScale: CGFloat
+    ) {
         guard let origin = textEditDragOrigin,
+              canvasScale > 0,
               let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
-        textOverlays[idx].xOffset = origin.x + translation.width
-        textOverlays[idx].yOffset = origin.y + translation.height
+        let x = origin.x + translation.width / canvasScale
+        let y = origin.y + translation.height / canvasScale
+        textOverlays[idx].xOffset = x
+        textOverlays[idx].yOffset = y
+
+        // `resolved()` reads keyframed X/Y when those tracks exist, ignoring
+        // the base offset. Write through at the playhead so the glyph actually
+        // follows the finger instead of appearing stuck.
+        let localTime = min(
+            max(0, timelinePosition - textOverlays[idx].startTime),
+            textOverlays[idx].duration
+        )
+        var tracks = textOverlays[idx].keyframes
+        var wroteKeyframe = false
+        if !tracks.track(for: .textPositionX).isEmpty {
+            var track = tracks.track(for: .textPositionX)
+            _ = track.upsert(at: localTime, value: Double(x))
+            tracks.replace(track)
+            wroteKeyframe = true
+        }
+        if !tracks.track(for: .textPositionY).isEmpty {
+            var track = tracks.track(for: .textPositionY)
+            _ = track.upsert(at: localTime, value: Double(y))
+            tracks.replace(track)
+            wroteKeyframe = true
+        }
+        if wroteKeyframe {
+            textOverlays[idx].keyframes = tracks
+        }
     }
 
     func commitTextOverlayPositionDrag() {
@@ -2169,7 +3120,11 @@ final class EditorViewModel {
             textColor: source.textColor, opacity: source.opacity,
             horizontalAlignment: source.horizontalAlignment,
             verticalAlignment: source.verticalAlignment, xOffset: source.xOffset,
-            yOffset: source.yOffset, keyframes: source.keyframes
+            yOffset: source.yOffset, keyframes: source.keyframes,
+            attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID,
+            attachRotation: source.attachRotation,
+            attachScale: source.attachScale
         )
         guard copy.duration > 0.1 else { return }
         registerUndoIfNeeded()
@@ -2183,6 +3138,9 @@ final class EditorViewModel {
         if selectedTextOverlayID == id {
             selectedTextOverlayID = nil
         } else {
+            if selectedTool == .track || selectedTool == .stabilize {
+                finalizeMotionTrackingUndo()
+            }
             selectedTextOverlayID = id
             selectedClipID = nil
             selectedAudioClipID = nil
@@ -2325,6 +3283,11 @@ final class EditorViewModel {
         let index = info.index
         clips.remove(at: index)
         clips.insert(contentsOf: [parts.left, parts.right], at: index)
+        remapMotionAttachmentsAfterSplit(
+            left: parts.left,
+            right: parts.right,
+            splitTime: timelinePosition
+        )
 
         selectedClipID = parts.right.id
         timelinePosition = timelineOffsetForClipIndex(index) + parts.left.duration
@@ -2381,7 +3344,14 @@ final class EditorViewModel {
             isFlippedHorizontally: source.isFlippedHorizontally,
             isFlippedVertically: source.isFlippedVertically, reframeScale: source.reframeScale,
             reframeXOffset: source.reframeXOffset, reframeYOffset: source.reframeYOffset,
-            colorAdjustment: source.colorAdjustment, keyframes: source.keyframes,
+            colorAdjustment: source.colorAdjustment, compositing: source.compositing,
+            keyframes: source.keyframes,
+            motionTracks: source.motionTracks.map { track in
+                var copy = track
+                copy.id = UUID()
+                return copy
+            },
+            stabilization: source.stabilization,
             transitionKind: source.transitionKind,
             transitionDuration: source.transitionDuration
         )
@@ -2412,7 +3382,8 @@ final class EditorViewModel {
             isFlippedHorizontally: old.isFlippedHorizontally,
             isFlippedVertically: old.isFlippedVertically, reframeScale: old.reframeScale,
             reframeXOffset: old.reframeXOffset, reframeYOffset: old.reframeYOffset,
-            colorAdjustment: old.colorAdjustment, keyframes: old.keyframes,
+            colorAdjustment: old.colorAdjustment, compositing: old.compositing,
+            keyframes: old.keyframes,
             transitionKind: old.transitionKind,
             transitionDuration: min(old.transitionDuration, old.duration)
         )
@@ -2865,6 +3836,8 @@ final class EditorViewModel {
         compositionFingerprint = nil
         saveTask?.cancel()
         exportTask?.cancel()
+        cancelMotionTracking()
+        cancelColorMaskTracking()
         EditorExportService.cancelCurrentExport()
         EditorCompositionBuilder.clearCaches()
         isPlaying = false
@@ -3008,13 +3981,13 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.keyframes)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)"
         }.joined(separator: ";")
         let overlayHash = overlayClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.keyframes)|\($0.asset.localIdentifier)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
         }.joined(separator: ";")
         let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
         let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"

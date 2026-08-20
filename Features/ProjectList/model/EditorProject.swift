@@ -27,7 +27,10 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
+    var motionTracks: [EditorMotionTrack]
+    var stabilization: EditorStabilizationSettings
     var transitionKind: EditorTransitionKind
     var transitionDuration: TimeInterval
 
@@ -50,7 +53,10 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
         colorAdjustment = clip.colorAdjustment
+        compositing = clip.compositing
         keyframes = clip.keyframes
+        motionTracks = clip.motionTracks
+        stabilization = clip.stabilization
         transitionKind = clip.transitionKind
         transitionDuration = clip.transitionDuration
     }
@@ -78,7 +84,16 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
             EditorColorAdjustment.self,
             forKey: .colorAdjustment
         ) ?? .neutral
+        compositing = try c.decodeIfPresent(
+            EditorOverlayCompositing.self,
+            forKey: .compositing
+        ) ?? .standard
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
+        motionTracks = try c.decodeIfPresent([EditorMotionTrack].self, forKey: .motionTracks) ?? []
+        stabilization = try c.decodeIfPresent(
+            EditorStabilizationSettings.self,
+            forKey: .stabilization
+        ) ?? .disabled
         transitionDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .transitionDuration) ?? 0
         if let rawKind = try c.decodeIfPresent(String.self, forKey: .transitionKind) {
             // `zoom` was shipped briefly before the catalog split it into Zoom In/Out.
@@ -108,6 +123,10 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
     var xOffset: CGFloat
     var yOffset: CGFloat
     var keyframes: EditorKeyframeTracks
+    var attachedClipID: UUID?
+    var attachedTrackID: UUID?
+    var attachRotation: Bool
+    var attachScale: Bool
 
     init(from overlay: EditorTextOverlay) {
         id = overlay.id
@@ -124,6 +143,10 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         xOffset = overlay.xOffset
         yOffset = overlay.yOffset
         keyframes = overlay.keyframes
+        attachedClipID = overlay.attachedClipID
+        attachedTrackID = overlay.attachedTrackID
+        attachRotation = overlay.attachRotation
+        attachScale = overlay.attachScale
     }
 
     func toOverlay() -> EditorTextOverlay {
@@ -141,7 +164,11 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
             verticalAlignment: verticalAlignment,
             xOffset: xOffset,
             yOffset: yOffset,
-            keyframes: keyframes
+            keyframes: keyframes,
+            attachedClipID: attachedClipID,
+            attachedTrackID: attachedTrackID,
+            attachRotation: attachRotation,
+            attachScale: attachScale
         )
     }
 
@@ -162,6 +189,10 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0.0
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0.0
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
+        attachedClipID = try c.decodeIfPresent(UUID.self, forKey: .attachedClipID)
+        attachedTrackID = try c.decodeIfPresent(UUID.self, forKey: .attachedTrackID)
+        attachRotation = try c.decodeIfPresent(Bool.self, forKey: .attachRotation) ?? false
+        attachScale = try c.decodeIfPresent(Bool.self, forKey: .attachScale) ?? false
     }
 }
 
@@ -251,7 +282,14 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
+    var motionTracks: [EditorMotionTrack]
+    var stabilization: EditorStabilizationSettings
+    var attachedClipID: UUID?
+    var attachedTrackID: UUID?
+    var attachRotation: Bool
+    var attachScale: Bool
 
     init(from clip: EditorOverlayClip) {
         id = clip.id
@@ -278,7 +316,14 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
         colorAdjustment = clip.colorAdjustment
+        compositing = clip.compositing
         keyframes = clip.keyframes
+        motionTracks = clip.motionTracks
+        stabilization = clip.stabilization
+        attachedClipID = clip.attachedClipID
+        attachedTrackID = clip.attachedTrackID
+        attachRotation = clip.attachRotation
+        attachScale = clip.attachScale
     }
 
     init(from decoder: Decoder) throws {
@@ -307,7 +352,20 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         reframeXOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeXOffset) ?? 0
         reframeYOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeYOffset) ?? 0
         colorAdjustment = try c.decodeIfPresent(EditorColorAdjustment.self, forKey: .colorAdjustment) ?? .neutral
+        compositing = try c.decodeIfPresent(
+            EditorOverlayCompositing.self,
+            forKey: .compositing
+        ) ?? .standard
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
+        motionTracks = try c.decodeIfPresent([EditorMotionTrack].self, forKey: .motionTracks) ?? []
+        stabilization = try c.decodeIfPresent(
+            EditorStabilizationSettings.self,
+            forKey: .stabilization
+        ) ?? .disabled
+        attachedClipID = try c.decodeIfPresent(UUID.self, forKey: .attachedClipID)
+        attachedTrackID = try c.decodeIfPresent(UUID.self, forKey: .attachedTrackID)
+        attachRotation = try c.decodeIfPresent(Bool.self, forKey: .attachRotation) ?? false
+        attachScale = try c.decodeIfPresent(Bool.self, forKey: .attachScale) ?? false
     }
 }
 
@@ -569,7 +627,10 @@ enum EditorProjectResolver {
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
                 colorAdjustment: item.colorAdjustment,
+                compositing: item.compositing,
                 keyframes: item.keyframes,
+                motionTracks: item.motionTracks,
+                stabilization: item.stabilization,
                 transitionKind: item.transitionKind,
                 transitionDuration: item.transitionDuration
             )
@@ -615,7 +676,14 @@ enum EditorProjectResolver {
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
                 colorAdjustment: item.colorAdjustment,
-                keyframes: item.keyframes
+                compositing: item.compositing,
+                keyframes: item.keyframes,
+                motionTracks: item.motionTracks,
+                stabilization: item.stabilization,
+                attachedClipID: item.attachedClipID,
+                attachedTrackID: item.attachedTrackID,
+                attachRotation: item.attachRotation,
+                attachScale: item.attachScale
             )
         }
     }

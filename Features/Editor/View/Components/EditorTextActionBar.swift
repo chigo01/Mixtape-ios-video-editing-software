@@ -48,6 +48,16 @@ struct EditorTextActionBar: View {
                     }
 
                     ClipActionButton(
+                        action: .track,
+                        isSelected: vm.selectedTool == .track,
+                        isDisabled: false
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            vm.performToolAction(.track)
+                        }
+                    }
+
+                    ClipActionButton(
                         action: .duplicate,
                         isSelected: false,
                         isDisabled: false
