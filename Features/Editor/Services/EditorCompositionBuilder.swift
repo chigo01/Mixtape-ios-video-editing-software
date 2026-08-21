@@ -104,7 +104,9 @@ enum EditorCompositionBuilder {
         canvasSettings: EditorCanvasSettings = .default,
         frameRate: Int32 = 30,
         canvasSize: CGSize? = nil,
-        isOfflineRender: Bool = false
+        isOfflineRender: Bool = false,
+        audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
+        masterVolume: Float = 1.0
     ) async -> EditorCompositionBuildResult? {
         guard !clips.isEmpty else { return nil }
 
@@ -396,17 +398,19 @@ enum EditorCompositionBuilder {
                     )
                 ),
                 baseVolume: overlayAudio.clip.volume,
-                keyframes: overlayAudio.clip.keyframes
+                keyframes: overlayAudio.clip.keyframes,
+                extraGain: masterVolume
             )
             mixParams.append(params)
         }
 
         // Per-clip volume
         if let clipAudioTrack = compositionAudioTrack, !audioVolumeSegments.isEmpty {
-            let needsClipMix = audioVolumeSegments.contains {
-                abs($0.volume - 1.0) > 0.001
-                    || !$0.keyframes.track(for: .volume).isEmpty
-            }
+            let needsClipMix = abs(masterVolume - 1.0) > 0.001
+                || audioVolumeSegments.contains {
+                    abs($0.volume - 1.0) > 0.001
+                        || !$0.keyframes.track(for: .volume).isEmpty
+                }
             if needsClipMix {
                 let params = AVMutableAudioMixInputParameters(track: clipAudioTrack)
                 for seg in audioVolumeSegments {
@@ -414,7 +418,8 @@ enum EditorCompositionBuilder {
                         to: params,
                         timeRange: seg.timeRange,
                         baseVolume: seg.volume,
-                        keyframes: seg.keyframes
+                        keyframes: seg.keyframes,
+                        extraGain: masterVolume
                     )
                 }
                 mixParams.append(params)
@@ -422,8 +427,12 @@ enum EditorCompositionBuilder {
         }
 
         // Background music clips
+        let anyLaneSoloed = audioTrackSettings.values.contains { $0.isSoloed }
         for audioClip in audioClips where FileManager.default.fileExists(atPath: audioClip.fileURL.path) {
-            let bgAsset = AVURLAsset(url: audioClip.fileURL)
+            // `playbackFileURL` swaps in the Priority 15 effect-processed render when one exists
+            // and falls back to the dry file otherwise — trim/timeline math below is unaffected
+            // either way since effect rendering always preserves the source's exact duration.
+            let bgAsset = AVURLAsset(url: audioClip.playbackFileURL)
             guard let bgSourceTrack = try? await bgAsset.loadTracks(withMediaType: .audio).first,
                   let bgCompTrack = composition.addMutableTrack(
                     withMediaType: .audio,
@@ -448,13 +457,20 @@ enum EditorCompositionBuilder {
                 max(0, audioClip.duration - fadeIn)
             )
 
+            // A lane with no entry yet is still subject to solo — only the *default* (no entry
+            // at all) skips it, not "no entry for this specific lane" — so this must default to
+            // a plain `EditorAudioTrackSettings()` and go through `effectiveGain`, not fall back
+            // straight to `1.0`, or an untouched lane would keep playing under an active solo.
+            let laneSettings = audioTrackSettings[audioClip.laneIndex] ?? EditorAudioTrackSettings()
+            let trackGain = laneSettings.effectiveGain(anySoloed: anyLaneSoloed)
             applyVolumeAutomation(
                 to: bgParams,
                 timeRange: CMTimeRange(start: timelineStart, duration: sourceDuration),
                 baseVolume: audioClip.volume,
                 keyframes: audioClip.keyframes,
                 fadeIn: fadeIn,
-                fadeOut: fadeOut
+                fadeOut: fadeOut,
+                extraGain: trackGain * masterVolume
             )
             mixParams.append(bgParams)
         }
@@ -524,14 +540,15 @@ enum EditorCompositionBuilder {
         baseVolume: Float,
         keyframes: EditorKeyframeTracks,
         fadeIn: TimeInterval = 0,
-        fadeOut: TimeInterval = 0
+        fadeOut: TimeInterval = 0,
+        extraGain: Float = 1.0
     ) {
         let duration = max(0, timeRange.duration.seconds)
         guard duration > 0 else { return }
         let volumeTrack = keyframes.track(for: .volume)
         let hasAutomation = !volumeTrack.isEmpty || fadeIn > 0 || fadeOut > 0
         guard hasAutomation else {
-            parameters.setVolume(baseVolume, at: timeRange.start)
+            parameters.setVolume(baseVolume * extraGain, at: timeRange.start)
             return
         }
 
@@ -544,7 +561,11 @@ enum EditorCompositionBuilder {
             let fadeInGain = fadeIn > 0 ? min(max(localTime / fadeIn, 0), 1) : 1
             let remaining = duration - localTime
             let fadeOutGain = fadeOut > 0 ? min(max(remaining / fadeOut, 0), 1) : 1
-            return Float(min(max(automated * fadeInGain * fadeOutGain, 0), 1))
+            // extraGain (track/master gain) is applied after the existing 0...1 clamp, not
+            // baked into `automated` — it's always 0...1 itself (see
+            // EditorAudioTrackSettings.effectiveGain), so the product stays in range without
+            // needing to touch the keyframe/fade math above.
+            return Float(min(max(automated * fadeInGain * fadeOutGain, 0), 1)) * extraGain
         }
 
         for index in 0..<sampleCount {
@@ -681,7 +702,9 @@ enum EditorCompositionBuilder {
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
         closingTransitionDuration: TimeInterval = 0,
-        canvasSettings: EditorCanvasSettings = .default
+        canvasSettings: EditorCanvasSettings = .default,
+        audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
+        masterVolume: Float = 1.0
     ) async -> AVPlayerItem? {
         guard let built = await build(
             from: clips,
@@ -692,7 +715,9 @@ enum EditorCompositionBuilder {
             closingTransitionKind: closingTransitionKind,
             closingTransitionDuration: closingTransitionDuration,
             canvasSettings: canvasSettings,
-            canvasSize: canvasSettings.renderSize(longEdge: 1920)
+            canvasSize: canvasSettings.renderSize(longEdge: 1920),
+            audioTrackSettings: audioTrackSettings,
+            masterVolume: masterVolume
         ) else { return nil }
 
         let item = await AVPlayerItem(asset: built.composition)

@@ -126,6 +126,7 @@ OverlayCompositingToolPanel  ← Blend/Mask/Chroma sheet for primary and overlay
 MotionTrackingToolPanel      ← Stabilize (camera shake) and Track (CapCut-style subject tracking)
 TextOverlayEditorSheet       ← bottom sheet (styles, fonts, position); live-syncs to preview
 AudioPickerView              ← sheet to import MP3/M4A etc. onto the audio lane
+AudioLibraryPickerView       ← bundled + Freesound sound-library browser, inserts at the playhead
 
 EditorExportScreen (pushed from Export)
 ├── EditorExportPreviewSection ← live composition preview, play/pause, scrub slider
@@ -400,15 +401,28 @@ use the same selected duration.
 
 **Lanes:** `laneIndex` mirrors `EditorOverlayClip.laneIndex` — each lane is an independent track, and clips on different lanes are free to **overlap in time**. That is what makes it possible to drop a second piece of audio at the same playhead as an existing clip instead of being pushed to the end of a single track.
 
-**Adding audio:** two entry points, both opening the shared **`AudioPickerView`** sheet:
-- The pinned **+** on the audio lane stack (`EditorTimeline`, lane 0) or the empty-state **Add Audio** button → **`loadAudioClip(from:insertion:)`** with **`.newTrackAtPlayhead`** — allocates a new `laneIndex` (`(audioClips.map(\.laneIndex).max() ?? -1) + 1`) and starts the clip at `timelinePosition`, so it can sit alongside whatever is already playing.
-- The small **+** that sits right after a clip's trailing edge → **`.afterClip(id)`** — appends back-to-back on that clip's own lane (the CapCut "extend this track" gesture), unaffected by the playhead.
+**Adding audio:** every **+** (the pinned lane-0 button, the empty-state **Add Audio** button, the
+small **+** after a clip's trailing edge, and **ADD AUDIO** on the contextual bar) opens a
+`confirmationDialog` — **"Record Voiceover"** (→ `VoiceoverRecorderView`, see **Priority 14**),
+**"Browse Sound Library"** (→ `AudioLibraryPickerView`, see **Priority 20**), or **"Import from
+Files"** (→ `AudioPickerView`, the `UIDocumentPickerViewController` wrapper) — via
+`AudioSourceSheets`, a `ViewModifier` in `EditorScreen.swift`. Whichever is picked ends up calling
+`EditorViewModel.loadAudioClip(from:insertion:)` (Files), `insertAudioLibraryItem(...)` (library),
+or `insertRecordedVoiceover(fileURL:duration:insertion:)` (recorder), all funneling through the
+same **`resolveAudioInsertion(_:)`** placement logic:
+- **`.newTrackAtPlayhead`** (the lane-0 **+**, empty-state button, and contextual-bar ADD AUDIO)
+  — allocates a new `laneIndex` (`(audioClips.map(\.laneIndex).max() ?? -1) + 1`) and starts the
+  clip at `timelinePosition`, so it can sit alongside whatever is already playing.
+- **`.afterClip(id)`** (the small **+** after a clip's trailing edge) — appends back-to-back on
+  that clip's own lane (the CapCut "extend this track" gesture), unaffected by the playhead.
 
 **Timeline lanes:** `EditorTimeline.audioLanes` groups clips by `laneIndex` the same way `overlayLanePlacements` groups video overlays, rendering one row per track (`AudioClipThumb`) inside a capped-height vertical scroller (~2 tracks tall; more tracks scroll rather than pushing the rest of the timeline chrome down). Select a clip for trim handles; **drag body** to move (including across lanes visually — the model only stores `laneIndex`, so moving a clip does not currently reassign its lane); **drag handles** to trim (parent scroll disabled while trimming).
 
-**Contextual bar:** **`EditorAudioActionBar`** — ADD AUDIO (same "Browse Sound Library" / "Import from Files" chooser as the lane's own **+**, new track at the playhead), SPLIT (at playhead, same lane), VOLUME (opens **`VolumeToolPanel`**), KEYFRAME, DUPLICATE (same lane), DELETE.
+**Contextual bar:** **`EditorAudioActionBar`** — ADD AUDIO (same "Browse Sound Library" / "Import from Files" / "Record Voiceover" chooser as the lane's own **+**, new track at the playhead), SPLIT (at playhead, same lane), VOLUME (opens **`VolumeToolPanel`**), KEYFRAME, PUNCH IN (Priority 14: marks in/out at the playhead, then re-records that range in place — see the Priority 14 writeup in §13), EFFECTS (Priority 15: opens **`EditorAudioEffectPanel`**, CapCut-style voice/sound presets — see the Priority 15 writeup in §13), DUPLICATE (same lane), DELETE.
 
-**Waveforms:** `Services/AudioWaveformGenerator.swift` decodes real peak-amplitude data per clip (cached in memory + on disk, keyed by a stable hash of the file path) instead of the placeholder noise earlier versions drew — see **Priority 13** in §13 for what's shipped vs. still open (meters, gain staging).
+**Waveforms:** `Services/AudioWaveformGenerator.swift` decodes real peak-amplitude data per clip (cached in memory + on disk, keyed by a stable hash of the file path) instead of the placeholder noise earlier versions drew.
+
+**Gain staging:** the **MIX** tool (main toolbar) opens `MixToolPanel` — a master-volume slider plus one gain/mute row per track, backed by `EditorViewModel.audioTrackSettings`/`masterVolume` and applied in both preview and export via `EditorCompositionBuilder`. See **Priority 13** in §13 for the full writeup, including why live meters are intentionally not built.
 
 **Composition:** every clip — regardless of lane — already becomes its own composition audio track with its own `AVAudioMixInputParameters` (per-clip volume, keyframed volume ramps, fade in/out). Lanes are a **timeline-UI grouping only**; overlapping clips on different lanes were always mixable at the composition/export layer, they just had no way to be placed or displayed without colliding before this change. Timeline extends past video when music runs long.
 
@@ -485,7 +499,9 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/MotionTrackingToolPanel.swift` | Stabilize workspace for clips; Track workspace (place box → Start tracking → auto-attaches) for the selected overlay or text. |
 | `View/Components/MotionTrackingSelectionLayer.swift` | Direct-preview point crosshair and planar rectangle placement. |
 | `View/Components/AudioPickerView.swift` | Document picker for background music import. |
-| `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected. |
+| `Services/VoiceoverRecorderService.swift` | Priority 14 recording engine: `AVAudioRecorder` capture, permission state, input-level meter, takes, interruption/route-change recovery. |
+| `View/Components/VoiceoverRecorderView.swift` | Priority 14 recording sheet UI: permission gate, level meter, takes list (preview/retry/delete/use), script + auto-scrolling teleprompter overlay (`ScriptEditorSheet`); doubles as the punch-in recorder via `Mode.punch`. |
+| `View/Components/EditorAudioActionBar.swift` | Contextual toolbar when an audio clip is selected; also renders the Priority 14 punch-in in/out marking row in place of the action grid while marking is active. |
 | `View/Components/ClipReorderGestureView.swift` | Long-press drag reorder: `UILongPressGestureRecognizer`, `ClipReorderState`, `TimelineClipMetrics`. |
 | `View/Components/ClipTrimHandleView.swift` | UIKit trim handles (`UIViewRepresentable`) — clips, text, and audio. |
 | `View/Components/EditorPreviewPlayer.swift` | Inline preview, overlay drag/pinch selection layer, text layer, HUD, `PlayerLayerView` (not hittable; overlays own pans). |
@@ -498,7 +514,18 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `Model/EditorColorGrade.swift` | Codable filter catalog, primary controls, eight-band HSL, master/R/G/B curves, and lift/gamma/gain/offset values. |
 | `Model/EditorTransition.swift` | Single transition catalog: 105 stable identifiers plus picker title, icon, category, renderer routing, and opening/cut/closing targets. |
 | `Model/EditorTextOverlay.swift` | Text overlay model, style enums, and `EditorTextOverlayLayout` (shared preview/export point space). |
-| `Model/EditorAudioClip.swift` | Background audio clip model (trim, move, split, volume, fade in/out). |
+| `Model/EditorAudioClip.swift` | Multi-track background audio clip model (trim, move, split, `laneIndex`, volume, fade in/out, keyframes, CC-attribution text). |
+| `Model/EditorAudioMixSettings.swift` | Per-track gain/mute (`EditorAudioTrackSettings`) for Priority 13 gain staging. |
+| `View/Components/MixToolPanel.swift` | **MIX** tool sheet: master volume, per-track gain/mute/solo, and inline track renaming. |
+| `Model/EditorAudioEffect.swift` | Priority 15 voice/sound effect presets, built from `AVAudioUnit` effects. |
+| `Services/EditorAudioEffectRenderer.swift` | Priority 15 offline `AVAudioEngine` effect renderer + disk cache. |
+| `View/Components/EditorAudioEffectPanel.swift` | **EFFECTS** tool sheet: Filters/Characters tabbed preset grid for the selected audio clip, "Original" pinned first. |
+| `Model/EditorAudioLibraryItem.swift` | Source-agnostic sound-library item, category/license/source types, and the `EditorAudioLibraryProviding` protocol. |
+| `ViewModel/AudioLibraryViewModel.swift` | Sound Library sheet state: merges bundled + Freesound search results, favorites, audition playback, resolve/download. |
+| `View/Components/AudioLibraryPickerView.swift` | Sound Library sheet UI: search, category chips, Bundled/Freesound sections, attribution confirm. |
+| `Services/AudioLibraryCache.swift` | Actor-based, budget-capped on-disk cache for downloaded library sounds, shared across projects. |
+| `Services/FreesoundAudioLibraryProvider.swift` | Freesound API search + license mapping; remote `EditorAudioLibraryProviding` conformer. |
+| `Services/AudioWaveformGenerator.swift` | Real per-clip waveform decoding (`AVAudioFile`) with in-memory + on-disk caching. |
 | `Model/EditorTimelineSnapshot.swift` | Undo snapshot for primary/overlay clips, endpoints, playhead, selections, text, and audio. |
 | `Model/EditorTool.swift` | Tool enum, including selected-clip color adjustment routing. |
 | `ProjectList/Model/EditorProject.swift` | Backward-compatible Codable document (`SavedEditorClip`, `SavedOverlayClip`, text/audio DTOs). |
@@ -593,7 +620,9 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Clip delete** | Remove selected clip (min 2 clips); playhead + selection adjust | `EditorClipActionBar`, `deleteSelectedClip` | Array editing + composition invalidation |
 | **Text preview drag** | Drag selected overlay on inline or fullscreen preview; finger 1:1; same relative spot on both canvases | `EditorTextOverlayLayerView`, `beginTextOverlayPositionDrag`, `updateTextOverlayPositionDrag` | Named-space `DragGesture`; `contentShape` before offset; translation ÷ canvas scale |
 | **Text style undo** | Sheet edits + position drag register one undo step | `beginTextOverlayEdit`, `finalizeTextOverlayEdit`, `TextOverlayEditorSheet` | Memento pattern (same as speed/trim) |
-| **Background audio** | Import, trim, move, split, delete; multi-clip lane | `EditorAudioClip`, `AudioClipThumb`, `EditorAudioActionBar`, `AudioPickerView` | Multi-track `AVMutableComposition` + `AVAudioMix` |
+| **Background audio** | Import/library-insert, trim, move, split, delete; independent overlappable tracks | `EditorAudioClip.laneIndex`, `AudioClipThumb`, `EditorAudioActionBar`, `AudioPickerView`, `AudioLibraryPickerView` | Multi-track `AVMutableComposition` + `AVAudioMix`, one composition track per clip regardless of lane |
+| **Sound library** | Bundled starter SFX + live Freesound search, favorites, audition, attribution confirm | `AudioLibraryViewModel`, `BundledAudioLibraryProvider`, `FreesoundAudioLibraryProvider`, `AudioLibraryCache` | `@MainActor` provider protocol, `actor`-based download cache, `AVPlayer` streaming preview |
+| **Audio waveforms** | Real per-clip waveform display, decoded once and cached | `AudioWaveformGenerator`, `AudioClipThumb` | `AVAudioFile` PCM peak analysis, memory + disk cache keyed by FNV-1a path hash |
 | **Volume tool** | Per-clip and per-audio volume with live preview | `VolumeToolPanel`, `commitVolume`, `commitAudioVolume` | `AVAudioMixInputParameters` |
 | **Extended timeline** | Audio/text can extend past video; composition aligned | `totalDuration`, `videoDuration`, `segmentsCoveringTimelineExtent` | Composition duration vs video-composition instructions |
 | **Export preview** | Live player, scrub slider, play/pause on export screen | `EditorExportPreviewSection` | Reuses editor `AVPlayer` + exported-file player |
@@ -684,10 +713,16 @@ Use this as a map of **what we built** and **why**, in learning order:
 
 ### 12.8 Background audio
 
-- Tap **+** on the audio lane → **`AudioPickerView`** imports an audio file (copied into the app sandbox).
-- **Select** a bar → **`EditorAudioActionBar`**: split at playhead, volume sheet, delete.
-- **Trim** with left/right handles (UIKit, same pattern as clips); **move** by dragging the selected bar body.
+- Tap any **+** (lane, empty-state, or the contextual bar's **ADD AUDIO**) → chooser: **Import
+  from Files** (`AudioPickerView`, copied into the app sandbox) or **Browse Sound Library**
+  (`AudioLibraryPickerView` — bundled SFX + Freesound search, see **§6.9** and **Priority 20**).
+- **Select** a bar → **`EditorAudioActionBar`**: add audio, split at playhead, volume sheet,
+  keyframe, duplicate, delete.
+- **Trim** with left/right handles (UIKit, same pattern as clips); **move** by dragging the
+  selected bar body. Clips live on independent, overlappable **tracks** — see **§6.9**.
 - **Split** creates two adjacent audio clips from one source file at the playhead-local time.
+- Waveform bars show real decoded audio, not a placeholder — see **`AudioWaveformGenerator`** in
+  **§6.9**.
 - Volume changes rebuild the composition mix (`AVAudioMix`).
 - **Fade in / fade out:** the audio volume sheet exposes edge-duration sliders. Values are persisted per audio clip and rendered as linear `AVAudioMix` volume ramps in preview and export.
 - Timeline ruler extends when music is longer than video; preview holds the last video frame in the tail.
@@ -779,6 +814,17 @@ through project save/reopen, and has reasonable device-performance coverage.
 | 5 | **Duplicate and replace — complete** | Video, audio, and text duplication creates independent timeline items in one undoable operation. Video/photo replacement retains compatible trim span, speed, volume, crop/reframe transform, color grade, and transitions. |
 | 6 | **Export range — complete** | Persistent, undoable In/Out markers appear on the timeline; the export screen reports selected duration and bitrate-based size; AVAssetReader crops the composed video, mixed audio, overlays, and timed text to the exact selected range. |
 
+#### Phase 1 follow-up — timeline precision
+
+These are the main non-AI editing mechanics still missing from the shipped core; they
+extend the existing timeline instead of replacing its trim, split, snapping, or
+keyframe behavior.
+
+| Track | Feature | Definition of done |
+|-------|---------|--------------------|
+| T1 | **Precision trim and sync edits** | Ripple delete, ripple trim, roll, slip, slide, J/L cuts, linked audio/video, sync locks, and an explicit unlink/relink workflow. Every operation previews correctly, creates one undo step, preserves transitions/keyframes, and survives reopen/export. |
+| T2 | **Selection and sequence structure** | Multi-select, range selection, batch move/delete/duplicate, named timeline markers, compound clips, and nested sequences with clear enter/exit navigation and deterministic duration propagation. |
+
 ### Phase 2 — motion and advanced compositing
 
 | Priority | Feature | Definition of done |
@@ -835,20 +881,21 @@ through project save/reopen, and has reasonable device-performance coverage.
 - A Priority 20 sound library — bundled starter SFX plus live Freesound search, merged in one
   browser (browse/search/preview/favorite/download-cache/insert-at-playhead) — already ships. See
   the Priority 20 entry below for exactly what's covered and what's not.
-- Priority 13's waveform half already ships: `Services/AudioWaveformGenerator.swift` decodes real
-  PCM peak data from an `EditorAudioClip.fileURL` (via `AVAudioFile`), downsamples to a fixed
+- Priority 13 ships waveforms and gain staging: `Services/AudioWaveformGenerator.swift` decodes
+  real PCM peak data from an `EditorAudioClip.fileURL` (via `AVAudioFile`), downsamples to a fixed
   bucket count, and caches results in memory + on disk (`Library/Caches/MixtapeWaveforms/`, keyed
   by an FNV-1a hash of the file path — stable across launches, unlike `String.hashValue`) so a
   clip's waveform is decoded once, not on every re-render. `AudioClipThumb` loads it via
   `.task(id: clip.fileURL)`, replacing the fake procedural noise `EditorAudioClip.waveform` used
-  to carry. Meters, gain staging, and voiceover/generated-speech waveforms (those features don't
-  exist yet) remain open — see the Priority 13 entry below.
+  to carry. Track/master gain (`Model/EditorAudioMixSettings.swift`, the **MIX** tool) apply on
+  top of existing per-clip volume in both preview and export. Live meters are an intentional
+  product exclusion, not a gap — see the Priority 13 entry below for why.
 
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 13 | **Waveforms, meters, and gain staging** | Generate cached, zoom-aware waveforms for imported audio, voiceovers, generated speech, and embedded video audio. Show peak/RMS/true-peak meters, clipping indicators, clip gain, track gain, master gain, and pre/post-fader metering without blocking timeline interaction. |
-| 14 | **Professional voiceover studio** | Record directly at the playhead with tap/hold modes, count-in, teleprompter, input-level meter, mic/input selection, monitoring, latency compensation, punch-in/out, multiple takes, take naming, comping, retry/delete, and automatic waveform placement. Permissions, interruptions, Bluetooth routes, headphones, and failed recordings have explicit recovery UI. |
-| 15 | **Audio mixer and automation** | Add track headers and a compact mixer with gain, pan, mute, solo, routing, buses, audio roles, and master output. Pan and effect parameters join existing volume keyframes; automation supports write/read/bypass, crossfades, copy/paste, and sample-accurate preview/export parity. |
+| 13 | **Waveforms and gain staging — complete for shipped scope** | Cached waveforms for imported/library audio; clip, track, and master gain. Live meters (peak/RMS/true-peak, clipping indicators, pre/post-fader) are an intentional product exclusion, not a gap — see the Priority 13 writeup below for why. |
+| 14 | **Voiceover recording, teleprompter, and punch-in/out — complete for shipped scope** | Record at the playhead, live input-level meter, multiple takes with retry/delete, explicit recovery UI for permissions/interruptions/route changes, a script + auto-scrolling teleprompter overlay, and playhead-marked punch-in/out re-recording in place (splice-only, no live playback underneath). Count-in, mic/input selection, monitoring passthrough, latency compensation, take naming, and comping are out of scope for now — each is separate-sized work, see the Priority 14 writeup below. |
+| 15 | **Audio mixer, automation, and effects — partial: mixer basics + effects shipped** | Track headers (rename), mute, solo, master + per-track gain (`MixToolPanel`), and CapCut-style voice/sound effect presets (Echo, Reverb, Robot, Chipmunk, Telephone, ...) rendered offline and cached (`EditorAudioEffectPanel`). Pan is out of scope — the composition/export pipeline (`AVAudioMix`) has no pan API at all, only volume; a real implementation needs `MTAudioProcessingTap`, the same real-time-C-callback risk class already excluded for Priority 13's meters. Routing/buses, audio roles, write/read/bypass automation, crossfades, and copy/paste automation are also out of scope — see the Priority 15 writeup below for what shipped and why. |
 | 16 | **Dialogue cleanup and voice enhancement** | Non-destructive voice isolation, broadband noise reduction, de-reverb, de-hum, wind reduction, click/pop repair, gate, de-esser, plosive control, and one-tap speech enhancement. Every processor exposes strength, preview/bypass, reset, and sensible speech presets without destroying the source recording. |
 | 17 | **EQ, dynamics, and mastering** | Per-clip/track parametric EQ with high/low-pass filters, compressor, expander, limiter, and optional multiband dynamics. Provide visual response curves, gain-reduction meters, safe presets, loudness normalization, LUFS-I/LRA/true-peak readouts, and platform targets with overload-safe final limiting. |
 | 18 | **Ducking, crossfades, and dialogue mixing** | Detect dialogue, music, and effects; automatically duck selected beds with adjustable depth, threshold, attack, hold, and release. Add editable equal-power/linear crossfades, room-tone fill, dialogue matching, and side-chain audition so automatic results remain fully editable. |
@@ -873,34 +920,218 @@ through project save/reopen, and has reasonable device-performance coverage.
 - “Complete” always means identical preview/export output, persistence, undo/redo,
   split/duplicate behavior, accessibility, iPad adaptation, and tested audio routing.
 
-#### Priority 13 — Waveforms (shipped); meters and gain staging (not built)
+#### Priority 13 — Waveforms + gain staging (shipped); meters (out of scope by design)
 
-**Shipped:** real, cached waveforms for every `EditorAudioClip` — `Services/AudioWaveformGenerator.swift`
-is an `actor` that opens the clip's `fileURL` with `AVAudioFile`, reads it in chunks into an
-`AVAudioPCMBuffer`, and computes a per-bucket peak amplitude (max absolute sample across all
-channels) downsampled to a fixed bucket count, normalized 0...1. Results are cached both in memory
-and on disk (`Library/Caches/MixtapeWaveforms/*.json`, keyed by a stable FNV-1a hash of the file
-path — plain `String.hashValue` is randomized per process launch and would silently defeat a disk
-cache) so the file is decoded once regardless of how many times the clip scrolls in/out of view or
-the app relaunches. A file that fails to decode (missing, unsupported format, mid-copy) falls back
-to a flat placeholder shape rather than throwing, so a lane never renders broken. `AudioClipThumb`
+**Shipped: waveforms.** `Services/AudioWaveformGenerator.swift` is an `actor` that opens a clip's
+`fileURL` with `AVAudioFile`, reads it in chunks into an `AVAudioPCMBuffer`, and computes a
+per-bucket peak amplitude (max absolute sample across all channels) downsampled to a fixed bucket
+count, normalized 0...1. Results are cached both in memory and on disk
+(`Library/Caches/MixtapeWaveforms/*.json`, keyed by a stable FNV-1a hash of the file path — plain
+`String.hashValue` is randomized per process launch and would silently defeat a disk cache) so the
+file is decoded once regardless of how many times the clip scrolls in/out of view or the app
+relaunches. A file that fails to decode (missing, unsupported format, mid-copy) falls back to a
+flat placeholder shape rather than throwing, so a lane never renders broken. `AudioClipThumb`
 (`EditorTimeline.swift`) loads it via `.task(id: clip.fileURL)` into local `@State`, replacing the
 fake procedural noise `EditorAudioClip.waveform` used to carry as decoration (that property has
-been removed — nothing else referenced it, and it was never persisted).
+been removed — nothing else referenced it, and it was never persisted). Waveforms for voiceover
+and generated speech are out of scope simply because neither feature exists yet (Priorities 14 and
+22); the generator already works for whatever file those produce once they land, since it only
+needs a `fileURL`.
 
-**Not built:** peak/RMS/true-peak meters, clipping indicators, and clip/track/master gain staging
-with pre/post-fader metering. These need either a live audio tap on the playback graph (e.g. an
-`MTAudioProcessingTap` on the shared `AVAudioMix`) for real-time meters, or per-frame analysis of
-exported/rendered audio for offline meters — both are real-time-audio-DSP work with correctness
-that's hard to verify without testing actual audio output on a device, unlike the waveform/UI work
-above. Track and master gain also don't exist as concepts yet — today only per-clip `volume` exists
-(on `EditorAudioClip`, `EditorClip`, `EditorOverlayClip`); a track/master bus would need a real
-mixer-graph addition to `EditorCompositionBuilder`'s `AVAudioMix` construction, which is exactly
-the kind of structural change Priority 15 (audio mixer and automation) already covers — building
-gain staging here would duplicate that work rather than prepare for it. Waveforms for voiceover
-and generated speech are also out of scope simply because neither feature exists yet (Priorities
-14 and 22); `AudioWaveformGenerator` already works for whatever file those produce once they land,
-since it only needs a `fileURL`.
+**Shipped: gain staging.** `Model/EditorAudioMixSettings.swift` adds `EditorAudioTrackSettings`
+(`gain`, `isMuted`) keyed by `EditorAudioClip.laneIndex` on `EditorViewModel.audioTrackSettings`,
+plus a single `EditorViewModel.masterVolume`. Both are 0...1 attenuation-only (matching every
+other volume control in the app — `EditorAudioClip.volume`, `EditorClip.volume`,
+`EditorOverlayClip.volume` are all 0...1 with no boost), which sidesteps a real bug that would
+otherwise exist: `EditorCompositionBuilder.applyVolumeAutomation`'s keyframed/faded path clamps to
+a maximum of 1.0, so a gain above unity would silently behave differently on clips with volume
+keyframes vs. clips without. Track gain applies to background-audio clips only; master gain
+applies everywhere (primary-clip audio, video-overlay audio, and background audio) via a new
+`extraGain` parameter threaded through `applyVolumeAutomation` — applied *after* the existing
+keyframe/fade clamp, not baked into `baseVolume`, since baking it into `baseVolume` would only
+affect clips *without* volume keyframes (the keyframe curve ignores `baseVolume` entirely once any
+keyframes exist). `EditorCompositionBuilder.build`/`makePlayerItem` and `EditorExportService.export`
+all take `audioTrackSettings`/`masterVolume` parameters now, so preview and export apply gain
+identically. `EditorViewModel.ensureCompositionPlayer`'s warmed-player-item fast path additionally
+checks `masterVolume == 1.0` before reusing a pre-warmed item — that item was built before the
+editor even loaded and has no gain awareness, so skipping this check would have silently ignored
+master volume whenever there was no background audio clip. Persisted on `EditorProject`
+(`audioTrackSettings`, `masterVolume`, both backward-compatible), undoable
+(`EditorViewModel.commitMixChange()`, mirroring `commitAudioVolume`), and included in
+`clipsFingerprint()` so a gain change actually triggers a composition rebuild. UI is a new **MIX**
+tool (`EditorTool.mix`) on the main toolbar opening `MixToolPanel` — a master-volume slider plus
+one gain/mute row per lane that currently has a clip (`EditorViewModel.audioLaneIndices`).
+Deliberately lightweight, not a full mixer strip — track headers and solo joined it in Priority 15
+(see that writeup below), but pan, routing/buses, and audio roles remain out of scope.
+
+**Deliberately not built: meters.** Peak/RMS/true-peak meters, clipping indicators, and
+pre/post-fader metering are out of scope **by product decision**, not left for later — for a
+CapCut-style mobile editor, live numeric meters are a broadcast-engineering feature the target
+audience doesn't use; the audience judges audio by ear and by waveform shape. Building one would
+also mean the riskiest code in this app: no simple "current playback level" API exists on
+`AVPlayer`, so a real meter needs `MTAudioProcessingTap` — a Core Audio C-callback API with
+real-time-safety constraints (no allocations, no locks in the callback) — attached per-track, with
+per-track readings summed client-side since this pipeline has no single master audio node to tap.
+That's DSP whose correctness can't be verified by reading the code; it needs a device and ears. If
+a real need for meters shows up later, a clipping *indicator* derived from the peak data
+`AudioWaveformGenerator` already computes (no live tap, no new risk) delivers most of the practical
+value at a fraction of the cost.
+
+#### Priority 14 — Voiceover recording, teleprompter, and punch-in/out (complete for shipped scope)
+
+**Shipped: recording.** `Services/VoiceoverRecorderService.swift` is a `@MainActor @Observable`
+recorder built on `AVAudioRecorder` (not `AVAudioEngine` — no live monitoring passthrough is
+built, so the simpler recorder API is enough and gives metering for free via
+`isMeteringEnabled`). Reached from the same "Add Audio" `confirmationDialog` as Files import and
+the sound library (`AudioSourceSheets` in `EditorScreen.swift`, now three options instead of
+two), so it inherits the existing `AudioInsertion` placement logic (new track at the playhead, or
+after a clip) for free. `View/Components/VoiceoverRecorderView.swift` is the recording sheet:
+permission gate (with an **Open Settings** fallback when denied, mirroring
+`PhotoLibraryViewModel`'s pattern), a pulsing input-level meter driven by
+`averagePower(forChannel:)` on a 15 Hz timer, and a takes list (retry by just recording again,
+delete via trash, preview via a throwaway `AVAudioPlayer`) until the user taps **Use**, which
+hands the file to `EditorViewModel.insertRecordedVoiceover(fileURL:duration:insertion:)`. That
+method mirrors `insertAudioLibraryItem` — the take becomes a normal `EditorAudioClip` (already in
+`MixtapeAudio/`, so no security-scoped copy step), inheriting trim/move/split/volume/waveform
+(Priority 13's `AudioWaveformGenerator` needs only a `fileURL`)/undo/persistence for free. Any
+take *not* chosen is deleted when the sheet closes (`endSession(keeping:)`) so cancelled sessions
+don't leak files.
+
+A stopped recording only becomes a `Take` once its **actual encoded duration** (read back via
+`AVURLAsset(url:).load(.duration)`, not `AVAudioRecorder.currentTime`) is ≥0.2s — `currentTime`
+turned out to misreport right at the instant a route change forces the recorder to finalize
+mid-write (see the recovery UI note below), so trusting it could either silently drop a real take
+or keep a broken one.
+
+**Recovery UI**, per the README's original ask: `AVAudioSession.interruptionNotification` and
+`.routeChangeNotification` observers stop an in-progress recording and `await` the validated
+result before saying anything — the banner only claims "your take was saved" when validation
+actually produced one; otherwise it says the recording stopped before anything was captured.
+(An earlier version of this claimed success unconditionally, which was caught by testing the
+AirPods-mid-recording-disconnect case on a real device — exactly the kind of route-change
+correctness that can't be verified by reading code alone.) Both notification handlers are
+`nonisolated` with an explicit `Task { @MainActor in … }` hop, since `NotificationCenter` doesn't
+guarantee main-thread delivery for `AVAudioSession` notifications.
+`AudioSessionConfigurator.configureForRecording()` switches the shared session to
+`.playAndRecord` with `.allowBluetooth`/`.defaultToSpeaker`; leaving the sheet restores
+`.playback` so preview playback routing isn't left in a recording state.
+
+**Shipped: teleprompter.** Turned out to be much smaller than the original checklist line
+implied once scoped down to *audio-only* recording — no camera framing guides, no
+already-read/still-to-read word highlighting, just a script the user types once
+(`ScriptEditorSheet`, a plain `TextEditor`, deliberately with no AI writing assist — this is a
+place to get thoughts down, not a writing tool) and an auto-scrolling overlay shown above the
+record button while recording. Scroll position is `elapsedTime * speed * 36`pt — reusing the
+level meter's existing 15 Hz `elapsedTime` tick rather than a second timer, and naturally
+resetting to the top on every new take since `elapsedTime` restarts at 0 each time. Speed, font
+size, and color are adjustable inline (no nested sheet-on-sheet). The script itself is
+session-only scratch text, not persisted on `EditorProject` — it's a reading aid, not a timeline
+object, so it does not survive closing and reopening the recorder sheet.
+
+**Out of scope for now, on purpose — not an oversight.** Count-in, manual mic/input selection,
+live monitoring passthrough (needs `AVAudioEngine`, not `AVAudioRecorder`), latency compensation
+(needs a physical device to verify, same caveat as Priority 13's meters), take naming, and
+comping (closer in scope to Priority 15's mixer/automation work than to this recorder) are each
+separate-sized work, not included here.
+
+**Shipped: punch-in/out.** Re-records over a marked range of an already-inserted clip in place.
+Deliberately the "splice, no live context" version, not a true punch-in — nothing plays back
+while you're recording the replacement, so there's no reference audio to time your delivery
+against. Marking is playhead-driven, the same interaction pattern already used everywhere else in
+this app (split-at-playhead, insert-at-playhead): select a clip, tap **PUNCH IN** on
+`EditorAudioActionBar` to mark the in-point at the current playhead, scrub to the desired
+out-point, tap **Set Out** (or **Cancel**) — this swaps the action bar's icon grid for a small
+marking row rather than adding a new overlay, following the same bottom-bar-swap convention
+§6.8 describes for clip/text/audio selection. `EditorViewModel.togglePunchInMark()` clamps both
+points to the clip's own range and requires at least `EditorAudioClip.minimumSpan` (0.25s) between
+them; marking is cancelled automatically if the clip is deleted or a different clip is selected
+mid-mark, so it can't go stale. Confirming opens the same `VoiceoverRecorderView` sheet used for
+inserting new audio (`Mode.punch` instead of `Mode.insert` — same permission/meter/takes/recovery
+UI, the only difference is what **Use** does with the finished take) and hands off to
+`EditorViewModel.punchInRecordedTake(clipID:start:end:fileURL:duration:)`, which splits the
+original clip at the in-point and again at the out-point via the **same**
+`EditorAudioClip.split(atSourceTime:)` used by `splitAtPlayhead()` for video — reusing its fade
+and keyframe handling rather than re-deriving them — inserts the new recording between the
+resulting head/tail, and re-anchors the tail to start right after the new recording (reflowed,
+not time-stretched, since there was nothing to time it against). A true punch-in with live
+playback underneath is still open — it needs simultaneous playback+record on one
+`.playAndRecord` session, which is untested territory here.
+
+#### Priority 15 — Audio mixer, automation, and effects (mixer basics + effects shipped)
+
+**Shipped: audio effects.** `Model/EditorAudioEffect.swift` defines 30 CapCut-style voice/sound
+presets across two tabs — **Filters** (Echo, Hall/Cave reverb, Telephone, Megaphone, Sweet, Mic
+Hog, Lo-Fi, Clear Vocals, Deep & Clear, Bass Mic, Studio Mic, Divine Echo, Energetic, Tremble,
+Distorted, Big House) and **Characters** (Robot, Chipmunk, Deep Voice, Alien, Squirrel, Elf,
+Trickster, Dark Lord, Noble Leader, Bold Warrior, Noble Chief, Fussy Male, Queen, Santa) — the
+same split CapCut's own "Voice filters" / "Voice characters" tabs use. Built entirely from
+Apple's off-the-shelf `AVAudioUnit` effects (`AVAudioUnitTimePitch`, `AVAudioUnitReverb`,
+`AVAudioUnitDistortion`, `AVAudioUnitDelay`, `AVAudioUnitEQ`), never hand-rolled DSP — these are
+DSP approximations (pitch + EQ + reverb/distortion combinations), not true voice-conversion
+models, so don't expect an exact timbre match to CapCut's likely ML-backed character voices.
+Also not attempted: CapCut's third tab, "Speech to song" — converting spoken audio into a sung
+melody is pitch/rhythm detection plus resynthesis onto a target melody, a fundamentally different
+(likely ML-backed) feature, not a preset DSP chain, so it doesn't belong in this pass.
+
+`Services/EditorAudioEffectRenderer.swift` (an `actor`, same shape as `AudioWaveformGenerator`)
+renders a preset onto a clip's source file **once**, offline, via `AVAudioEngine`'s manual
+rendering mode — a standard, documented, non-real-time API — and caches the result on disk keyed
+by (source path, effect), so re-picking an effect or reopening the project is instant. Every
+preset only touches `pitch` (cents), never `rate`, and the render is capped at the source's own
+frame count (an echo/reverb tail past the clip's end gets truncated), so the processed file's
+duration always exactly matches the source's — none of the existing trim/timeline/`split()` math
+needs a single line changed to account for it. The one preset that isn't a static parameter set,
+**Tremble**, still only touches `pitch` — `EditorAudioEffect.modulate(chain:elapsedSeconds:)` is
+called once per render chunk and animates a sine-wave wobble onto the chain's
+`AVAudioUnitTimePitch` node as rendering progresses, rather than setting `pitch` once up front.
+That mutation is safe here specifically because manual rendering calls it synchronously between
+chunks on the actor doing the render — not from a live real-time audio thread — so none of
+`MTAudioProcessingTap`'s real-time-safety constraints apply; it's the same offline-render safety
+argument as every other preset, just with a parameter that changes over time instead of once.
+
+A clip only ever gets `effect` set to a non-`.none` value **after** the render has actually
+finished (`EditorViewModel.setAudioClipEffect`) — so `EditorAudioClip.playbackFileURL` (which
+`EditorCompositionBuilder` reads instead of `fileURL` when building background-audio tracks) never
+needs to `await` anything; it's a synchronous cache-hit check with a graceful fallback to the dry
+file if the cache was ever evicted. UI is `View/Components/EditorAudioEffectPanel.swift` — a grid
+under a new **EFFECTS** button on `EditorAudioActionBar`, reachable per-clip; picking a preset
+shows a spinner on that cell during the one-time render, and the effect becomes audible on the
+next composition rebuild (no separate preview player — the timeline *is* the audition). Persisted
+on `SavedAudioClip` (optional, backward-compatible), carried through `split()`/duplicate so a
+punched-in or split effect-bearing clip doesn't silently revert to dry audio.
+
+**Why this and not pan.** The original checklist put pan and effects in the same "automation"
+bucket, but they're not the same class of work. Volume automation exists today because
+`AVMutableAudioMixInputParameters` — the API the whole preview/export pipeline is built on —
+has `setVolume`/`setVolumeRamp` built in; it has **no pan equivalent at all**. A real
+implementation would need `MTAudioProcessingTap`, a real-time Core Audio C callback with
+real-time-safety constraints — the same class of risk the README already excluded once for
+Priority 13's meters (can't be verified by reading code, needs a device and ears). Effects, by
+contrast, render **offline** — no real-time constraint, no new risk category, just standard
+`AVAudioEngine` usage — which is why they shipped and pan didn't.
+
+**Shipped: solo and track naming.** Both are cheap extensions of Priority 13's existing
+`EditorAudioTrackSettings`/`MixToolPanel` — no new subsystem. `isSoloed` on
+`EditorAudioTrackSettings`, and `EditorAudioTrackSettings.effectiveGain(anySoloed:)` replaces the
+old no-argument `effectiveGain`: a lane is silenced if it's muted, *or* if any lane anywhere is
+soloed and this one isn't. The `anySoloed` flag has to come from the caller (a single lane's
+settings can't see its siblings), so `EditorCompositionBuilder` computes
+`audioTrackSettings.values.contains { $0.isSoloed }` once per build; a lane with no settings
+entry yet still defaults through a plain `EditorAudioTrackSettings()` rather than skipping
+straight to gain `1.0`, so an untouched lane is still correctly silenced under an active solo.
+Track naming is a `name: String?` field, editable inline in `MixToolPanel` (tap the track title,
+`TextField`, Done) — purely cosmetic, so it's deliberately left out of `clipsFingerprint()`'s
+`mixHash` (renaming shouldn't force a composition rebuild).
+
+**Out of scope for now.** Routing/buses and audio roles (Dialogue/Music/SFX groupings with their
+own shared fader) would be relatively cheap to add later — master gain already threads through
+the composition as one multiplier (`extraGain`), so a bus gain is just another multiplier in the
+same spot — but weren't built this pass. Write/read/bypass live automation (recording fader moves
+while playing) is a genuinely new interaction model — keyframing today is manual point-placement,
+not live-record — and wasn't started. Crossfades (linking two adjacent clips' fades) and
+copy/paste automation (copying a keyframe curve between clips) are both small-to-medium UI work on
+top of infrastructure that already exists, also not started. Sample-accurate preview/export parity
+was already true before this pass — both use the same `EditorCompositionBuilder`.
 
 #### Priority 20 — Sound library (SFX)
 
@@ -979,7 +1210,7 @@ attribution anywhere at export time (currently only shown at insert time).
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
 | 25 | **Text animation** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability. |
-| 26 | **Captions** | Speech transcription, editable timed segments, word highlighting, caption styles, safe zones, and SRT import/export. |
+| 26 | **Captions and transcript editing** | Speech transcription, editable timed words/segments, word highlighting, caption styles, safe zones, transcript search, and SRT import/export. Deleting an approved transcript range can ripple-remove the matching dialogue and linked picture, while filler-word and silence detection remain suggestions until accepted. |
 | 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
 | 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
 | 29 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
@@ -996,6 +1227,59 @@ attribution anywhere at export time (currently only shown at insert time).
 | 35 | **Automated quality suite** | Unit tests, UI flows, golden-frame renders, orientation matrices, audio timing tests, export probes, and long-project stress tests. |
 | 36 | **Performance budgets** | Signposted preview/export stages, frame-drop and memory targets, thermal testing, cancellation latency, and regression dashboards. |
 | 37 | **iCloud and collaboration readiness** | Conflict-safe project sync, asset availability states, deterministic document IDs, and future collaboration-friendly edit operations. |
+
+### Phase 6 — AI-assisted workflow
+
+This phase adds capabilities that are not already covered by the motion, audio,
+caption, or creative-asset priorities above. AI should produce analysis, suggestions,
+or ordinary media assets; the deterministic editor remains responsible for every
+accepted timeline mutation and rendered frame.
+
+| Priority | Feature | Definition of done |
+|----------|---------|--------------------|
+| 38 | **Smart ingest and rough cut** | Index PhotoKit and Files/iCloud sources into bins with tags and semantic search; detect shots, duplicates, blur, poor exposure, speakers, actions, and likely highlights; then propose a reviewable first assembly from a duration, format, and text brief. Confidence is visible, source media is never silently discarded, and analysis is cached by asset fingerprint. |
+| 39 | **Editing copilot** | Convert requests such as “make a 30-second vertical cut, keep every product mention, add captions, and duck the music” into a validated, structured edit plan. Show the proposed operations and preview/diff before applying them through existing `EditorViewModel` commands as one undoable transaction. |
+| 40 | **Generative finishing and provenance** | Offer optional object removal, background replacement, frame extension, B-roll, thumbnail, and sound suggestions through cancellable on-device or disclosed cloud jobs. Generated results are labelled and imported as normal relinkable assets with model, prompt, license, consent, and attribution metadata. |
+
+#### Where AI fits into existing priorities
+
+| Existing work | AI's bounded role |
+|---------------|-------------------|
+| **Priority 12 — tracking/stabilization** | Suggest subjects, refine masks, follow faces/objects, and recommend safe auto-reframe paths; the existing motion samples and compositor remain the source of truth. |
+| **Priorities 16, 18, and 19 — audio** | Classify dialogue/music/effects, propose cleanup and ducking, and detect beats/sections; accepted parameters render through the shared audio graph. |
+| **Priorities 22, 23, and 26 — language** | Transcribe, punctuate, summarize, translate, and draft narration/captions; users approve timed segments before timeline or voice changes are committed. |
+| **Priority 29 — effects architecture** | Host AI-generated masks or imported generative results as explicit stack items/assets, never as a hidden preview-only effect. |
+
+#### AI implementation contract
+
+```text
+Source media
+    -> cancellable analysis jobs
+    -> cached, time-coded metadata (shots, words, beats, tracks, quality scores)
+    -> suggestion or structured edit-plan layer
+    -> user review and preview
+    -> validated EditorViewModel commands in one undo transaction
+    -> existing preview, persistence, and export pipeline
+```
+
+- Store analysis separately from user edits and key it by asset fingerprint, model
+  version, and analysis settings so stale results are invalidated deliberately.
+- Use confidence scores and make low-confidence results easy to correct. AI must never
+  silently delete source media, overwrite approved edits, or bypass undo/redo.
+- Run lightweight [Vision](https://developer.apple.com/documentation/vision),
+  [Speech](https://developer.apple.com/documentation/speech), and
+  [Sound Analysis](https://developer.apple.com/documentation/soundanalysis) work on
+  device when practical; use [Core ML](https://developer.apple.com/documentation/coreml)
+  for specialized on-device models.
+- Gate [Foundation Models](https://developer.apple.com/documentation/foundationmodels)
+  by runtime availability. Mixtape currently targets iOS/iPadOS 18.6, while model
+  availability depends on OS, hardware, region, and Apple Intelligence settings.
+- Cloud jobs disclose what leaves the device, estimated time/cost, cancellation,
+  retention policy, and whether inputs or outputs may be used for training.
+- Voice cloning and identity-preserving dubbing require explicit consent. Generated or
+  downloaded media keeps provenance, license, and attribution through export.
+- Keep a non-AI manual workflow for every essential action. AI is not a substitute for
+  trim/split correctness, media relinking, color math, audio gain, export, or licensing.
 
 ### Platform polish
 

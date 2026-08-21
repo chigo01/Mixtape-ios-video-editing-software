@@ -24,6 +24,10 @@ final class EditorViewModel {
     var selectedClipID: UUID?
     var textOverlays: [EditorTextOverlay]
     var audioClips: [EditorAudioClip]
+    /// Per-lane gain/mute (Priority 13 gain staging), keyed by `EditorAudioClip.laneIndex`.
+    var audioTrackSettings: [Int: EditorAudioTrackSettings] = [:]
+    /// Final output gain applied on top of every track's own volume/keyframes.
+    var masterVolume: Float = 1.0
     var overlayClips: [EditorOverlayClip]
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
@@ -60,6 +64,27 @@ final class EditorViewModel {
     // MARK: Audio editing
 
     var selectedAudioClipID: UUID?
+    /// Clip currently being marked for a punch-in re-record (Priority 14 follow-up); `nil` when
+    /// no marking is in progress. Transient UI state, not persisted or undoable.
+    var punchInClipID: UUID?
+    private(set) var punchInStartTime: TimeInterval?
+    /// Set once both the in- and out-points are marked; `EditorScreen` observes this to present
+    /// the recorder in punch mode, then clears it after the sheet is dismissed.
+    var punchInPendingRange: PunchInRange?
+
+    struct PunchInRange: Equatable {
+        let clipID: UUID
+        let start: TimeInterval
+        let end: TimeInterval
+    }
+
+    /// Clip + effect currently being rendered (offline, one-time — see
+    /// `EditorAudioEffectRenderer`); drives a spinner on the matching cell in
+    /// `EditorAudioEffectPanel`. `nil` the rest of the time.
+    var renderingAudioEffectClipID: UUID?
+    private(set) var renderingAudioEffect: EditorAudioEffect?
+    var audioEffectErrorMessage: String?
+    @ObservationIgnored private var audioEffectRenderTask: Task<Void, Never>?
 
     // MARK: Video overlay editing
 
@@ -144,6 +169,8 @@ final class EditorViewModel {
     @ObservationIgnored
     private var audioVolumeUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var mixUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
     private var overlayTrimUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
     private var overlayMoveUndoSnapshot: EditorTimelineSnapshot?
@@ -176,6 +203,8 @@ final class EditorViewModel {
         self.timelinePosition = project.timelinePosition
         self.textOverlays = project.textOverlays.map { $0.toOverlay() }
         self.audioClips = project.audioClips.compactMap { $0.toAudioClip() }
+        self.audioTrackSettings = project.audioTrackSettings
+        self.masterVolume = project.masterVolume
         self.selectedAudioClipID = project.selectedAudioClipID
         var resolvedOverlays = EditorProjectResolver.overlayClips(from: project.overlayClips)
         var nextLegacyLane = (resolvedOverlays.map(\.laneIndex).filter { $0 >= 0 }.max() ?? -1) + 1
@@ -681,6 +710,7 @@ final class EditorViewModel {
     }
 
     func selectAudioClip(_ id: UUID) {
+        if punchInClipID != id { cancelPunchInMark() }
         if selectedTool == .duration {
             finalizePhotoDurationEditUndo()
         }
@@ -707,9 +737,36 @@ final class EditorViewModel {
     }
 
     func deselectAudioClip() {
+        cancelPunchInMark()
         finalizeAudioVolumeEditUndo()
         selectedTool = nil
         selectedAudioClipID = nil
+    }
+
+    /// First call marks the in-point at the current playhead; the second call (on the same
+    /// clip) marks the out-point and hands the range to `punchInPendingRange` for the view to
+    /// present the recorder. Calling this on a different clip restarts marking there instead of
+    /// carrying over stale state.
+    func togglePunchInMark() {
+        guard let clip = selectedAudioClip else { return }
+        if punchInClipID == clip.id, let start = punchInStartTime {
+            let clampedStart = max(start, clip.timelineStart)
+            let clampedEnd = min(timelinePosition, clip.timelineEnd)
+            punchInClipID = nil
+            punchInStartTime = nil
+            let rangeStart = min(clampedStart, clampedEnd)
+            let rangeEnd = max(clampedStart, clampedEnd)
+            guard rangeEnd - rangeStart >= EditorAudioClip.minimumSpan else { return }
+            punchInPendingRange = PunchInRange(clipID: clip.id, start: rangeStart, end: rangeEnd)
+        } else {
+            punchInClipID = clip.id
+            punchInStartTime = timelinePosition
+        }
+    }
+
+    func cancelPunchInMark() {
+        punchInClipID = nil
+        punchInStartTime = nil
     }
 
     func selectOverlayClip(_ id: UUID) {
@@ -822,6 +879,10 @@ final class EditorViewModel {
             performToolAction(.keyframe)
         case .duplicate:
             duplicateSelectedAudioClip()
+        case .punchIn:
+            togglePunchInMark()
+        case .effects:
+            performToolAction(.audioEffect)
         }
     }
 
@@ -3543,10 +3604,127 @@ final class EditorViewModel {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
+    /// Inserts a finished `VoiceoverRecorderService` take (Priority 14) as a normal timeline
+    /// clip. The file already lives in `MixtapeAudio/` (the recorder writes there directly), so
+    /// unlike `loadAudioClip` this needs no security-scoped copy step. From here on the take is
+    /// indistinguishable from an imported or library clip.
+    func insertRecordedVoiceover(
+        fileURL: URL,
+        duration: TimeInterval,
+        insertion: AudioInsertion = .newTrackAtPlayhead
+    ) {
+        registerUndoIfNeeded()
+        let (timelineStart, laneIndex) = resolveAudioInsertion(insertion)
+        let existingVoiceovers = audioClips.filter { $0.title.hasPrefix("Voiceover") }.count
+
+        let clip = EditorAudioClip(
+            title: "Voiceover \(existingVoiceovers + 1)",
+            fileURL: fileURL,
+            originalDuration: duration,
+            timelineStart: timelineStart,
+            laneIndex: laneIndex
+        )
+        audioClips.append(clip)
+
+        selectAudioClip(clip.id)
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// Splices a punch-in take (Priority 14 follow-up) into an existing audio clip in place.
+    /// Reuses `EditorAudioClip.split(atSourceTime:)` twice — once at the in-point, once at the
+    /// out-point of the resulting remainder — the same machinery `splitAtPlayhead()` uses for
+    /// video, so fades, keyframes, and minimum-span rules all fall out for free rather than
+    /// being re-derived here. Whatever the original clip had after the out-point is kept but
+    /// reflowed to start right after the new recording — not time-stretched to fit — since
+    /// nothing played back while recording to time it against (see the Priority 14 writeup for
+    /// why punch-in ships without live monitoring).
+    func punchInRecordedTake(clipID: UUID, start: TimeInterval, end: TimeInterval, fileURL: URL, duration: TimeInterval) {
+        guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        registerUndoIfNeeded()
+
+        let original = audioClips[idx]
+        let sourceStart = original.sourceTime(forTimelineLocal: start - original.timelineStart)
+        let sourceEnd = original.sourceTime(forTimelineLocal: end - original.timelineStart)
+
+        var newClips: [EditorAudioClip] = []
+        var remainder = original
+        if let (head, afterHead) = original.split(atSourceTime: sourceStart) {
+            newClips.append(head)
+            remainder = afterHead
+        }
+
+        let replacement = EditorAudioClip(
+            title: original.title,
+            fileURL: fileURL,
+            originalDuration: duration,
+            timelineStart: newClips.last?.timelineEnd ?? start,
+            laneIndex: original.laneIndex
+        )
+        newClips.append(replacement)
+
+        if let (_, tail) = remainder.split(atSourceTime: sourceEnd) {
+            var repositionedTail = tail
+            repositionedTail.timelineStart = replacement.timelineEnd
+            newClips.append(repositionedTail)
+        }
+
+        audioClips.remove(at: idx)
+        audioClips.insert(contentsOf: newClips, at: idx)
+        selectAudioClip(replacement.id)
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// Applies (or clears) a Priority 15 audio effect on an audio clip. Clearing is immediate —
+    /// there's nothing to render. Applying awaits `EditorAudioEffectRenderer` and only commits
+    /// `clip.effect` once the offline render has actually produced a file, so a clip is never
+    /// left pointing at an effect with nothing behind it; a failed render leaves the clip
+    /// unchanged and surfaces `audioEffectErrorMessage` instead.
+    func setAudioClipEffect(clipID: UUID, effect: EditorAudioEffect) {
+        guard let clip = audioClips.first(where: { $0.id == clipID }), clip.effect != effect else { return }
+
+        guard effect != .none else {
+            registerUndoIfNeeded()
+            guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+            audioClips[idx].effect = .none
+            invalidateComposition()
+            scheduleSave()
+            Task { await alignPlaybackToTimeline() }
+            return
+        }
+
+        let sourceURL = clip.fileURL
+        renderingAudioEffectClipID = clipID
+        renderingAudioEffect = effect
+        audioEffectErrorMessage = nil
+        audioEffectRenderTask?.cancel()
+        audioEffectRenderTask = Task { [weak self] in
+            let rendered = await EditorAudioEffectRenderer.shared.render(sourceURL: sourceURL, effect: effect)
+            guard let self, !Task.isCancelled, self.renderingAudioEffectClipID == clipID else { return }
+            self.renderingAudioEffectClipID = nil
+            self.renderingAudioEffect = nil
+            guard rendered != nil, let idx = self.audioClips.firstIndex(where: { $0.id == clipID }) else {
+                self.audioEffectErrorMessage = "Couldn't apply that effect. Try again."
+                return
+            }
+            self.registerUndoIfNeeded()
+            self.audioClips[idx].effect = effect
+            self.invalidateComposition()
+            self.scheduleSave()
+            await self.alignPlaybackToTimeline()
+        }
+    }
+
     func deleteSelectedAudioClip() {
         guard let id = selectedAudioClipID,
               let index = audioClips.firstIndex(where: { $0.id == id }) else { return }
         registerUndoIfNeeded()
+        cancelPunchInMark()
         let removed = audioClips.remove(at: index)
         releaseAudioFileIfUnused(removed.fileURL)
         selectedAudioClipID = audioClips.first?.id
@@ -3567,7 +3745,7 @@ final class EditorViewModel {
             laneIndex: source.laneIndex,
             volume: source.volume, fadeInDuration: source.fadeInDuration,
             fadeOutDuration: source.fadeOutDuration, keyframes: source.keyframes,
-            attribution: source.attribution
+            attribution: source.attribution, effect: source.effect
         )
         audioClips.insert(copy, at: index + 1)
         selectedAudioClipID = copy.id
@@ -3701,6 +3879,79 @@ final class EditorViewModel {
         audioVolumeUndoSnapshot = nil
     }
 
+    // MARK: Gain staging (Priority 13) — track + master gain on top of per-clip volume
+
+    func audioTrackSettings(forLane laneIndex: Int) -> EditorAudioTrackSettings {
+        audioTrackSettings[laneIndex] ?? EditorAudioTrackSettings()
+    }
+
+    /// All lanes that currently have at least one clip — the set a mixer UI should show rows
+    /// for, in the same left-to-right order the timeline lanes are displayed.
+    var audioLaneIndices: [Int] {
+        Set(audioClips.map(\.laneIndex)).sorted()
+    }
+
+    func setAudioTrackGain(laneIndex: Int, gain: Float) {
+        if mixUndoSnapshot == nil { mixUndoSnapshot = currentSnapshot() }
+        var settings = audioTrackSettings(forLane: laneIndex)
+        settings.gain = min(max(gain, 0), 1)
+        audioTrackSettings[laneIndex] = settings
+        invalidateComposition()
+    }
+
+    func toggleAudioTrackMute(laneIndex: Int) {
+        registerUndoIfNeeded()
+        var settings = audioTrackSettings(forLane: laneIndex)
+        settings.isMuted.toggle()
+        audioTrackSettings[laneIndex] = settings
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    /// Priority 15 solo. Every lane's `effectiveGain(anySoloed:)` reacts to *any* lane being
+    /// soloed, so toggling this one lane's flag is the entire implementation — no separate
+    /// bookkeeping of "which lanes are silenced" needed.
+    func toggleAudioTrackSolo(laneIndex: Int) {
+        registerUndoIfNeeded()
+        var settings = audioTrackSettings(forLane: laneIndex)
+        settings.isSoloed.toggle()
+        audioTrackSettings[laneIndex] = settings
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    /// Priority 15 track header naming. Empty/whitespace-only names are stored as `nil` so the
+    /// mixer falls back to its positional "Track N" label instead of showing a blank row.
+    func setAudioTrackName(laneIndex: Int, name: String) {
+        registerUndoIfNeeded()
+        var settings = audioTrackSettings(forLane: laneIndex)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.name = trimmed.isEmpty ? nil : trimmed
+        audioTrackSettings[laneIndex] = settings
+        scheduleSave()
+    }
+
+    func setMasterVolume(_ volume: Float) {
+        if mixUndoSnapshot == nil { mixUndoSnapshot = currentSnapshot() }
+        masterVolume = min(max(volume, 0), 1)
+        invalidateComposition()
+    }
+
+    /// Call when a gain slider drag ends (mirrors `commitAudioVolume`) — folds the drag into one
+    /// undo step and persists.
+    func commitMixChange() {
+        guard let before = mixUndoSnapshot else { return }
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+        mixUndoSnapshot = nil
+        Task { await alignPlaybackToTimeline() }
+    }
+
     private func releaseAudioFileIfUnused(_ url: URL) {
         // Bundled library clips point at read-only files inside the app bundle — never ours to
         // delete. Freesound-sourced clips point at the shared AudioLibraryCache, which may be
@@ -3762,6 +4013,8 @@ final class EditorViewModel {
                 let projectTitleSnapshot = projectTitle
                 let canvasSnapshot = canvasSettings
                 let exportRangeSnapshot = exportRange
+                let audioTrackSettingsSnapshot = audioTrackSettings
+                let masterVolumeSnapshot = masterVolume
                 let url = try await EditorExportService.export(
                     clips: clipsSnapshot,
                     textOverlays: textOverlaysSnapshot,
@@ -3774,7 +4027,9 @@ final class EditorViewModel {
                     canvasSettings: canvasSnapshot,
                     timeRange: exportRangeSnapshot,
                     settings: settings,
-                    projectTitle: projectTitleSnapshot
+                    projectTitle: projectTitleSnapshot,
+                    audioTrackSettings: audioTrackSettingsSnapshot,
+                    masterVolume: masterVolumeSnapshot
                 ) { progress in
                     Task { @MainActor in
                         self.exportProgress = progress
@@ -3910,6 +4165,8 @@ final class EditorViewModel {
             selectedOverlayClipID: selectedOverlayClipID,
             textOverlays: textOverlays,
             audioClips: audioClips,
+            audioTrackSettings: audioTrackSettings,
+            masterVolume: masterVolume,
             overlayClips: overlayClips,
             canvasSettings: canvasSettings,
             exportInPoint: exportInPoint,
@@ -3929,6 +4186,8 @@ final class EditorViewModel {
         selectedOverlayClipID = snapshot.selectedOverlayClipID
         textOverlays = snapshot.textOverlays
         audioClips = snapshot.audioClips
+        audioTrackSettings = snapshot.audioTrackSettings
+        masterVolume = snapshot.masterVolume
         overlayClips = snapshot.overlayClips
         canvasSettings = snapshot.canvasSettings
         exportInPoint = snapshot.exportInPoint
@@ -3966,7 +4225,9 @@ final class EditorViewModel {
             selectedOverlayClipID: selectedOverlayClipID,
             canvasSettings: canvasSettings,
             exportInPoint: exportInPoint,
-            exportOutPoint: exportOutPoint
+            exportOutPoint: exportOutPoint,
+            audioTrackSettings: audioTrackSettings,
+            masterVolume: masterVolume
         )
     }
 
@@ -4031,14 +4292,17 @@ final class EditorViewModel {
             "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)|\($0.effect.rawValue)"
         }.joined(separator: ";")
         let overlayHash = overlayClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
         }.joined(separator: ";")
         let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
         let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"
-        return clipsHash + "|||" + audioHash + "|||" + overlayHash + "|||" + openingHash + "|||" + closingHash + "|||\(canvasSettings)"
+        let mixHash = audioTrackSettings.keys.sorted()
+            .map { "\($0):\(audioTrackSettings[$0]!.gain)|\(audioTrackSettings[$0]!.isMuted)|\(audioTrackSettings[$0]!.isSoloed)" }
+            .joined(separator: ";") + "|||\(masterVolume)"
+        return clipsHash + "|||" + audioHash + "|||" + overlayHash + "|||" + openingHash + "|||" + closingHash + "|||\(canvasSettings)" + "|||" + mixHash
     }
 
     private func invalidateComposition() {
@@ -4073,6 +4337,8 @@ final class EditorViewModel {
         let closingKindSnapshot = closingTransitionKind
         let closingDurationSnapshot = closingTransitionDuration
         let canvasSnapshot = canvasSettings
+        let audioTrackSettingsSnapshot = audioTrackSettings
+        let masterVolumeSnapshot = masterVolume
 
         let item: AVPlayerItem?
         if audioClipsSnapshot.isEmpty,
@@ -4080,6 +4346,7 @@ final class EditorViewModel {
            openingKindSnapshot == .none,
            closingKindSnapshot == .none,
            canvasSnapshot == .default,
+           abs(masterVolumeSnapshot - 1.0) < 0.001,
            let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
             item = warmed
         } else {
@@ -4092,7 +4359,9 @@ final class EditorViewModel {
                     openingTransitionDuration: openingDurationSnapshot,
                     closingTransitionKind: closingKindSnapshot,
                     closingTransitionDuration: closingDurationSnapshot,
-                    canvasSettings: canvasSnapshot
+                    canvasSettings: canvasSnapshot,
+                    audioTrackSettings: audioTrackSettingsSnapshot,
+                    masterVolume: masterVolumeSnapshot
                 )
             }.value
         }

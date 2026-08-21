@@ -26,6 +26,11 @@ struct EditorAudioClip: Identifiable, Hashable {
     /// equivalent, originally synthesized), and anything else with no attribution obligation.
     /// Surfaced in the audio action bar so it isn't lost once the clip leaves the library sheet.
     var attribution: String?
+    /// Priority 15 voice/sound effect (Echo, Robot, ...). Only ever set to a non-`.none` value
+    /// once `EditorAudioEffectRenderer` has actually finished rendering it — see
+    /// `EditorViewModel.setAudioClipEffect` — so `playbackFileURL` below never needs to await
+    /// anything.
+    var effect: EditorAudioEffect = .none
 
     init(
         id: UUID = UUID(),
@@ -40,7 +45,8 @@ struct EditorAudioClip: Identifiable, Hashable {
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
         keyframes: EditorKeyframeTracks = .empty,
-        attribution: String? = nil
+        attribution: String? = nil,
+        effect: EditorAudioEffect = .none
     ) {
         self.id = id
         self.title = title
@@ -55,6 +61,15 @@ struct EditorAudioClip: Identifiable, Hashable {
         self.fadeOutDuration = min(max(0, fadeOutDuration), self.trimEnd - self.trimStart)
         self.keyframes = keyframes
         self.attribution = attribution
+        self.effect = effect
+    }
+
+    /// The file the composition/export pipeline should actually read for this clip — the
+    /// effect-processed render if one exists, otherwise the dry `fileURL`. Falls back to dry
+    /// audio (never breaks playback) if the cache was evicted after `effect` was persisted;
+    /// see `EditorAudioEffectRenderer`.
+    var playbackFileURL: URL {
+        EditorAudioEffectRenderer.cachedFileURL(sourceURL: fileURL, effect: effect) ?? fileURL
     }
 
     static let minimumSpan: TimeInterval = 0.25
@@ -86,7 +101,8 @@ struct EditorAudioClip: Identifiable, Hashable {
             fadeInDuration: min(fadeInDuration, sourceTime - trimStart),
             fadeOutDuration: 0,
             keyframes: splitKeyframes.left,
-            attribution: attribution
+            attribution: attribution,
+            effect: effect
         )
         let right = EditorAudioClip(
             title: title,
@@ -100,7 +116,8 @@ struct EditorAudioClip: Identifiable, Hashable {
             fadeInDuration: 0,
             fadeOutDuration: min(fadeOutDuration, trimEnd - sourceTime),
             keyframes: splitKeyframes.right,
-            attribution: attribution
+            attribution: attribution,
+            effect: effect
         )
         return (left, right)
     }

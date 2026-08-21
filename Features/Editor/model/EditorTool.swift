@@ -22,6 +22,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
     case keyframe
     case track
     case stabilize
+    case mix
+    case audioEffect
 
     var id: String { rawValue }
 
@@ -29,6 +31,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         allCases.filter {
             $0 != .duration && $0 != .opacity && $0 != .compositing
                 && $0 != .filter && $0 != .keyframe && $0 != .track && $0 != .stabilize
+                && $0 != .audioEffect
         }
     }
 
@@ -48,6 +51,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .keyframe: return "KEYFRAME"
         case .track: return "TRACK"
         case .stabilize: return "STABILIZE"
+        case .mix: return "MIX"
+        case .audioEffect: return "EFFECT"
         }
     }
 
@@ -67,6 +72,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .keyframe: return "diamond.fill"
         case .track: return "viewfinder"
         case .stabilize: return "gyroscope"
+        case .mix: return "slider.vertical.3"
+        case .audioEffect: return "waveform.badge.magnifyingglass"
         }
     }
 }

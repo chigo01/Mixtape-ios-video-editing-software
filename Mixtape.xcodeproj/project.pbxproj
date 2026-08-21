@@ -19,6 +19,13 @@
 		AD10000000000000000000B5 /* AudioLibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F5 /* AudioLibraryCache.swift */; };
 		AD10000000000000000000B6 /* FreesoundAudioLibraryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */; };
 		AD10000000000000000000B7 /* AudioWaveformGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F7 /* AudioWaveformGenerator.swift */; };
+		AD10000000000000000000B8 /* EditorAudioMixSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F8 /* EditorAudioMixSettings.swift */; };
+		AD10000000000000000000B9 /* MixToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F9 /* MixToolPanel.swift */; };
+		AD10000000000000000000BA /* VoiceoverRecorderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FA /* VoiceoverRecorderService.swift */; };
+		AD10000000000000000000BB /* VoiceoverRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FB /* VoiceoverRecorderView.swift */; };
+		AD10000000000000000000BC /* EditorAudioEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FC /* EditorAudioEffect.swift */; };
+		AD10000000000000000000BD /* EditorAudioEffectRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */; };
+		AD10000000000000000000BE /* EditorAudioEffectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FE /* EditorAudioEffectPanel.swift */; };
 		A0B0F00DDEAFB001CAFE0101 /* MediaItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */; };
 		A0B0F00DDEAFB001CAFE0102 /* MediaFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */; };
 		A0B0F00DDEAFB001CAFE0103 /* PhotoLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */; };
@@ -119,6 +126,13 @@
 		AD10000000000000000000F5 /* AudioLibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLibraryCache.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesoundAudioLibraryProvider.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F7 /* AudioWaveformGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformGenerator.swift; sourceTree = "<group>"; };
+		AD10000000000000000000F8 /* EditorAudioMixSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioMixSettings.swift; sourceTree = "<group>"; };
+		AD10000000000000000000F9 /* MixToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixToolPanel.swift; sourceTree = "<group>"; };
+		AD10000000000000000000FA /* VoiceoverRecorderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceoverRecorderService.swift; sourceTree = "<group>"; };
+		AD10000000000000000000FB /* VoiceoverRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceoverRecorderView.swift; sourceTree = "<group>"; };
+		AD10000000000000000000FC /* EditorAudioEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffect.swift; sourceTree = "<group>"; };
+		AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectRenderer.swift; sourceTree = "<group>"; };
+		AD10000000000000000000FE /* EditorAudioEffectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectPanel.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTopBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPreviewPlayer.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimeline.swift; sourceTree = "<group>"; };
@@ -278,6 +292,8 @@
 				BA0EDF00DEAFB001CAFE0003 /* EditorTextOverlay.swift */,
 				BA0EDF00DEAFB001CAFE0004 /* EditorAudioClip.swift */,
 				AD10000000000000000000F1 /* EditorAudioLibraryItem.swift */,
+				AD10000000000000000000F8 /* EditorAudioMixSettings.swift */,
+				AD10000000000000000000FC /* EditorAudioEffect.swift */,
 				BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */,
 				BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */,
 			);
@@ -309,6 +325,7 @@
 				63F8ECBE73E4FFD084A70D66 /* TextOverlayEditorSheet.swift */,
 				8E56D87ACFF2712C8890CA60 /* EditorTextActionBar.swift */,
 				E87DAAFAE4F84C0C17BFE6B8 /* VolumeToolPanel.swift */,
+				AD10000000000000000000F9 /* MixToolPanel.swift */,
 				C010D003A15C010000000003 /* ColorAdjustmentToolPanel.swift */,
 				C010D004A15C010000000004 /* ColorGradeControls.swift */,
 				C010D006A15C010000000006 /* ColorScopeViews.swift */,
@@ -321,6 +338,8 @@
 				C030D004A15C030000000004 /* MotionTrackingSelectionLayer.swift */,
 				80BD65BF4472826A783449A0 /* AudioPickerView.swift */,
 				AD10000000000000000000F3 /* AudioLibraryPickerView.swift */,
+				AD10000000000000000000FB /* VoiceoverRecorderView.swift */,
+				AD10000000000000000000FE /* EditorAudioEffectPanel.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -342,6 +361,8 @@
 				BA0EDF00DEAFB001CAFE0011 /* EditorUndoManager.swift */,
 				BA0EDF00DEAFB001CAFE0012 /* EditorExportService.swift */,
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
+				AD10000000000000000000FA /* VoiceoverRecorderService.swift */,
+				AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -555,6 +576,13 @@
 				AD10000000000000000000B5 /* AudioLibraryCache.swift in Sources */,
 				AD10000000000000000000B6 /* FreesoundAudioLibraryProvider.swift in Sources */,
 				AD10000000000000000000B7 /* AudioWaveformGenerator.swift in Sources */,
+				AD10000000000000000000B8 /* EditorAudioMixSettings.swift in Sources */,
+				AD10000000000000000000B9 /* MixToolPanel.swift in Sources */,
+				AD10000000000000000000BA /* VoiceoverRecorderService.swift in Sources */,
+				AD10000000000000000000BB /* VoiceoverRecorderView.swift in Sources */,
+				AD10000000000000000000BC /* EditorAudioEffect.swift in Sources */,
+				AD10000000000000000000BD /* EditorAudioEffectRenderer.swift in Sources */,
+				AD10000000000000000000BE /* EditorAudioEffectPanel.swift in Sources */,
 				CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */,
 				CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */,
 				CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */,
@@ -642,6 +670,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Mixtape needs microphone access so you can record a voiceover for your project.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -694,6 +723,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Mixtape needs microphone access so you can record a voiceover for your project.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -17,6 +17,7 @@ struct EditorScreen: View {
     @State private var isAudioPickerPresented = false
     @State private var isAudioSourceChooserPresented = false
     @State private var isAudioLibraryPickerPresented = false
+    @State private var isVoiceoverRecorderPresented = false
     @State private var isOverlayPickerPresented = false
     @State private var isOverlayTracksExpanded = false
     @State private var showExportScreen = false
@@ -105,6 +106,7 @@ struct EditorScreen: View {
                 isAudioSourceChooserPresented: $isAudioSourceChooserPresented,
                 isAudioLibraryPickerPresented: $isAudioLibraryPickerPresented,
                 isAudioPickerPresented: $isAudioPickerPresented,
+                isVoiceoverRecorderPresented: $isVoiceoverRecorderPresented,
                 insertAfterAudioClipID: $insertAfterAudioClipID
             )
         )
@@ -196,6 +198,8 @@ struct EditorScreen: View {
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
         }
+        .modifier(MixToolSheet(vm: vm))
+        .modifier(AudioEffectToolSheet(vm: vm))
         .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .speed },
@@ -981,6 +985,50 @@ private struct EditorFullscreenPreviewSheet: View {
     }
 }
 
+/// The MIX tool's sheet (master + per-track gain), pulled out as its own `ViewModifier` for the
+/// same reason as `AudioSourceSheets` below — keeping inline modifiers off `EditorScreen.body`.
+private struct MixToolSheet: ViewModifier {
+    let vm: EditorViewModel
+
+    func body(content: Content) -> some View {
+        content.editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .mix },
+                set: { if !$0 && vm.selectedTool == .mix { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(280)
+        ) {
+            MixToolPanel(vm: vm)
+                .presentationDetents([.height(280), .medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+    }
+}
+
+/// The EFFECTS tool's sheet (Priority 15 voice/sound presets for the selected audio clip), same
+/// pulled-out-`ViewModifier` reasoning as `MixToolSheet` above.
+private struct AudioEffectToolSheet: ViewModifier {
+    let vm: EditorViewModel
+
+    func body(content: Content) -> some View {
+        content.editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .audioEffect },
+                set: { if !$0 && vm.selectedTool == .audioEffect { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(380)
+        ) {
+            EditorAudioEffectPanel(vm: vm)
+                .presentationDetents([.height(380), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+    }
+}
+
 /// Bundles the "Add Audio" source chooser and its two sheets (Files import, sound library) as
 /// one `ViewModifier` rather than three chained modifiers directly on `EditorScreen.body` —
 /// `body` is already a large single expression, and adding more inline modifiers there pushed
@@ -990,6 +1038,7 @@ private struct AudioSourceSheets: ViewModifier {
     @Binding var isAudioSourceChooserPresented: Bool
     @Binding var isAudioLibraryPickerPresented: Bool
     @Binding var isAudioPickerPresented: Bool
+    @Binding var isVoiceoverRecorderPresented: Bool
     @Binding var insertAfterAudioClipID: UUID?
 
     private var pendingInsertion: EditorViewModel.AudioInsertion {
@@ -1004,6 +1053,7 @@ private struct AudioSourceSheets: ViewModifier {
                 isPresented: $isAudioSourceChooserPresented,
                 titleVisibility: .visible
             ) {
+                Button("Record Voiceover") { isVoiceoverRecorderPresented = true }
                 Button("Browse Sound Library") { isAudioLibraryPickerPresented = true }
                 Button("Import from Files") { isAudioPickerPresented = true }
                 Button("Cancel", role: .cancel) { insertAfterAudioClipID = nil }
@@ -1040,6 +1090,45 @@ private struct AudioSourceSheets: ViewModifier {
                         insertAfterAudioClipID = nil
                     }
                 )
+            }
+            .editorSheet(
+                isPresented: $isVoiceoverRecorderPresented,
+                iPadHeight: .fraction(0.85)
+            ) {
+                VoiceoverRecorderView(
+                    vm: vm,
+                    mode: .insert(pendingInsertion),
+                    onInsert: {
+                        isVoiceoverRecorderPresented = false
+                        insertAfterAudioClipID = nil
+                    },
+                    onCancel: {
+                        isVoiceoverRecorderPresented = false
+                        insertAfterAudioClipID = nil
+                    }
+                )
+                .presentationDetents([.fraction(0.85), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.black)
+            }
+            .editorSheet(
+                isPresented: Binding(
+                    get: { vm.punchInPendingRange != nil },
+                    set: { if !$0 { vm.punchInPendingRange = nil } }
+                ),
+                iPadHeight: .fraction(0.85)
+            ) {
+                if let range = vm.punchInPendingRange {
+                    VoiceoverRecorderView(
+                        vm: vm,
+                        mode: .punch(range),
+                        onInsert: { vm.punchInPendingRange = nil },
+                        onCancel: { vm.punchInPendingRange = nil }
+                    )
+                    .presentationDetents([.fraction(0.85), .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(Color.black)
+                }
             }
     }
 }

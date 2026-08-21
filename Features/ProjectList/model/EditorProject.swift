@@ -210,6 +210,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     var fadeOutDuration: TimeInterval
     var keyframes: EditorKeyframeTracks
     var attribution: String?
+    var effect: EditorAudioEffect?
 
     init(from clip: EditorAudioClip) {
         id = clip.id
@@ -225,6 +226,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         fadeOutDuration = clip.fadeOutDuration
         keyframes = clip.keyframes
         attribution = clip.attribution
+        effect = clip.effect == .none ? nil : clip.effect
     }
 
     init(from decoder: Decoder) throws {
@@ -242,6 +244,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         fadeOutDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .fadeOutDuration) ?? 0
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
         attribution = try c.decodeIfPresent(String.self, forKey: .attribution)
+        effect = try c.decodeIfPresent(EditorAudioEffect.self, forKey: .effect)
     }
 
     func toAudioClip() -> EditorAudioClip? {
@@ -260,7 +263,8 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
             fadeInDuration: fadeInDuration,
             fadeOutDuration: fadeOutDuration,
             keyframes: keyframes,
-            attribution: attribution
+            attribution: attribution,
+            effect: effect ?? .none
         )
     }
 }
@@ -423,6 +427,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
     var exportOutPoint: TimeInterval?
+    var audioTrackSettings: [Int: EditorAudioTrackSettings]
+    var masterVolume: Float
 
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
@@ -431,6 +437,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         case openingTransitionKind, openingTransitionDuration
         case closingTransitionKind, closingTransitionDuration
         case canvasSettings, exportInPoint, exportOutPoint
+        case audioTrackSettings, masterVolume
     }
 
     init(
@@ -452,7 +459,9 @@ struct EditorProject: Codable, Identifiable, Hashable {
         selectedOverlayClipID: UUID? = nil,
         canvasSettings: EditorCanvasSettings = .default,
         exportInPoint: TimeInterval? = nil,
-        exportOutPoint: TimeInterval? = nil
+        exportOutPoint: TimeInterval? = nil,
+        audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
+        masterVolume: Float = 1.0
     ) {
         self.id = id
         self.title = title
@@ -477,6 +486,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.canvasSettings = canvasSettings
         self.exportInPoint = exportInPoint
         self.exportOutPoint = exportOutPoint
+        self.audioTrackSettings = audioTrackSettings
+        self.masterVolume = masterVolume
     }
 
     init(from decoder: Decoder) throws {
@@ -527,6 +538,11 @@ struct EditorProject: Codable, Identifiable, Hashable {
         canvasSettings = try c.decodeIfPresent(EditorCanvasSettings.self, forKey: .canvasSettings) ?? .default
         exportInPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportInPoint)
         exportOutPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportOutPoint)
+        audioTrackSettings = try c.decodeIfPresent(
+            [Int: EditorAudioTrackSettings].self,
+            forKey: .audioTrackSettings
+        ) ?? [:]
+        masterVolume = try c.decodeIfPresent(Float.self, forKey: .masterVolume) ?? 1.0
 
         if let saved = try c.decodeIfPresent([SavedAudioClip].self, forKey: .audioClips) {
             audioClips = saved
@@ -559,6 +575,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(canvasSettings, forKey: .canvasSettings)
         try c.encodeIfPresent(exportInPoint, forKey: .exportInPoint)
         try c.encodeIfPresent(exportOutPoint, forKey: .exportOutPoint)
+        try c.encode(audioTrackSettings, forKey: .audioTrackSettings)
+        try c.encode(masterVolume, forKey: .masterVolume)
     }
 
     var formattedDuration: String {

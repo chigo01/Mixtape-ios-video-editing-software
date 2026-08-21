@@ -51,6 +51,8 @@ enum EditorExportService {
         timeRange: ClosedRange<TimeInterval>? = nil,
         settings: EditorExportSettings,
         projectTitle: String,
+        audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
+        masterVolume: Float = 1.0,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         guard let built = await EditorCompositionBuilder.build(
@@ -65,7 +67,9 @@ enum EditorExportService {
             canvasSettings: canvasSettings,
             frameRate: Int32(settings.frameRate.rawValue),
             canvasSize: canvasSettings.renderSize(longEdge: settings.resolution.longEdge),
-            isOfflineRender: true
+            isOfflineRender: true,
+            audioTrackSettings: audioTrackSettings,
+            masterVolume: masterVolume
         ) else {
             throw EditorExportError.compositionFailed
         }
