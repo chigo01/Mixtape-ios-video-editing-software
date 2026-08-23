@@ -287,7 +287,7 @@ enum EditorMotionTracker {
         request.maximumHandCount = 2
         let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
         guard (try? handler.perform([request])) != nil,
-              let observations = request.results as? [VNHumanHandPoseObservation] else {
+              let observations = request.results else {
             return []
         }
         let minConfidence: Float = 0.3

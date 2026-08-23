@@ -86,11 +86,10 @@ actor EditorAudioEffectRenderer {
 
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         try engine.start()
-        // Explicit `completionHandler: nil` pins this to the classic fire-and-forget overload,
-        // not the newer `async` one — the async variant suspends until playback is "consumed,"
-        // which in manual rendering mode only happens as `renderOffline` is pumped below, so
-        // awaiting it here would deadlock before the render loop ever runs.
-        player.scheduleFile(sourceFile, at: nil, completionHandler: nil)
+        // The async overload suspends until playback is consumed. In manual rendering mode that
+        // cannot happen until the loop below starts pumping, so schedule synchronously via a
+        // non-async helper and then begin the offline render.
+        scheduleForOfflineRendering(sourceFile, on: player)
         player.play()
 
         guard let renderBuffer = AVAudioPCMBuffer(
@@ -125,6 +124,13 @@ actor EditorAudioEffectRenderer {
             }
         }
         engine.stop()
+    }
+
+    private static func scheduleForOfflineRendering(
+        _ file: AVAudioFile,
+        on player: AVAudioPlayerNode
+    ) {
+        player.scheduleFile(file, at: nil, completionHandler: nil)
     }
 
     private enum RenderError: Error {

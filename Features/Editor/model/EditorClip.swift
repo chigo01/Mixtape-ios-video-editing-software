@@ -137,6 +137,12 @@ struct EditorClip: Identifiable, Hashable {
     var speed: Float
     var speedRamp: EditorSpeedRamp?
     var volume: Float
+    /// Embedded source-audio boundaries. While linked, nil values follow the
+    /// video trim exactly. Unlinking materializes independent source handles
+    /// so J/L cuts can overlap the neighboring picture without moving it.
+    var audioTrimStart: TimeInterval?
+    var audioTrimEnd: TimeInterval?
+    var isAudioLinked: Bool
     var cropAspect: EditorCropAspect
     var reframeMode: EditorReframeMode
     var rotationQuarterTurns: Int
@@ -174,6 +180,9 @@ struct EditorClip: Identifiable, Hashable {
         speed: Float = 1.0,
         speedRamp: EditorSpeedRamp? = nil,
         volume: Float = 1.0,
+        audioTrimStart: TimeInterval? = nil,
+        audioTrimEnd: TimeInterval? = nil,
+        isAudioLinked: Bool = true,
         cropAspect: EditorCropAspect = .original,
         reframeMode: EditorReframeMode = .fit,
         rotationQuarterTurns: Int = 0,
@@ -199,6 +208,14 @@ struct EditorClip: Identifiable, Hashable {
         self.speed = speed
         self.speedRamp = speedRamp?.isUsable == true ? speedRamp : nil
         self.volume = volume
+        self.isAudioLinked = isAudioLinked
+        let resolvedAudioStart = min(max(audioTrimStart ?? trimStart, 0), originalDuration)
+        let resolvedAudioEnd = min(
+            max(audioTrimEnd ?? trimEnd, resolvedAudioStart),
+            originalDuration
+        )
+        self.audioTrimStart = isAudioLinked ? nil : resolvedAudioStart
+        self.audioTrimEnd = isAudioLinked ? nil : resolvedAudioEnd
         self.cropAspect = cropAspect
         self.reframeMode = reframeMode
         self.rotationQuarterTurns = ((rotationQuarterTurns % 4) + 4) % 4
@@ -249,6 +266,9 @@ struct EditorClip: Identifiable, Hashable {
             speed: speed,
             speedRamp: splitRamps?.left,
             volume: volume,
+            audioTrimStart: isAudioLinked ? nil : effectiveAudioTrimStart,
+            audioTrimEnd: isAudioLinked ? nil : min(effectiveAudioTrimEnd, sourceTime),
+            isAudioLinked: isAudioLinked,
             cropAspect: cropAspect,
             reframeMode: reframeMode,
             rotationQuarterTurns: rotationQuarterTurns,
@@ -274,6 +294,9 @@ struct EditorClip: Identifiable, Hashable {
             speed: speed,
             speedRamp: splitRamps?.right,
             volume: volume,
+            audioTrimStart: isAudioLinked ? nil : max(effectiveAudioTrimStart, sourceTime),
+            audioTrimEnd: isAudioLinked ? nil : effectiveAudioTrimEnd,
+            isAudioLinked: isAudioLinked,
             cropAspect: cropAspect,
             reframeMode: reframeMode,
             rotationQuarterTurns: rotationQuarterTurns,
@@ -312,6 +335,14 @@ struct EditorClip: Identifiable, Hashable {
         let trimmed = max(0, trimEnd - trimStart)
         guard duration > 0 else { return max(speed, 0.001) }
         return Float(trimmed / duration)
+    }
+
+    var effectiveAudioTrimStart: TimeInterval {
+        isAudioLinked ? trimStart : min(max(audioTrimStart ?? trimStart, 0), originalDuration)
+    }
+
+    var effectiveAudioTrimEnd: TimeInterval {
+        isAudioLinked ? trimEnd : min(max(audioTrimEnd ?? trimEnd, effectiveAudioTrimStart), originalDuration)
     }
 
     /// Local playback time within this clip (source timeline), derived from exported `localTime * speed + trimStart`.
@@ -354,6 +385,9 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.speed == rhs.speed
             && lhs.speedRamp == rhs.speedRamp
             && lhs.volume == rhs.volume
+            && lhs.audioTrimStart == rhs.audioTrimStart
+            && lhs.audioTrimEnd == rhs.audioTrimEnd
+            && lhs.isAudioLinked == rhs.isAudioLinked
             && lhs.cropAspect == rhs.cropAspect
             && lhs.reframeMode == rhs.reframeMode
             && lhs.rotationQuarterTurns == rhs.rotationQuarterTurns

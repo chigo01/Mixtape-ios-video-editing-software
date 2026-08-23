@@ -822,7 +822,7 @@ keyframe behavior.
 
 | Track | Feature | Definition of done |
 |-------|---------|--------------------|
-| T1 | **Precision trim and sync edits — core shipped** | A dedicated precision editor provides ripple delete/trim, roll, slip, slide, independent J/L audio handles, and explicit unlink/relink. Operations create one undo step, preserve valid transitions/keyframe ranges, persist across reopen, and use the shared preview/export composition. Track locks remain in the sequence-structure follow-up. |
+| T1 | **Precision trim and sync edits** | Ripple delete, ripple trim, roll, slip, slide, J/L cuts, linked audio/video, sync locks, and an explicit unlink/relink workflow. Every operation previews correctly, creates one undo step, preserves transitions/keyframes, and survives reopen/export. |
 | T2 | **Selection and sequence structure** | Multi-select, range selection, batch move/delete/duplicate, named timeline markers, compound clips, and nested sequences with clear enter/exit navigation and deterministic duration propagation. |
 
 ### Phase 2 — motion and advanced compositing
@@ -1342,3 +1342,231 @@ Source media
 - Treat orientation, color space, alpha/background pixels, audio tails, cancellation, and missing media as test dimensions.
 - Avoid monolithic catalogs or render switches; use separate metadata, parameter, instruction, and renderer files as each system grows.
 - Measure on physical devices, including older supported hardware, portrait/landscape inputs, photos, HDR media, and long timelines.
+
+## 14. Product execution strategy and competitive direction
+
+This section turns the professional-editor roadmap into an execution order. The goal is not to win by accumulating the largest feature count. Mixtape should become a **mobile-first professional NLE that is fast enough for creators, precise enough for serious editors, and deterministic enough that every AI-assisted edit remains fully editable by the user**.
+
+### 14.1 Product position
+
+Mixtape should not be positioned as a lightweight trim/filter utility or as a direct clone of any single editor. The intended position is:
+
+> **Fast like a creator app. Precise like a professional editor.**
+
+The shipped foundation already supports serious editing: a continuous multi-clip timeline, multi-layer video, multi-track audio, speed curves, keyframes, advanced color grading, power windows, motion tracking, stabilization, chroma/luma keying, blend modes, scopes, project persistence, undo/redo, and a shared preview/export rendering model.
+
+The next stages should therefore emphasize **editing workflow, reliability, creative speed, and differentiation**, rather than adding isolated effects simply to increase the feature count.
+
+### 14.2 Recommended execution order
+
+The roadmap priorities above remain the detailed source of truth. When choosing what to implement next, use this product-level order unless dependencies require otherwise.
+
+| Execution tier | Work | Why it matters |
+|----------------|------|----------------|
+| **P0** | **Captions and transcript editing** | Modern creator workflows depend on fast, editable, styled captions. Timed words, transcript search, word highlighting, SRT import/export, and approved transcript-to-timeline edits provide immediate user value. |
+| **P0** | **Timeline precision: ripple/roll/slip/slide + J/L cuts — core shipped** | A dedicated precision editor now provides frame/0.1s/0.5s ripple, roll, slip, and slide adjustments plus visible linked A/V, reversible unlink/relink, and independent J/L source-audio handles. Operations are single-step undoable, persistent, and shared by preview/export composition. |
+| **P0** | **Multi-select, grouping, compound clips, and sequence structure** | Complex projects become substantially easier to manage when related clips/layers can be selected, moved, duplicated, grouped, compounded, and eventually nested. |
+| **P0** | **Reverse and freeze frame** | These are expected editing primitives and should be completed before adding more specialized creative tools. Reverse generation must be cached/cancellable; freeze insertion must have an explicit audio policy. |
+| **P0** | **Effects stack + adjustment layers** | A general stackable effects system is more valuable than a large set of hard-coded effects. Effects need ordering, bypass, parameters, presets, keyframe interoperability, caching, and identical preview/export behavior. |
+| **P1** | **Text animation — shipped** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability now make the text system creator-ready. |
+| **P1** | **Stickers and reusable graphics** | Adds fast creator-oriented composition without weakening the professional timeline model. Assets should behave like ordinary timeline elements. |
+| **P1** | **Proxy and render cache** | Critical for long projects, high-resolution media, thermal limits, and older supported devices. Full-resolution originals remain authoritative for export. |
+| **P1** | **Project packages, missing-media recovery, and relinking** | Professional users must be able to trust projects across storage changes, imported Files media, cleanup, and device lifecycle events. |
+| **P1** | **Templates** | Templates improve creative speed once the underlying timeline, captions, effects, text, and asset replacement semantics are stable. |
+| **P2** | **Explicit SDR/HDR and wide-gamut color management** | Needed for trustworthy high-end HDR workflows after performance budgets and representative-device testing are in place. |
+| **P2** | **Professional iPad workspace** | Adaptive layout, keyboard shortcuts, trackpad/pointer behavior, and external-display preview should make Mixtape feel native to larger screens rather than merely scaled up. |
+
+Reliability work is **continuous**, not a final phase. Atomic saves, schema migration, recovery snapshots, render tests, cancellation, memory limits, thermal testing, and preview/export parity are requirements while every tier is being built.
+
+### 14.3 Timeline precision target
+
+The timeline should evolve from a capable touch timeline into a precise mobile NLE without becoming desktop software squeezed onto a phone.
+
+```text
+Primary video:  [ Clip A ][ Clip B ][ Clip C ]
+                         <-> roll edit
+
+Source media:       [==========]
+Timeline range:        [====]
+                       <-> slip source content
+
+Video:          [-----------]
+Audio:             [-------------]     <- J-cut
+
+Selection:      [Clip] [Text] [SFX] [Overlay]
+                         |
+                         +--> group / compound clip
+```
+
+Required behavior for precision operations:
+
+- **Ripple delete / ripple trim:** close or extend downstream time while respecting locks and linked media.
+- **Roll:** move a shared cut point without changing the combined sequence duration.
+- **Slip:** change the source range while preserving the clip's timeline position and duration.
+- **Slide:** move a clip while compensating adjacent edit points.
+- **J/L cuts:** independently expose linked audio/video edit boundaries without silently breaking sync.
+- **Linked A/V + unlink/relink:** make sync relationships visible and reversible.
+- **Multi-select/range selection:** batch move, delete, duplicate, group, and apply supported operations as one undoable transaction.
+- **Markers:** named timeline/project markers with stable persisted time semantics.
+- **Compound clips / nested sequences:** deterministic duration propagation, clear enter/exit navigation, and no preview/export divergence.
+
+#### Timeline precision implementation status
+
+The core single-selection workflow is shipped. Select a primary video clip and open **PRECISION** to choose Ripple, Roll, Slip, Slide, or J/L Cuts. Frame, 0.10-second, and 0.50-second steps provide predictable touch controls without requiring pixel-perfect handle dragging.
+
+- Ripple trim and ripple delete remap downstream captions, text, imported audio, and video overlays as one undoable transaction.
+- Roll and slide clamp both neighboring source handles, retain legal minimum durations, and revalidate transitions and keyframe ranges.
+- Slip changes only the selected source range, preserving its timeline position and duration.
+- J/L Cuts use independent embedded-audio composition tracks, visibly mark unlinked clips, persist source-audio boundaries, and support one-tap relinking to picture.
+- Project save/reopen, undo/redo snapshots, composition invalidation, live preview, and offline export all consume the same audio-link and precision-edit state.
+- Precision source edits deliberately reject speed-ramped clips until the curve is committed or removed; track locks and multi-selection remain part of the separate sequence-structure milestone.
+
+### 14.4 Captions should become a first-class editing workflow
+
+Captions should not be implemented as a one-time speech-to-text export. Treat the transcript as another precise view of timeline media.
+
+```text
+Speech
+  -> timed transcript
+  -> editable words / segments
+  -> caption styles
+  -> per-word highlighting
+  -> text animation
+  -> transcript search
+  -> tap text to seek timeline
+  -> optional approved transcript edit to timeline
+```
+
+Key rules:
+
+- Transcription output remains editable before it changes the timeline.
+- Filler-word and silence detection are suggestions until explicitly accepted.
+- Deleting an approved transcript range may ripple-remove the matching dialogue and linked picture using the same deterministic timeline commands as manual editing.
+- Caption timing, styles, safe zones, and animation must persist and render identically in preview and export.
+- SRT import/export should preserve timing accurately and degrade gracefully when style information cannot be represented by the format.
+
+### 14.5 Effects should be an architecture, not a catalog
+
+Before chasing hundreds of effects, build the general effect model.
+
+```text
+Clip
+  + Color grade
+  + Gaussian blur
+  + Glow
+  + Sharpen
+  + Film grain
+  + Vignette
+
+Each effect:
+  - enable / bypass
+  - reorder
+  - parameter controls
+  - keyframes where meaningful
+  - presets
+  - deterministic persistence
+  - cached preview/render instructions
+```
+
+Adjustment layers should use the same stack model and affect eligible content below them for their timeline range. Avoid implementing adjustment-layer behavior as a separate preview-only system.
+
+### 14.6 What not to prioritize yet
+
+Do not build desktop-scale complexity simply because Premiere Pro, Final Cut Pro, or DaVinci Resolve includes it. Until user demand and product direction justify it, avoid making the following core roadmap blockers:
+
+- full multicam production workflows;
+- large professional audio-bus/routing systems;
+- node-based VFX/compositing graphs;
+- cinema-scale metadata and media-bin management;
+- complex team/collaborative editing before project synchronization is conflict-safe;
+- enormous effect catalogs before the stackable effect architecture is complete.
+
+The mobile product should remain understandable. A feature that adds professional precision without adding unnecessary interaction cost is preferable to a feature that merely increases parity on paper.
+
+### 14.7 Competitive direction
+
+Competitor comparisons should guide product decisions, not dictate architecture.
+
+| Competitor strength | Mixtape response |
+|---------------------|------------------|
+| **CapCut — creative speed, templates, captions, effects, AI-assisted creator workflows** | Make captions, text animation, reusable assets, templates, and AI-assisted edits extremely fast while keeping every accepted result editable on the normal timeline. |
+| **LumaFusion — serious mobile/iPad NLE workflow, timeline precision, long-form project trust** | Prioritize precision edits, compound/nested structure, proxies, relinking, recovery, keyboard/trackpad support, external display preview, and long-project reliability. |
+| **VN — approachable power and low-friction editing** | Measure common workflows by interaction count. Advanced capability must not require unnecessary taps or force users through professional controls when sensible defaults are enough. |
+
+The goal is not to duplicate all three. Mixtape's differentiation should come from combining **creator speed**, **professional control**, and **a deterministic editing engine**.
+
+### 14.8 Differentiator 1 — AI that operates the real editor
+
+AI should never become a second hidden editor. It should analyze media and propose normal Mixtape operations.
+
+Example request:
+
+> Turn this into a 45-second 9:16 reel. Keep the section where the product price is explained, remove long pauses, add captions, lower the music while dialogue is present, and add subtle punch-ins to important lines.
+
+Expected flow:
+
+```text
+User request
+    -> analysis + structured edit plan
+    -> proposed operations
+       - reframe to 9:16
+       - select source ranges
+       - remove approved pauses
+       - generate captions
+       - add transform keyframes
+       - add audio ducking automation
+       - configure export target
+    -> preview / diff
+    -> user approves
+    -> existing EditorViewModel commands
+    -> one undoable transaction
+```
+
+After applying the plan, every result remains an ordinary editable Mixtape object. The user can adjust the cuts, captions, keyframes, audio automation, framing, and export settings manually. One undo should be able to revert the accepted AI transaction as a unit.
+
+### 14.9 Differentiator 2 — serious color grading on mobile
+
+Mixtape already has a strong color foundation: selective HSL, curves, lift/gamma/gain/offset, local corrections/power windows, tracking, comparison, and professional scopes. Do not bury this capability behind generic filter UX.
+
+Maintain two levels of access:
+
+1. **Fast creator path:** looks, intensity, common adjustments, copy/paste/apply-to-all.
+2. **Professional path:** HSL, curves, wheels, tracked local corrections, clipping information, waveform, RGB parade, vectorscope, histogram, and eventually explicit SDR/HDR color management.
+
+The professional controls should remain optional rather than making simple grading slower.
+
+### 14.10 Differentiator 3 — mobile-first professional UX
+
+Mixtape should feel designed for touch rather than like a desktop NLE reduced to a small screen.
+
+For the most common editing actions, track:
+
+- number of taps/gestures to complete the task;
+- whether the user must leave the timeline context;
+- whether preview remains visible while adjusting;
+- whether values can be entered precisely when needed;
+- whether undo provides an obvious escape route;
+- whether the same action scales naturally from iPhone to iPad/keyboard/trackpad.
+
+Maintain sensible defaults and progressive disclosure: a user should be able to make a good edit quickly, while advanced controls remain available when precision is required.
+
+### 14.11 Professional quality gate
+
+A feature is **not complete** merely because its UI exists. For every timeline mutation, effect, audio operation, caption feature, AI-assisted action, or new asset type, verify:
+
+1. **Preview = export.** The same timing and rendering semantics produce the same visible/audible result.
+2. **Undo/redo works.** A logical user action maps to a predictable undo transaction.
+3. **Persistence works.** Save, close, reopen, and continue without losing parameters or relationships.
+4. **Split/duplicate/reorder behavior is defined.** Time-based data such as keyframes, tracks, masks, transitions, captions, and automation remain valid after structural edits.
+5. **Cancellation is safe.** Long analysis/render/media-generation work can stop without corrupting project state.
+6. **Performance is measured on device.** Include older supported hardware, 4K/HDR sources where applicable, portrait/landscape inputs, photos, multiple layers, and long timelines.
+7. **Missing media fails visibly.** Never silently substitute incorrect assets or render an apparently successful but wrong project.
+8. **Backward compatibility is intentional.** Persisted identifiers and project schema changes use migrations/aliases instead of silently breaking existing projects.
+
+### 14.12 Product benchmark
+
+Do not evaluate Mixtape only by counting features. A more meaningful benchmark is whether a demanding real project remains comfortable and trustworthy:
+
+> Can Mixtape scrub, preview, save, reopen, and export a complex project containing 4K footage, multiple video layers, text, transitions, masks, tracked effects, color grading, music, voiceover, sound effects, captions, and automation without broken sync, unexplained frame differences, data loss, or unacceptable thermal/memory behavior?
+
+Passing that test consistently is more valuable than adding another large batch of isolated effects.

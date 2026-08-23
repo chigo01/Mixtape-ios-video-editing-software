@@ -125,6 +125,19 @@ struct EditorScreen: View {
         }
         .editorSheet(
             isPresented: Binding(
+                get: { vm.selectedTool == .precision },
+                set: { if !$0 && vm.selectedTool == .precision { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(430)
+        ) {
+            PrecisionEditToolPanel(vm: vm)
+            .presentationDetents([.height(430), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
                 get: { vm.selectedTool == .canvas },
                 set: { if !$0 && vm.selectedTool == .canvas { vm.selectedTool = nil } }
             ),
@@ -180,6 +193,22 @@ struct EditorScreen: View {
                 )
                     .presentationBackgroundInteraction(.enabled)
             }
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .captions },
+                set: { if !$0 && vm.selectedTool == .captions { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fraction(0.82)
+        ) {
+            CaptionTranscriptEditorSheet(
+                vm: vm,
+                isEmbedded: UIDevice.current.userInterfaceIdiom == .pad
+            )
+            .presentationDetents([.fraction(0.82), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
         }
         .editorSheet(
             isPresented: Binding(

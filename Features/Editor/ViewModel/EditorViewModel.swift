@@ -60,6 +60,10 @@ final class EditorViewModel {
 
     var selectedTextOverlayID: UUID?
     var isTextEditorPresented: Bool = false
+    private(set) var isTranscribingCaptions = false
+    private(set) var captionStatusMessage: String?
+    var captionErrorMessage: String?
+    @ObservationIgnored private var captionTask: Task<Void, Never>?
 
     // MARK: Audio editing
 
@@ -334,6 +338,10 @@ final class EditorViewModel {
     var selectedTextOverlay: EditorTextOverlay? {
         guard let id = selectedTextOverlayID else { return nil }
         return textOverlays.first { $0.id == id }
+    }
+
+    var captionOverlays: [EditorTextOverlay] {
+        textOverlays.filter(\.isCaption).sorted { $0.startTime < $1.startTime }
     }
 
     var selectedAudioClip: EditorAudioClip? {
@@ -893,6 +901,8 @@ final class EditorViewModel {
         case .split:
             splitAtPlayhead()
             selectedTool = .split
+        case .precision:
+            performToolAction(.precision)
         case .speed:
             performToolAction(.speed)
         case .duration:
@@ -1020,6 +1030,8 @@ final class EditorViewModel {
             } else {
                 addTextOverlay()
             }
+        case .captions:
+            selectTool(.captions)
         case .canvas:
             selectTool(.canvas)
         default:
@@ -3067,6 +3079,272 @@ final class EditorViewModel {
 
     // MARK: Text Overlays
 
+    func transcribeCaptions(
+        localeIdentifier: String? = nil,
+        source: EditorCaptionAudioSource = .video
+    ) {
+        guard !isTranscribingCaptions else { return }
+        captionTask?.cancel()
+        captionErrorMessage = nil
+        captionStatusMessage = source == .video
+            ? "Preparing video dialogue…"
+            : "Preparing the edited audio mix…"
+        let clipsSnapshot = clips
+        let audioSnapshot = audioClips
+        let overlaysSnapshot = overlayClips
+        let trackSettingsSnapshot = audioTrackSettings
+        let masterSnapshot = masterVolume
+
+        captionTask = Task {
+            isTranscribingCaptions = true
+            defer {
+                isTranscribingCaptions = false
+                captionStatusMessage = nil
+            }
+            do {
+                captionStatusMessage = "Recognizing speech…"
+                let result = try await EditorCaptionService.transcribe(
+                    clips: clipsSnapshot,
+                    audioClips: audioSnapshot,
+                    overlayClips: overlaysSnapshot,
+                    audioTrackSettings: trackSettingsSnapshot,
+                    masterVolume: masterSnapshot,
+                    requestedLocaleIdentifier: localeIdentifier,
+                    source: source
+                )
+                try Task.checkCancellation()
+                let captions = EditorCaptionService.makeCaptionOverlays(from: result)
+                replaceAllCaptions(with: captions)
+                captionStatusMessage = "Created \(captions.count) caption segments"
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
+                return
+            } catch {
+                captionErrorMessage = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+        }
+    }
+
+    func cancelCaptionTranscription() {
+        captionTask?.cancel()
+        captionTask = nil
+        isTranscribingCaptions = false
+        captionStatusMessage = nil
+    }
+
+    func importCaptions(from data: Data) throws {
+        replaceAllCaptions(with: try EditorSRTCodec.decode(data))
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    func replaceAllCaptions(with captions: [EditorTextOverlay]) {
+        registerUndoIfNeeded()
+        let captionIDs = Set(textOverlays.filter(\.isCaption).map(\.id))
+        textOverlays.removeAll { captionIDs.contains($0.id) }
+        textOverlays.append(contentsOf: captions)
+        selectedTextOverlayID = nil
+        scheduleSave()
+    }
+
+    func updateCaptionText(id: UUID, text: String) {
+        guard let index = textOverlays.firstIndex(where: { $0.id == id && $0.isCaption }) else { return }
+        registerUndoIfNeeded()
+        textOverlays[index].text = text
+        textOverlays[index].captionWords = retimedCaptionWords(
+            for: text,
+            in: textOverlays[index],
+            preserving: textOverlays[index].captionWords
+        )
+        scheduleSave()
+    }
+
+    func updateCaptionWordText(captionID: UUID, wordID: UUID, text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              let captionIndex = textOverlays.firstIndex(where: { $0.id == captionID && $0.isCaption }),
+              let wordIndex = textOverlays[captionIndex].captionWords.firstIndex(where: { $0.id == wordID }),
+              textOverlays[captionIndex].captionWords[wordIndex].text != value else { return }
+        registerUndoIfNeeded()
+        textOverlays[captionIndex].captionWords[wordIndex].text = value
+        textOverlays[captionIndex].text = textOverlays[captionIndex].captionWords
+            .map(\.text).joined(separator: " ")
+        scheduleSave()
+    }
+
+    /// Moves the boundary after one word while maintaining a valid, contiguous
+    /// pair. This provides precise timing correction without allowing inverted
+    /// or zero-length words.
+    func nudgeCaptionWordBoundary(
+        captionID: UUID,
+        afterWordID wordID: UUID,
+        by delta: TimeInterval
+    ) {
+        guard let captionIndex = textOverlays.firstIndex(where: { $0.id == captionID && $0.isCaption }),
+              let wordIndex = textOverlays[captionIndex].captionWords.firstIndex(where: { $0.id == wordID }),
+              wordIndex + 1 < textOverlays[captionIndex].captionWords.count else { return }
+        let words = textOverlays[captionIndex].captionWords
+        let minimumWordDuration: TimeInterval = 0.03
+        let currentBoundary = words[wordIndex].endTime
+        let lower = words[wordIndex].startTime + minimumWordDuration
+        let upper = words[wordIndex + 1].endTime - minimumWordDuration
+        let boundary = min(max(currentBoundary + delta, lower), upper)
+        guard abs(boundary - currentBoundary) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        textOverlays[captionIndex].captionWords[wordIndex].endTime = boundary
+        textOverlays[captionIndex].captionWords[wordIndex + 1].startTime = boundary
+        scheduleSave()
+    }
+
+    func removeCaptionWord(captionID: UUID, wordID: UUID) {
+        guard let captionIndex = textOverlays.firstIndex(where: { $0.id == captionID && $0.isCaption }),
+              let wordIndex = textOverlays[captionIndex].captionWords.firstIndex(where: { $0.id == wordID }) else { return }
+        guard textOverlays[captionIndex].captionWords.count > 1 else {
+            deleteTextOverlay(id: captionID)
+            return
+        }
+        registerUndoIfNeeded()
+        textOverlays[captionIndex].captionWords.remove(at: wordIndex)
+        let words = textOverlays[captionIndex].captionWords
+        textOverlays[captionIndex].startTime = words.first?.startTime ?? textOverlays[captionIndex].startTime
+        textOverlays[captionIndex].endTime = words.last?.endTime ?? textOverlays[captionIndex].endTime
+        textOverlays[captionIndex].text = words.map(\.text).joined(separator: " ")
+        scheduleSave()
+    }
+
+    func removeCaptionWords(_ wordIDs: Set<UUID>) {
+        guard !wordIDs.isEmpty,
+              textOverlays.contains(where: { overlay in
+                  overlay.isCaption && overlay.captionWords.contains { wordIDs.contains($0.id) }
+              }) else { return }
+        registerUndoIfNeeded()
+        let captionIDs = Set(textOverlays.filter(\.isCaption).map(\.id))
+        for index in textOverlays.indices where textOverlays[index].isCaption {
+            textOverlays[index].captionWords.removeAll { wordIDs.contains($0.id) }
+            let words = textOverlays[index].captionWords
+            if let first = words.first, let last = words.last {
+                textOverlays[index].startTime = first.startTime
+                textOverlays[index].endTime = last.endTime
+                textOverlays[index].text = words.map(\.text).joined(separator: " ")
+            }
+        }
+        let emptiedCaptionIDs = Set(textOverlays.filter {
+            captionIDs.contains($0.id) && $0.captionWords.isEmpty
+        }.map(\.id))
+        textOverlays.removeAll { emptiedCaptionIDs.contains($0.id) }
+        if let selectedTextOverlayID, emptiedCaptionIDs.contains(selectedTextOverlayID) {
+            self.selectedTextOverlayID = nil
+        }
+        scheduleSave()
+    }
+
+    func splitCaption(id: UUID, near timelineTime: TimeInterval? = nil) {
+        guard let index = textOverlays.firstIndex(where: { $0.id == id && $0.isCaption }) else { return }
+        let source = textOverlays[index]
+        guard source.captionWords.count >= 2 else { return }
+        let target = timelineTime ?? timelinePosition
+        let possibleBreaks = Array(1..<source.captionWords.count)
+        let splitIndex: Int
+        if target > source.startTime, target < source.endTime {
+            splitIndex = possibleBreaks.min {
+                abs(source.captionWords[$0].startTime - target)
+                    < abs(source.captionWords[$1].startTime - target)
+            } ?? source.captionWords.count / 2
+        } else {
+            splitIndex = source.captionWords.count / 2
+        }
+        let leftWords = Array(source.captionWords[..<splitIndex])
+        let rightWords = Array(source.captionWords[splitIndex...])
+        guard let leftEnd = leftWords.last?.endTime,
+              let rightStart = rightWords.first?.startTime else { return }
+
+        registerUndoIfNeeded()
+        let left = captionOverlay(
+            basedOn: source,
+            id: source.id,
+            words: leftWords,
+            start: source.startTime,
+            end: max(leftEnd, source.startTime + 0.03)
+        )
+        let right = captionOverlay(
+            basedOn: source,
+            words: rightWords,
+            start: min(rightStart, source.endTime - 0.03),
+            end: source.endTime
+        )
+        textOverlays.replaceSubrange(index...index, with: [left, right])
+        selectedTextOverlayID = right.id
+        scheduleSave()
+    }
+
+    func mergeCaptionWithNext(id: UUID) {
+        let orderedIDs = captionOverlays.map(\.id)
+        guard let orderedIndex = orderedIDs.firstIndex(of: id),
+              orderedIndex + 1 < orderedIDs.count,
+              let firstIndex = textOverlays.firstIndex(where: { $0.id == id }),
+              let secondIndex = textOverlays.firstIndex(where: { $0.id == orderedIDs[orderedIndex + 1] }) else { return }
+        let first = textOverlays[firstIndex]
+        let second = textOverlays[secondIndex]
+        let words = first.captionWords + second.captionWords
+        registerUndoIfNeeded()
+        textOverlays[firstIndex] = captionOverlay(
+            basedOn: first,
+            id: first.id,
+            words: words,
+            start: first.startTime,
+            end: max(first.endTime, second.endTime)
+        )
+        textOverlays.remove(at: secondIndex)
+        selectedTextOverlayID = first.id
+        scheduleSave()
+    }
+
+    func deleteAllCaptions() {
+        guard textOverlays.contains(where: \.isCaption) else { return }
+        registerUndoIfNeeded()
+        let captionIDs = Set(textOverlays.filter(\.isCaption).map(\.id))
+        textOverlays.removeAll { captionIDs.contains($0.id) }
+        if let selectedTextOverlayID, captionIDs.contains(selectedTextOverlayID) {
+            self.selectedTextOverlayID = nil
+            isTextEditorPresented = false
+        }
+        scheduleSave()
+    }
+
+    func applyCaptionStyle(_ source: EditorTextOverlay, toAll: Bool) {
+        registerUndoIfNeeded()
+        for index in textOverlays.indices where textOverlays[index].isCaption
+            && (toAll || textOverlays[index].id == source.id) {
+            textOverlays[index].fontSize = source.fontSize
+            textOverlays[index].fontFamily = source.fontFamily
+            textOverlays[index].fontStyle = source.fontStyle
+            textOverlays[index].textColor = source.textColor
+            textOverlays[index].captionHighlightColor = source.captionHighlightColor
+            textOverlays[index].opacity = source.opacity
+            textOverlays[index].horizontalAlignment = source.horizontalAlignment
+            textOverlays[index].verticalAlignment = source.verticalAlignment
+            textOverlays[index].xOffset = source.xOffset
+            textOverlays[index].yOffset = source.yOffset
+        }
+        scheduleSave()
+    }
+
+    func applyCaptionAnimation(_ animation: EditorTextAnimation, toAll: Bool = true) {
+        guard textOverlays.contains(where: \.isCaption) else { return }
+        if textEditUndoSnapshot == nil { registerUndoIfNeeded() }
+        for index in textOverlays.indices where textOverlays[index].isCaption
+            && (toAll || textOverlays[index].id == selectedTextOverlayID) {
+            textOverlays[index].animation = animation
+        }
+        scheduleSave()
+    }
+
+    func seekToCaption(_ id: UUID) {
+        guard let caption = textOverlays.first(where: { $0.id == id && $0.isCaption }) else { return }
+        selectedTextOverlayID = id
+        seekTimeline(to: caption.startTime)
+    }
+
     func addTextOverlay() {
         registerUndoIfNeeded()
 
@@ -3091,8 +3369,103 @@ final class EditorViewModel {
 
     func updateTextOverlay(_ overlay: EditorTextOverlay) {
         guard let idx = textOverlays.firstIndex(where: { $0.id == overlay.id }) else { return }
-        textOverlays[idx] = overlay
+        let current = textOverlays[idx]
+        var updated = overlay
+
+        // Captions render and export from their timed words, while the regular
+        // text editor edits `text`. Keep both representations in lockstep so a
+        // correction is immediately visible everywhere. Preserve the old words
+        // during a transient empty edit; dismissing the editor still deletes it.
+        let normalizedText = overlay.text
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .joined(separator: " ")
+        let renderedCaptionText = overlay.captionWords.map(\.text).joined(separator: " ")
+        if current.isCaption, !normalizedText.isEmpty,
+           normalizedText != renderedCaptionText {
+            updated.captionWords = retimedCaptionWords(
+                for: overlay.text,
+                in: overlay,
+                preserving: current.captionWords
+            )
+        }
+
+        textOverlays[idx] = updated
         scheduleSave()
+    }
+
+    private func retimedCaptionWords(
+        for text: String,
+        in overlay: EditorTextOverlay,
+        preserving existingWords: [EditorCaptionWord]
+    ) -> [EditorCaptionWord] {
+        let tokens = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !tokens.isEmpty else { return [] }
+
+        // A normal spelling correction does not change the word count. Retain
+        // the recognizer's word-level timing (and stable IDs used by karaoke
+        // highlighting) instead of needlessly redistributing the whole line.
+        if tokens.count == existingWords.count {
+            return zip(tokens, existingWords).map { token, existing in
+                EditorCaptionWord(
+                    id: existing.id,
+                    text: token,
+                    startTime: existing.startTime,
+                    endTime: existing.endTime,
+                    confidence: existing.confidence
+                )
+            }
+        }
+
+        let start = overlay.startTime
+        let end = max(start, overlay.endTime)
+        let step = (end - start) / Double(tokens.count)
+        return tokens.enumerated().map { offset, token in
+            EditorCaptionWord(
+                text: token,
+                startTime: start + Double(offset) * step,
+                endTime: offset == tokens.count - 1
+                    ? end
+                    : start + Double(offset + 1) * step,
+                confidence: offset < existingWords.count
+                    ? existingWords[offset].confidence
+                    : 1
+            )
+        }
+    }
+
+    private func captionOverlay(
+        basedOn source: EditorTextOverlay,
+        id: UUID = UUID(),
+        words: [EditorCaptionWord],
+        start: TimeInterval,
+        end: TimeInterval
+    ) -> EditorTextOverlay {
+        EditorTextOverlay(
+            id: id,
+            text: words.map(\.text).joined(separator: " "),
+            startTime: start,
+            endTime: end,
+            fontSize: source.fontSize,
+            fontFamily: source.fontFamily,
+            fontStyle: source.fontStyle,
+            textColor: source.textColor,
+            opacity: source.opacity,
+            horizontalAlignment: source.horizontalAlignment,
+            verticalAlignment: source.verticalAlignment,
+            xOffset: source.xOffset,
+            yOffset: source.yOffset,
+            keyframes: source.keyframes,
+            animation: source.animation,
+            attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID,
+            attachRotation: source.attachRotation,
+            attachScale: source.attachScale,
+            captionWords: words,
+            captionHighlightColor: source.captionHighlightColor,
+            captionLocaleIdentifier: source.captionLocaleIdentifier,
+            trackedRotationDegrees: source.trackedRotationDegrees
+        )
     }
 
     func beginTextOverlayEdit() {
@@ -3178,6 +3551,15 @@ final class EditorViewModel {
         guard let source = selectedTextOverlay else { return }
         let start = min(source.endTime, totalDuration)
         let duration = source.duration
+        let captionTimeOffset = start - source.startTime
+        let copiedCaptionWords = source.captionWords.map { word in
+            EditorCaptionWord(
+                text: word.text,
+                startTime: word.startTime + captionTimeOffset,
+                endTime: word.endTime + captionTimeOffset,
+                confidence: word.confidence
+            )
+        }
         let copy = EditorTextOverlay(
             text: source.text, startTime: start,
             endTime: min(totalDuration, start + duration), fontSize: source.fontSize,
@@ -3186,10 +3568,14 @@ final class EditorViewModel {
             horizontalAlignment: source.horizontalAlignment,
             verticalAlignment: source.verticalAlignment, xOffset: source.xOffset,
             yOffset: source.yOffset, keyframes: source.keyframes,
+            animation: source.animation,
             attachedClipID: source.attachedClipID,
             attachedTrackID: source.attachedTrackID,
             attachRotation: source.attachRotation,
-            attachScale: source.attachScale
+            attachScale: source.attachScale,
+            captionWords: copiedCaptionWords,
+            captionHighlightColor: source.captionHighlightColor,
+            captionLocaleIdentifier: source.captionLocaleIdentifier
         )
         guard copy.duration > 0.1 else { return }
         registerUndoIfNeeded()
@@ -3239,6 +3625,7 @@ final class EditorViewModel {
     }
 
     func commitTextOverlayTimeRange() {
+        normalizeCaptionWordsForCurrentRanges()
         if let before = textTimeRangeUndoSnapshot {
             if before != currentSnapshot() {
                 undoManager.pushUndoState(before)
@@ -3257,6 +3644,13 @@ final class EditorViewModel {
         guard let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
         let duration = textOverlays[idx].duration
         let clampedStart = snappedTime(startTime, excluding: id)
+        let delta = clampedStart - textOverlays[idx].startTime
+        if textOverlays[idx].isCaption, abs(delta) > 0.000_001 {
+            for wordIndex in textOverlays[idx].captionWords.indices {
+                textOverlays[idx].captionWords[wordIndex].startTime += delta
+                textOverlays[idx].captionWords[wordIndex].endTime += delta
+            }
+        }
         textOverlays[idx].startTime = clampedStart
         textOverlays[idx].endTime = clampedStart + duration
     }
@@ -3280,7 +3674,397 @@ final class EditorViewModel {
         textMoveUndoSnapshot = nil
     }
 
+    private func normalizeCaptionWordsForCurrentRanges() {
+        for index in textOverlays.indices where textOverlays[index].isCaption {
+            let start = textOverlays[index].startTime
+            let end = textOverlays[index].endTime
+            var words = textOverlays[index].captionWords.filter {
+                $0.endTime > start && $0.startTime < end
+            }
+            guard !words.isEmpty else { continue }
+            words[0].startTime = max(words[0].startTime, start)
+            words[words.count - 1].endTime = min(words[words.count - 1].endTime, end)
+            textOverlays[index].captionWords = words
+            textOverlays[index].text = words.map(\.text).joined(separator: " ")
+        }
+    }
+
     // MARK: Clips
+
+    var precisionEditMessage: String? {
+        guard let selectedClip, selectedClip.isVideo else {
+            return "Select a video clip to use precision editing."
+        }
+        if selectedClip.speedRamp != nil {
+            return "Commit or remove the speed curve before source-precision edits."
+        }
+        return nil
+    }
+
+    var canRollSelectedCut: Bool {
+        guard precisionEditMessage == nil,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              index + 1 < clips.count else { return false }
+        return clips[index + 1].isVideo && clips[index + 1].speedRamp == nil
+    }
+
+    var canSlideSelectedClip: Bool {
+        guard precisionEditMessage == nil,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              index > 0, index + 1 < clips.count else { return false }
+        return clips[index - 1].isVideo && clips[index + 1].isVideo
+            && clips[index - 1].speedRamp == nil && clips[index + 1].speedRamp == nil
+    }
+
+    func slipSelectedClip(by timelineDelta: TimeInterval) {
+        guard precisionEditMessage == nil,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        let clip = clips[index]
+        let sourceDelta = timelineDelta * TimeInterval(max(clip.averageSpeed, 0.001))
+        let minimumDelta = -clip.trimStart
+        let maximumDelta = clip.originalDuration - clip.trimEnd
+        let applied = min(max(sourceDelta, minimumDelta), maximumDelta)
+        guard abs(applied) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        clips[index].trimStart += applied
+        clips[index].trimEnd += applied
+        if !clips[index].isAudioLinked {
+            clips[index].audioTrimStart = (clips[index].audioTrimStart ?? clip.trimStart) + applied
+            clips[index].audioTrimEnd = (clips[index].audioTrimEnd ?? clip.trimEnd) + applied
+        }
+        finishPrecisionEdit()
+    }
+
+    func rollSelectedCut(by timelineDelta: TimeInterval) {
+        guard canRollSelectedCut,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        let left = clips[index]
+        let right = clips[index + 1]
+        let leftRate = TimeInterval(max(left.averageSpeed, 0.001))
+        let rightRate = TimeInterval(max(right.averageSpeed, 0.001))
+        let leftMinimum = EditorClip.minimumSourceSpan(speed: left.averageSpeed)
+        let rightMinimum = EditorClip.minimumSourceSpan(speed: right.averageSpeed)
+        let minimumDelta = max(
+            (left.trimStart + leftMinimum - left.trimEnd) / leftRate,
+            -right.trimStart / rightRate
+        )
+        let maximumDelta = min(
+            (left.originalDuration - left.trimEnd) / leftRate,
+            (right.trimEnd - rightMinimum - right.trimStart) / rightRate
+        )
+        let applied = min(max(timelineDelta, minimumDelta), maximumDelta)
+        guard abs(applied) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        clips[index].trimEnd += applied * leftRate
+        clips[index + 1].trimStart += applied * rightRate
+        clips[index].keyframes.trim(to: clips[index].duration)
+        clips[index + 1].keyframes.trim(to: clips[index + 1].duration)
+        clips[index].transitionDuration = min(
+            clips[index].transitionDuration,
+            min(clips[index].duration, clips[index + 1].duration)
+        )
+        finishPrecisionEdit()
+    }
+
+    func slideSelectedClip(by timelineDelta: TimeInterval) {
+        guard canSlideSelectedClip,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        let previous = clips[index - 1]
+        let next = clips[index + 1]
+        let previousRate = TimeInterval(max(previous.averageSpeed, 0.001))
+        let nextRate = TimeInterval(max(next.averageSpeed, 0.001))
+        let previousMinimum = EditorClip.minimumSourceSpan(speed: previous.averageSpeed)
+        let nextMinimum = EditorClip.minimumSourceSpan(speed: next.averageSpeed)
+        let minimumDelta = max(
+            (previous.trimStart + previousMinimum - previous.trimEnd) / previousRate,
+            -next.trimStart / nextRate
+        )
+        let maximumDelta = min(
+            (previous.originalDuration - previous.trimEnd) / previousRate,
+            (next.trimEnd - nextMinimum - next.trimStart) / nextRate
+        )
+        let applied = min(max(timelineDelta, minimumDelta), maximumDelta)
+        guard abs(applied) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        clips[index - 1].trimEnd += applied * previousRate
+        clips[index + 1].trimStart += applied * nextRate
+        clips[index - 1].keyframes.trim(to: clips[index - 1].duration)
+        clips[index + 1].keyframes.trim(to: clips[index + 1].duration)
+        clips[index - 1].transitionDuration = min(
+            clips[index - 1].transitionDuration,
+            min(clips[index - 1].duration, clips[index].duration)
+        )
+        clips[index].transitionDuration = min(
+            clips[index].transitionDuration,
+            min(clips[index].duration, clips[index + 1].duration)
+        )
+        timelinePosition = min(max(0, timelinePosition + applied), totalDuration)
+        finishPrecisionEdit()
+    }
+
+    func rippleTrimSelectedClipOut(by timelineDelta: TimeInterval) {
+        guard precisionEditMessage == nil,
+              let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }) else { return }
+        let oldDuration = clips[index].duration
+        let oldEnd = timelineOffsetForClipIndex(index) + oldDuration
+        let rate = TimeInterval(max(clips[index].averageSpeed, 0.001))
+        let minimum = clips[index].trimStart + EditorClip.minimumSourceSpan(speed: clips[index].averageSpeed)
+        let proposedEnd = clips[index].trimEnd + timelineDelta * rate
+        let newEnd = min(max(proposedEnd, minimum), clips[index].originalDuration)
+        guard abs(newEnd - clips[index].trimEnd) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        clips[index].trimEnd = newEnd
+        clips[index].keyframes.trim(to: clips[index].duration)
+        if index + 1 < clips.count {
+            clips[index].transitionDuration = min(
+                clips[index].transitionDuration,
+                min(clips[index].duration, clips[index + 1].duration)
+            )
+        }
+        let durationDelta = clips[index].duration - oldDuration
+        if durationDelta < 0 {
+            rippleDeleteTimedItems(from: oldEnd + durationDelta, to: oldEnd)
+        } else {
+            rippleInsertTimedItems(at: oldEnd, duration: durationDelta)
+        }
+        finishPrecisionEdit()
+    }
+
+    func toggleSelectedClipAudioLink() {
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips[index].isVideo, clips[index].speedRamp == nil else { return }
+        registerUndoIfNeeded()
+        if clips[index].isAudioLinked {
+            clips[index].audioTrimStart = clips[index].trimStart
+            clips[index].audioTrimEnd = clips[index].trimEnd
+            clips[index].isAudioLinked = false
+        } else {
+            clips[index].audioTrimStart = nil
+            clips[index].audioTrimEnd = nil
+            clips[index].isAudioLinked = true
+        }
+        finishPrecisionEdit()
+    }
+
+    func adjustSelectedClipAudioStart(by timelineDelta: TimeInterval) {
+        adjustSelectedEmbeddedAudioBoundary(isStart: true, by: timelineDelta)
+    }
+
+    func adjustSelectedClipAudioEnd(by timelineDelta: TimeInterval) {
+        adjustSelectedEmbeddedAudioBoundary(isStart: false, by: timelineDelta)
+    }
+
+    private func adjustSelectedEmbeddedAudioBoundary(isStart: Bool, by timelineDelta: TimeInterval) {
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips[index].isVideo, clips[index].speedRamp == nil else { return }
+        let original = clips[index]
+        let rate = TimeInterval(max(original.averageSpeed, 0.001))
+        var start = original.effectiveAudioTrimStart
+        var end = original.effectiveAudioTrimEnd
+        if isStart {
+            start = min(max(0, start + timelineDelta * rate), end - 0.03)
+        } else {
+            end = max(min(original.originalDuration, end + timelineDelta * rate), start + 0.03)
+        }
+        guard abs(start - original.effectiveAudioTrimStart) > 0.000_001
+                || abs(end - original.effectiveAudioTrimEnd) > 0.000_001 else { return }
+        registerUndoIfNeeded()
+        clips[index].isAudioLinked = false
+        clips[index].audioTrimStart = start
+        clips[index].audioTrimEnd = end
+        finishPrecisionEdit()
+    }
+
+    private func rippleInsertTimedItems(at boundary: TimeInterval, duration: TimeInterval) {
+        guard duration > 0.000_001 else { return }
+        for index in textOverlays.indices {
+            if textOverlays[index].startTime >= boundary - 0.000_001 {
+                textOverlays[index].startTime += duration
+                textOverlays[index].endTime += duration
+                for wordIndex in textOverlays[index].captionWords.indices {
+                    textOverlays[index].captionWords[wordIndex].startTime += duration
+                    textOverlays[index].captionWords[wordIndex].endTime += duration
+                }
+            } else if textOverlays[index].endTime > boundary {
+                textOverlays[index].endTime += duration
+                for wordIndex in textOverlays[index].captionWords.indices {
+                    if textOverlays[index].captionWords[wordIndex].startTime >= boundary {
+                        textOverlays[index].captionWords[wordIndex].startTime += duration
+                        textOverlays[index].captionWords[wordIndex].endTime += duration
+                    } else if textOverlays[index].captionWords[wordIndex].endTime > boundary {
+                        textOverlays[index].captionWords[wordIndex].endTime += duration
+                    }
+                }
+            }
+        }
+
+        var insertedAudio: [EditorAudioClip] = []
+        for var clip in audioClips {
+            if clip.timelineStart >= boundary - 0.000_001 {
+                clip.timelineStart += duration
+                insertedAudio.append(clip)
+            } else if clip.timelineEnd > boundary {
+                let sourceTime = clip.trimStart + (boundary - clip.timelineStart)
+                if let parts = clip.split(atSourceTime: sourceTime) {
+                    insertedAudio.append(parts.left)
+                    var tail = parts.right
+                    tail.timelineStart += duration
+                    insertedAudio.append(tail)
+                } else {
+                    insertedAudio.append(clip)
+                }
+            } else {
+                insertedAudio.append(clip)
+            }
+        }
+        audioClips = insertedAudio
+
+        var insertedOverlays: [EditorOverlayClip] = []
+        for var clip in overlayClips {
+            if clip.timelineStart >= boundary - 0.000_001 {
+                clip.timelineStart += duration
+                insertedOverlays.append(clip)
+            } else if clip.timelineEnd > boundary {
+                let sourceTime = clip.sourceTime(forTimelineLocal: boundary - clip.timelineStart)
+                if let parts = clip.split(atSourceTime: sourceTime) {
+                    insertedOverlays.append(parts.left)
+                    var tail = parts.right
+                    tail.timelineStart += duration
+                    insertedOverlays.append(tail)
+                } else {
+                    insertedOverlays.append(clip)
+                }
+            } else {
+                insertedOverlays.append(clip)
+            }
+        }
+        overlayClips = insertedOverlays
+    }
+
+    private func rippleDeleteTimedItems(from start: TimeInterval, to end: TimeInterval) {
+        let lower = max(0, min(start, end))
+        let upper = max(lower, max(start, end))
+        let removedDuration = upper - lower
+        guard removedDuration > 0.000_001 else { return }
+
+        var remappedText: [EditorTextOverlay] = []
+        for var overlay in textOverlays {
+            if overlay.endTime <= lower {
+                remappedText.append(overlay)
+            } else if overlay.startTime >= upper {
+                overlay.startTime -= removedDuration
+                overlay.endTime -= removedDuration
+                for index in overlay.captionWords.indices {
+                    overlay.captionWords[index].startTime -= removedDuration
+                    overlay.captionWords[index].endTime -= removedDuration
+                }
+                remappedText.append(overlay)
+            } else if overlay.isCaption {
+                var words = overlay.captionWords.filter {
+                    let midpoint = ($0.startTime + $0.endTime) / 2
+                    return midpoint < lower || midpoint >= upper
+                }
+                for index in words.indices where words[index].startTime >= upper {
+                    words[index].startTime -= removedDuration
+                    words[index].endTime -= removedDuration
+                }
+                guard let first = words.first, let last = words.last else { continue }
+                overlay.captionWords = words
+                overlay.text = words.map(\.text).joined(separator: " ")
+                overlay.startTime = first.startTime
+                overlay.endTime = last.endTime
+                remappedText.append(overlay)
+            } else if overlay.startTime < lower, overlay.endTime > upper {
+                overlay.endTime -= removedDuration
+                remappedText.append(overlay)
+            } else if overlay.startTime < lower {
+                overlay.endTime = lower
+                if overlay.duration > 0.03 { remappedText.append(overlay) }
+            } else if overlay.endTime > upper {
+                overlay.startTime = lower
+                overlay.endTime -= removedDuration
+                if overlay.duration > 0.03 { remappedText.append(overlay) }
+            }
+        }
+        textOverlays = remappedText
+
+        var remappedAudio: [EditorAudioClip] = []
+        for var clip in audioClips {
+            if clip.timelineEnd <= lower {
+                remappedAudio.append(clip)
+            } else if clip.timelineStart >= upper {
+                clip.timelineStart -= removedDuration
+                remappedAudio.append(clip)
+            } else if clip.timelineStart < lower, clip.timelineEnd > upper {
+                let sourceStart = clip.sourceTime(forTimelineLocal: lower - clip.timelineStart)
+                let sourceEnd = clip.sourceTime(forTimelineLocal: upper - clip.timelineStart)
+                if let splitAtStart = clip.split(atSourceTime: sourceStart),
+                   let splitAtEnd = splitAtStart.right.split(atSourceTime: sourceEnd) {
+                    remappedAudio.append(splitAtStart.left)
+                    var tail = splitAtEnd.right
+                    tail.timelineStart = lower
+                    remappedAudio.append(tail)
+                } else {
+                    remappedAudio.append(clip)
+                }
+            } else if clip.timelineStart < lower {
+                clip.trimEnd = clip.sourceTime(forTimelineLocal: lower - clip.timelineStart)
+                if clip.duration >= EditorAudioClip.minimumSpan { remappedAudio.append(clip) }
+            } else if clip.timelineEnd > upper {
+                clip.trimStart = clip.sourceTime(forTimelineLocal: upper - clip.timelineStart)
+                clip.timelineStart = lower
+                if clip.duration >= EditorAudioClip.minimumSpan { remappedAudio.append(clip) }
+            }
+        }
+        audioClips = remappedAudio
+
+        var remappedOverlays: [EditorOverlayClip] = []
+        for var clip in overlayClips {
+            if clip.timelineEnd <= lower {
+                remappedOverlays.append(clip)
+            } else if clip.timelineStart >= upper {
+                clip.timelineStart -= removedDuration
+                remappedOverlays.append(clip)
+            } else if clip.timelineStart < lower, clip.timelineEnd > upper {
+                let sourceStart = clip.sourceTime(forTimelineLocal: lower - clip.timelineStart)
+                let sourceEnd = clip.sourceTime(forTimelineLocal: upper - clip.timelineStart)
+                if let splitAtStart = clip.split(atSourceTime: sourceStart),
+                   let splitAtEnd = splitAtStart.right.split(atSourceTime: sourceEnd) {
+                    remappedOverlays.append(splitAtStart.left)
+                    var tail = splitAtEnd.right
+                    tail.timelineStart = lower
+                    remappedOverlays.append(tail)
+                } else {
+                    remappedOverlays.append(clip)
+                }
+            } else if clip.timelineStart < lower {
+                clip.trimEnd = clip.sourceTime(forTimelineLocal: lower - clip.timelineStart)
+                if clip.duration > 0.03 { remappedOverlays.append(clip) }
+            } else if clip.timelineEnd > upper {
+                clip.trimStart = clip.sourceTime(forTimelineLocal: upper - clip.timelineStart)
+                clip.timelineStart = lower
+                if clip.duration > 0.03 { remappedOverlays.append(clip) }
+            }
+        }
+        overlayClips = remappedOverlays
+    }
+
+    private func finishPrecisionEdit() {
+        pausePlaybackForEdit()
+        timelinePosition = min(max(0, timelinePosition), totalDuration)
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
 
     func setTrim(clipID: UUID, trimStart: TimeInterval, trimEnd: TimeInterval) {
         if trimUndoSnapshot == nil {
@@ -3376,6 +4160,17 @@ final class EditorViewModel {
         let clipEnd = clipStart + removedDuration
 
         clips.remove(at: index)
+        rippleDeleteTimedItems(from: clipStart, to: clipEnd)
+        for overlayIndex in textOverlays.indices
+        where textOverlays[overlayIndex].attachedClipID == id {
+            textOverlays[overlayIndex].attachedClipID = nil
+            textOverlays[overlayIndex].attachedTrackID = nil
+        }
+        for overlayIndex in overlayClips.indices
+        where overlayClips[overlayIndex].attachedClipID == id {
+            overlayClips[overlayIndex].attachedClipID = nil
+            overlayClips[overlayIndex].attachedTrackID = nil
+        }
 
         if timelinePosition >= clipEnd {
             timelinePosition -= removedDuration
@@ -3404,7 +4199,11 @@ final class EditorViewModel {
             asset: source.asset, originalDuration: source.originalDuration,
             trimStart: source.trimStart, trimEnd: source.trimEnd, speed: source.speed,
             speedRamp: source.speedRamp,
-            volume: source.volume, cropAspect: source.cropAspect, reframeMode: source.reframeMode,
+            volume: source.volume,
+            audioTrimStart: source.audioTrimStart,
+            audioTrimEnd: source.audioTrimEnd,
+            isAudioLinked: source.isAudioLinked,
+            cropAspect: source.cropAspect, reframeMode: source.reframeMode,
             rotationQuarterTurns: source.rotationQuarterTurns, straightenDegrees: source.straightenDegrees,
             isFlippedHorizontally: source.isFlippedHorizontally,
             isFlippedVertically: source.isFlippedVertically, reframeScale: source.reframeScale,
@@ -4138,6 +4937,7 @@ final class EditorViewModel {
         compositionFingerprint = nil
         saveTask?.cancel()
         exportTask?.cancel()
+        cancelCaptionTranscription()
         cancelMotionTracking()
         cancelColorMaskTracking()
         EditorExportService.cancelCurrentExport()
@@ -4289,7 +5089,7 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)|\($0.effect.rawValue)"

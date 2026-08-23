@@ -85,17 +85,31 @@ struct EditorTextOverlayLayerView: View {
         isSelected: Bool,
         canvasScale: CGFloat
     ) -> some View {
+        let localTime = min(max(0, vm.timelinePosition - overlay.startTime), overlay.duration)
+        let animation = overlay.animation.sample(localTime: localTime, duration: overlay.duration)
+        let revealCount = overlay.isCaption ? overlay.captionWords.count : overlay.text.count
+        let revealProgress = overlay.animation.revealProgress(
+            localTime: localTime,
+            itemCount: revealCount
+        )
         // Hit shape and selection chrome are applied *before* offset so they
         // travel with the glyphs. Applying `contentShape` after offset pinned
         // the drag target to the un-offset alignment slot.
-        let content = styledTextView(overlay, canvasScale: canvasScale)
+        let content = styledTextView(
+            overlay,
+            canvasScale: canvasScale,
+            revealProgress: revealProgress
+        )
+            .blur(radius: CGFloat(animation.blurRadius) * canvasScale)
+            .scaleEffect(CGFloat(animation.scale))
+            .opacity(animation.opacity)
             .rotationEffect(
                 .degrees(
                     overlay.keyframes.value(
                         for: .textRotation,
                         at: max(0, vm.timelinePosition - overlay.startTime),
                         default: 0
-                    ) + overlay.trackedRotationDegrees
+                    ) + overlay.trackedRotationDegrees + animation.rotationDegrees
                 )
             )
             .overlay(
@@ -109,7 +123,10 @@ struct EditorTextOverlayLayerView: View {
                     .padding(-4)
             )
             .contentShape(Rectangle().inset(by: -16))
-            .offset(x: overlay.xOffset * canvasScale, y: overlay.yOffset * canvasScale)
+            .offset(
+                x: (overlay.xOffset + CGFloat(animation.xOffset)) * canvasScale,
+                y: (overlay.yOffset + CGFloat(animation.yOffset)) * canvasScale
+            )
 
         if isSelected {
             content.highPriorityGesture(
@@ -148,29 +165,33 @@ struct EditorTextOverlayLayerView: View {
     @ViewBuilder
     private func styledTextView(
         _ overlay: EditorTextOverlay,
-        canvasScale: CGFloat
+        canvasScale: CGFloat,
+        revealProgress: Double = 1
     ) -> some View {
-        let baseText = Text(overlay.text)
+        let baseText: Text = overlay.isCaption
+            ? captionText(overlay, at: vm.timelinePosition, revealProgress: revealProgress)
+            : Text(revealedText(overlay.text, progress: revealProgress))
+        let styledBase = baseText
             .font(overlay.resolvedFont(sizeScale: canvasScale))
             .multilineTextAlignment(overlay.horizontalAlignment.alignment)
             .opacity(overlay.opacity)
 
         switch overlay.fontStyle {
         case .plain, .bold, .italic:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
 
         case .outlined:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .shadow(color: .black, radius: 0, x: canvasScale, y: canvasScale)
                 .shadow(color: .black, radius: 0, x: -canvasScale, y: -canvasScale)
                 .shadow(color: .black, radius: 0, x: canvasScale, y: -canvasScale)
                 .shadow(color: .black, radius: 0, x: -canvasScale, y: canvasScale)
 
         case .shadow:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .shadow(
                     color: .black.opacity(0.7),
                     radius: 4 * canvasScale,
@@ -179,8 +200,8 @@ struct EditorTextOverlayLayerView: View {
                 )
 
         case .background:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .padding(.horizontal, 8 * canvasScale)
                 .padding(.vertical, 4 * canvasScale)
                 .background(
@@ -188,5 +209,30 @@ struct EditorTextOverlayLayerView: View {
                         .fill(Color.black.opacity(0.6))
                 )
         }
+    }
+
+    private func captionText(
+        _ overlay: EditorTextOverlay,
+        at time: TimeInterval,
+        revealProgress: Double
+    ) -> Text {
+        let activeID = overlay.activeCaptionWordID(at: time)
+        let count = min(
+            overlay.captionWords.count,
+            max(0, Int(floor(Double(overlay.captionWords.count) * revealProgress)))
+        )
+        return overlay.captionWords.prefix(count).enumerated().reduce(Text("")) { result, pair in
+            let (index, word) = pair
+            let prefix = index == 0 ? "" : " "
+            let color = word.id == activeID
+                ? overlay.captionHighlightColor.color
+                : overlay.textColor.color
+            return result + Text(prefix + word.text).foregroundColor(color)
+        }
+    }
+
+    private func revealedText(_ text: String, progress: Double) -> String {
+        let count = min(text.count, max(0, Int(floor(Double(text.count) * progress))))
+        return String(text.prefix(count))
     }
 }

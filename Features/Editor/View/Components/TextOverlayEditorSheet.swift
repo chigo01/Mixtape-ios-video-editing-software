@@ -77,6 +77,8 @@ struct TextOverlayEditorSheet: View {
                             positionSection
                         } else if selectedTab == "Fonts" {
                             fontFamilySection
+                        } else if selectedTab == "Animate" {
+                            animationSection
                         }
 
                         deleteButton
@@ -122,7 +124,7 @@ struct TextOverlayEditorSheet: View {
 
     private var tabRow: some View {
         HStack(spacing: 0) {
-            ForEach(["Styles", "Fonts", "Effects"], id: \.self) { tab in
+            ForEach(["Styles", "Fonts", "Animate"], id: \.self) { tab in
                 let isActive = tab == selectedTab
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -148,11 +150,188 @@ struct TextOverlayEditorSheet: View {
         }
     }
 
+    // MARK: - Animation
+
+    private var animationSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("TEXT ANIMATION")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white.opacity(0.5))
+                    Text("Presets combine with your existing keyframes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    vm.seekTimeline(to: overlay.startTime)
+                    if !vm.isPlaying { vm.togglePlay() }
+                } label: {
+                    Label("Preview", systemImage: "play.fill")
+                }
+                .font(.caption.bold())
+                .foregroundStyle(Color.appColors.primaryColor)
+            }
+
+            animationPresetSection(
+                title: "IN",
+                selection: animationBinding(\.inPreset),
+                presets: [.none, .fade, .slideUp, .slideDown, .slideLeft, .slideRight, .zoom, .bounce, .blur, .typewriter, .pop]
+            )
+            animationPresetSection(
+                title: "OUT",
+                selection: animationBinding(\.outPreset),
+                presets: [.none, .fade, .slideUp, .slideDown, .slideLeft, .slideRight, .zoom, .bounce, .blur]
+            )
+            animationPresetSection(
+                title: "LOOP",
+                selection: animationBinding(\.loopPreset),
+                presets: [.none, .pulse, .bounce, .wiggle, .fade, .blur, .slideUp, .slideLeft]
+            )
+
+            if overlay.animation.inPreset != .none,
+               overlay.animation.inPreset != .typewriter {
+                animationSlider(
+                    title: "In duration",
+                    value: animationBinding(\.inDuration),
+                    range: 0.15...2,
+                    suffix: "s"
+                )
+            }
+            if overlay.animation.inPreset == .typewriter {
+                animationSlider(
+                    title: "Character delay",
+                    value: animationBinding(\.characterDelay),
+                    range: 0.015...0.2,
+                    suffix: "s"
+                )
+                if overlay.isCaption {
+                    Text("Captions reveal by word so highlighting remains readable.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if overlay.animation.outPreset != .none {
+                animationSlider(
+                    title: "Out duration",
+                    value: animationBinding(\.outDuration),
+                    range: 0.15...2,
+                    suffix: "s"
+                )
+            }
+            if overlay.animation.loopPreset != .none {
+                animationSlider(
+                    title: "Loop speed",
+                    value: animationBinding(\.loopDuration),
+                    range: 0.3...3,
+                    suffix: "s"
+                )
+            }
+            if overlay.animation.isAnimated {
+                animationSlider(
+                    title: "Intensity",
+                    value: animationBinding(\.intensity),
+                    range: 0.25...2,
+                    suffix: "×"
+                )
+
+                Button(role: .destructive) {
+                    overlay.animation = .none
+                } label: {
+                    Label("Clear animation", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if overlay.isCaption {
+                Button {
+                    vm.applyCaptionAnimation(overlay.animation)
+                } label: {
+                    Label("Apply animation to all captions", systemImage: "captions.bubble")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.appColors.primaryColor)
+                .foregroundStyle(.black)
+            }
+        }
+    }
+
+    private func animationPresetSection(
+        title: String,
+        selection: Binding<EditorTextAnimationPreset>,
+        presets: [EditorTextAnimationPreset]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.caption.bold()).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 9) {
+                    ForEach(presets) { preset in
+                        Button { selection.wrappedValue = preset } label: {
+                            VStack(spacing: 6) {
+                                Image(systemName: preset.systemImage)
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text(preset.title)
+                                    .font(.caption2.bold())
+                                    .lineLimit(1)
+                            }
+                            .foregroundColor(
+                                selection.wrappedValue == preset ? .black : .white
+                            )
+                            .frame(width: 72, height: 58)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(selection.wrappedValue == preset
+                                        ? Color.appColors.primaryColor
+                                        : Color.white.opacity(0.07))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    /// `Binding` already defines an `animation(_:)` method, so the shorthand
+    /// `$overlay.animation.inPreset` is parsed as that method instead of this
+    /// model property. An explicit writable key path removes the collision and
+    /// keeps every nested animation control live.
+    private func animationBinding<Value>(
+        _ keyPath: WritableKeyPath<EditorTextAnimation, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { overlay.animation[keyPath: keyPath] },
+            set: { overlay.animation[keyPath: keyPath] = $0 }
+        )
+    }
+
+    private func animationSlider(
+        title: String,
+        value: Binding<TimeInterval>,
+        range: ClosedRange<TimeInterval>,
+        suffix: String
+    ) -> some View {
+        VStack(spacing: 7) {
+            HStack {
+                Text(title).font(.subheadline)
+                Spacer()
+                Text(String(format: "%.2f%@", value.wrappedValue, suffix))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(Color.appColors.primaryColor)
+            }
+            Slider(value: value, in: range)
+                .tint(Color.appColors.primaryColor)
+        }
+    }
+
     // MARK: - Text input
 
     private var textInputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Enter text…", text: $overlay.text, axis: .vertical)
+            TextField("Enter text…", text: overlayTextBinding, axis: .vertical)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.white)
                 .lineLimit(1...4)
@@ -168,6 +347,19 @@ struct TextOverlayEditorSheet: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         }
+    }
+
+    /// The sheet owns a working copy for style controls, but caption preview
+    /// renders the view model's timed words. Write text through immediately so
+    /// typing and the canvas can never drift apart while the sheet is open.
+    private var overlayTextBinding: Binding<String> {
+        Binding(
+            get: { overlay.text },
+            set: { newText in
+                overlay.text = newText
+                vm.updateTextOverlay(overlay)
+            }
+        )
     }
 
     // MARK: - Font Family Grid

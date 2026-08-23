@@ -29,7 +29,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -58,6 +58,7 @@ enum EditorCompositionBuilder {
         let timeRange: CMTimeRange
         let volume: Float
         let keyframes: EditorKeyframeTracks
+        let keyframeTimeOffset: TimeInterval
     }
 
     private struct VideoSegment {
@@ -120,14 +121,9 @@ enum EditorCompositionBuilder {
             )
         else { return nil }
 
-        let compositionAudioTrack = composition.addMutableTrack(
-            withMediaType: .audio,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        )
-
         var cursor = CMTime.zero
         var videoSegments: [VideoSegment] = []
-        var audioVolumeSegments: [AudioVolumeSegment] = []
+        var embeddedAudioSegments: [(track: AVMutableCompositionTrack, segment: AudioVolumeSegment)] = []
 
         for (clipIndex, clip) in clips.enumerated() {
             let segmentDuration = CMTime(seconds: clip.duration, preferredTimescale: timescale)
@@ -176,25 +172,45 @@ enum EditorCompositionBuilder {
                     )
                 }
 
-                if let compositionAudioTrack,
-                   let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first {
+                if let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first,
+                   let clipAudioTrack = composition.addMutableTrack(
+                       withMediaType: .audio,
+                       preferredTrackID: kCMPersistentTrackID_Invalid
+                   ) {
+                    let rate = TimeInterval(max(clip.averageSpeed, 0.001))
+                    var audioSourceStart = clip.effectiveAudioTrimStart
+                    let audioSourceEnd = clip.effectiveAudioTrimEnd
+                    var audioTimelineStart = cursor.seconds
+                        + (audioSourceStart - clip.trimStart) / rate
+                    if audioTimelineStart < 0 {
+                        audioSourceStart = min(audioSourceEnd, audioSourceStart - audioTimelineStart * rate)
+                        audioTimelineStart = 0
+                    }
+                    let audioSourceSpan = max(0, audioSourceEnd - audioSourceStart)
+                    let audioTimelineDuration = audioSourceSpan / rate
+                    let audioTimeRange = CMTimeRange(
+                        start: CMTime(seconds: audioTimelineStart, preferredTimescale: timescale),
+                        duration: CMTime(seconds: audioTimelineDuration, preferredTimescale: timescale)
+                    )
                     insertSpeedAdjusted(
                         sourceTrack: sourceAudio,
-                        into: compositionAudioTrack,
-                        sourceStart: sourceStart,
-                        sourceDuration: sourceDuration,
-                        timelineDuration: segmentDuration,
-                        timelineStart: cursor,
+                        into: clipAudioTrack,
+                        sourceStart: CMTime(seconds: audioSourceStart, preferredTimescale: timescale),
+                        sourceDuration: CMTime(seconds: audioSourceSpan, preferredTimescale: timescale),
+                        timelineDuration: audioTimeRange.duration,
+                        timelineStart: audioTimeRange.start,
                         uniformSpeed: clip.speed,
-                        ramp: clip.speedRamp
+                        ramp: clip.isAudioLinked ? clip.speedRamp : nil
                     )
-                    audioVolumeSegments.append(
+                    embeddedAudioSegments.append((
+                        clipAudioTrack,
                         AudioVolumeSegment(
-                            timeRange: segmentRange,
+                            timeRange: audioTimeRange,
                             volume: clip.volume,
-                            keyframes: clip.keyframes
+                            keyframes: clip.keyframes,
+                            keyframeTimeOffset: (audioSourceStart - clip.trimStart) / rate
                         )
-                    )
+                    ))
                 }
             } else if let photoURL = await photoVideoURL(for: clip.asset, duration: clip.duration) {
                 let photoAsset = AVURLAsset(url: photoURL)
@@ -355,22 +371,106 @@ enum EditorCompositionBuilder {
 
             let totalDuration = timelineExtent
             for overlay in textOverlays {
-                if let image = EditorTextOverlayRenderer.render(overlay: overlay, renderSize: renderSize) {
-                    let textLayer = CALayer()
-                    textLayer.contents = image.cgImage
-                    textLayer.contentsScale = 1
-                    textLayer.frame = CGRect(origin: .zero, size: renderSize)
-                    textLayer.opacity = 0
+                let renderStates: [(EditorTextOverlay, UUID?)]
+                if overlay.isCaption, overlay.animation.inPreset == .typewriter {
+                    let delay = max(overlay.animation.characterDelay, 0.015)
+                    var breakpoints = [overlay.startTime, overlay.endTime]
+                    breakpoints.append(contentsOf: overlay.captionWords.map(\.startTime))
+                    breakpoints.append(contentsOf: overlay.captionWords.indices.map {
+                        overlay.startTime + Double($0 + 1) * delay
+                    })
+                    let orderedBreakpoints = Array(Set(breakpoints.map {
+                        min(max($0, overlay.startTime), overlay.endTime)
+                    })).sorted()
+                    renderStates = zip(orderedBreakpoints, orderedBreakpoints.dropFirst()).compactMap {
+                        stateStart, stateEnd in
+                        guard stateEnd > stateStart else { return nil }
+                        let progress = overlay.animation.revealProgress(
+                            localTime: stateStart - overlay.startTime + 0.000_1,
+                            itemCount: overlay.captionWords.count
+                        )
+                        let count = min(
+                            overlay.captionWords.count,
+                            max(0, Int(floor(Double(overlay.captionWords.count) * progress)))
+                        )
+                        guard count > 0 else { return nil }
+                        var timedOverlay = overlay
+                        timedOverlay.captionWords = Array(overlay.captionWords.prefix(count))
+                        timedOverlay.text = timedOverlay.captionWords.map(\.text).joined(separator: " ")
+                        timedOverlay.startTime = stateStart
+                        timedOverlay.endTime = stateEnd
+                        let highlightedID = overlay.activeCaptionWordID(at: stateStart + 0.000_1)
+                        return (timedOverlay, highlightedID)
+                    }
+                } else if overlay.isCaption {
+                    renderStates = overlay.captionWords.enumerated().map { index, word in
+                        var timedOverlay = overlay
+                        timedOverlay.startTime = index == 0 ? overlay.startTime : word.startTime
+                        timedOverlay.endTime = index + 1 < overlay.captionWords.count
+                            ? overlay.captionWords[index + 1].startTime
+                            : overlay.endTime
+                        return (timedOverlay, word.id)
+                    }
+                } else if overlay.animation.inPreset == .typewriter, !overlay.text.isEmpty {
+                    let characters = Array(overlay.text)
+                    let delay = max(overlay.animation.characterDelay, 0.015)
+                    renderStates = characters.indices.compactMap { index in
+                        let stateStart = overlay.startTime + Double(index + 1) * delay
+                        guard stateStart < overlay.endTime else { return nil }
+                        var timedOverlay = overlay
+                        timedOverlay.text = String(characters.prefix(index + 1))
+                        timedOverlay.startTime = stateStart
+                        timedOverlay.endTime = index + 1 < characters.count
+                            ? min(overlay.endTime, stateStart + delay)
+                            : overlay.endTime
+                        return (timedOverlay, nil)
+                    }
+                } else {
+                    renderStates = [(overlay, nil)]
+                }
 
-                    addTextAnimations(
-                        to: textLayer,
-                        overlay: overlay,
-                        clips: clips,
-                        overlayClips: overlayClips,
-                        totalDuration: totalDuration,
-                        renderSize: renderSize
+                for (renderOverlay, highlightedWordID) in renderStates {
+                    let usesBlur = [
+                        overlay.animation.inPreset,
+                        overlay.animation.outPreset,
+                        overlay.animation.loopPreset
+                    ].contains(.blur)
+                    let usesPhaseBlur = overlay.animation.inPreset == .blur
+                        || overlay.animation.outPreset == .blur
+                    let maximumBlurRadius = max(
+                        1,
+                        (usesPhaseBlur ? 14 : 2.5) * overlay.animation.intensity
                     )
-                    parentLayer.addSublayer(textLayer)
+                    let layerVariants: [(isBlurred: Bool, radius: CGFloat)] = usesBlur
+                        ? [(false, 0), (true, CGFloat(maximumBlurRadius))]
+                        : [(false, 0)]
+
+                    for variant in layerVariants {
+                        guard let image = EditorTextOverlayRenderer.render(
+                            overlay: renderOverlay,
+                            renderSize: renderSize,
+                            highlightedCaptionWordID: highlightedWordID,
+                            blurRadius: variant.radius
+                        ) else { continue }
+                        let textLayer = CALayer()
+                        textLayer.contents = image.cgImage
+                        textLayer.contentsScale = 1
+                        textLayer.frame = CGRect(origin: .zero, size: renderSize)
+                        textLayer.opacity = 0
+
+                        addTextAnimations(
+                            to: textLayer,
+                            overlay: renderOverlay,
+                            animationSource: overlay,
+                            clips: clips,
+                            overlayClips: overlayClips,
+                            totalDuration: totalDuration,
+                            renderSize: renderSize,
+                            blurLayer: variant.isBlurred,
+                            maximumBlurRadius: maximumBlurRadius
+                        )
+                        parentLayer.addSublayer(textLayer)
+                    }
                 }
             }
 
@@ -405,25 +505,17 @@ enum EditorCompositionBuilder {
         }
 
         // Per-clip volume
-        if let clipAudioTrack = compositionAudioTrack, !audioVolumeSegments.isEmpty {
-            let needsClipMix = abs(masterVolume - 1.0) > 0.001
-                || audioVolumeSegments.contains {
-                    abs($0.volume - 1.0) > 0.001
-                        || !$0.keyframes.track(for: .volume).isEmpty
-                }
-            if needsClipMix {
-                let params = AVMutableAudioMixInputParameters(track: clipAudioTrack)
-                for seg in audioVolumeSegments {
-                    applyVolumeAutomation(
-                        to: params,
-                        timeRange: seg.timeRange,
-                        baseVolume: seg.volume,
-                        keyframes: seg.keyframes,
-                        extraGain: masterVolume
-                    )
-                }
-                mixParams.append(params)
-            }
+        for embedded in embeddedAudioSegments {
+            let params = AVMutableAudioMixInputParameters(track: embedded.track)
+            applyVolumeAutomation(
+                to: params,
+                timeRange: embedded.segment.timeRange,
+                baseVolume: embedded.segment.volume,
+                keyframes: embedded.segment.keyframes,
+                keyframeTimeOffset: embedded.segment.keyframeTimeOffset,
+                extraGain: masterVolume
+            )
+            mixParams.append(params)
         }
 
         // Background music clips
@@ -539,6 +631,7 @@ enum EditorCompositionBuilder {
         timeRange: CMTimeRange,
         baseVolume: Float,
         keyframes: EditorKeyframeTracks,
+        keyframeTimeOffset: TimeInterval = 0,
         fadeIn: TimeInterval = 0,
         fadeOut: TimeInterval = 0,
         extraGain: Float = 1.0
@@ -555,7 +648,7 @@ enum EditorCompositionBuilder {
         let sampleCount = min(600, max(1, Int(ceil(duration * 12))))
         func value(at localTime: TimeInterval) -> Float {
             let automated = volumeTrack.value(
-                at: localTime,
+                at: localTime + keyframeTimeOffset,
                 default: Double(baseVolume)
             )
             let fadeInGain = fadeIn > 0 ? min(max(localTime / fadeIn, 0), 1) : 1
@@ -586,10 +679,13 @@ enum EditorCompositionBuilder {
     private static func addTextAnimations(
         to layer: CALayer,
         overlay: EditorTextOverlay,
+        animationSource: EditorTextOverlay,
         clips: [EditorClip],
         overlayClips: [EditorOverlayClip],
         totalDuration: TimeInterval,
-        renderSize: CGSize
+        renderSize: CGSize,
+        blurLayer: Bool,
+        maximumBlurRadius: Double
     ) {
         guard totalDuration > 0 else { return }
         let sampleCount = min(1_800, max(2, Int(ceil(totalDuration * 30))))
@@ -601,57 +697,70 @@ enum EditorCompositionBuilder {
             matching: renderSize
         )
         let attachment = textAttachment(
-            for: overlay,
+            for: animationSource,
             clips: clips,
             overlayClips: overlayClips
         )
 
         for index in 0...sampleCount {
             let globalTime = totalDuration * Double(index) / Double(sampleCount)
-            let localTime = min(max(0, globalTime - overlay.startTime), overlay.duration)
+            let localTime = min(
+                max(0, globalTime - animationSource.startTime),
+                animationSource.duration
+            )
             let visible = globalTime >= overlay.startTime && globalTime < overlay.endTime
+            let textAnimation = animationSource.animation.sample(
+                localTime: localTime,
+                duration: animationSource.duration
+            )
+            let blurMix = min(max(textAnimation.blurRadius / max(maximumBlurRadius, 0.001), 0), 1)
+            let blurOpacity = blurLayer ? blurMix : 1 - blurMix
             let opacity = visible
-                ? overlay.keyframes.value(
+                ? animationSource.keyframes.value(
                     for: .opacity,
                     at: localTime,
-                    default: overlay.opacity
-                )
+                    default: animationSource.opacity
+                ) * textAnimation.opacity * blurOpacity
                 : 0
-            var x = overlay.keyframes.value(
+            var x = animationSource.keyframes.value(
                 for: .textPositionX,
                 at: localTime,
-                default: Double(overlay.xOffset)
+                default: Double(animationSource.xOffset)
             )
-            var y = overlay.keyframes.value(
+            var y = animationSource.keyframes.value(
                 for: .textPositionY,
                 at: localTime,
-                default: Double(overlay.yOffset)
+                default: Double(animationSource.yOffset)
             )
-            var scale = overlay.keyframes.value(
+            var scale = animationSource.keyframes.value(
                 for: .textScale,
                 at: localTime,
                 default: 1
             )
-            var rotation = overlay.keyframes.value(
+            var rotation = animationSource.keyframes.value(
                 for: .textRotation,
                 at: localTime,
                 default: 0
             )
+            x += textAnimation.xOffset
+            y += textAnimation.yOffset
+            scale *= textAnimation.scale
+            rotation += textAnimation.rotationDegrees
             if let attachment {
                 let compositionTime = CMTime(seconds: globalTime, preferredTimescale: timescale)
                 let sample = attachment.resolved(at: compositionTime)
                 x += (sample.x - attachment.seedX) * Double(previewCanvas.width)
                 y += (sample.y - attachment.seedY) * Double(previewCanvas.height)
-                if overlay.attachScale {
+                if animationSource.attachScale {
                     scale *= sample.scale / max(attachment.seedScale, 0.000_001)
                 }
-                if overlay.attachRotation {
+                if animationSource.attachRotation {
                     rotation += (sample.rotation - attachment.seedRotation) * 180 / .pi
                 }
             }
             var transform = CATransform3DMakeTranslation(
-                CGFloat(x - Double(overlay.xOffset)) * screenScale,
-                CGFloat(y - Double(overlay.yOffset)) * screenScale,
+                CGFloat(x - Double(animationSource.xOffset)) * screenScale,
+                CGFloat(y - Double(animationSource.yOffset)) * screenScale,
                 0
             )
             transform = CATransform3DScale(transform, CGFloat(scale), CGFloat(scale), 1)

@@ -7,6 +7,31 @@
 
 import SwiftUI
 
+/// A single recognized word in a caption segment. Times are absolute timeline
+/// seconds so seeking, highlighting, SRT conversion, and future transcript
+/// edits all share one deterministic clock.
+struct EditorCaptionWord: Identifiable, Hashable, Codable {
+    let id: UUID
+    var text: String
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+    var confidence: Float
+
+    init(
+        id: UUID = UUID(),
+        text: String,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        confidence: Float = 1
+    ) {
+        self.id = id
+        self.text = text
+        self.startTime = startTime
+        self.endTime = max(startTime, endTime)
+        self.confidence = min(max(confidence, 0), 1)
+    }
+}
+
 // MARK: - Font style presets (the "Aa" chips)
 
 enum TextOverlayFontStyle: String, CaseIterable, Identifiable, Hashable, Codable {
@@ -195,6 +220,219 @@ enum TextOverlayFontFamily: String, CaseIterable, Identifiable, Hashable, Codabl
     }
 }
 
+// MARK: - Text animation
+
+enum EditorTextAnimationPreset: String, CaseIterable, Identifiable, Hashable, Codable {
+    case none
+    case fade
+    case slideUp
+    case slideDown
+    case slideLeft
+    case slideRight
+    case zoom
+    case bounce
+    case blur
+    case typewriter
+    case pop
+    case pulse
+    case wiggle
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .fade: return "Fade"
+        case .slideUp: return "Slide Up"
+        case .slideDown: return "Slide Down"
+        case .slideLeft: return "Slide Left"
+        case .slideRight: return "Slide Right"
+        case .zoom: return "Zoom"
+        case .bounce: return "Bounce"
+        case .blur: return "Blur"
+        case .typewriter: return "Typewriter"
+        case .pop: return "Pop"
+        case .pulse: return "Pulse"
+        case .wiggle: return "Wiggle"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .none: return "nosign"
+        case .fade: return "circle.lefthalf.filled"
+        case .slideUp: return "arrow.up"
+        case .slideDown: return "arrow.down"
+        case .slideLeft: return "arrow.left"
+        case .slideRight: return "arrow.right"
+        case .zoom: return "arrow.up.left.and.arrow.down.right"
+        case .bounce: return "arrow.up.and.down"
+        case .blur: return "aqi.medium"
+        case .typewriter: return "character.cursor.ibeam"
+        case .pop: return "sparkles"
+        case .pulse: return "waveform.path"
+        case .wiggle: return "water.waves"
+        }
+    }
+}
+
+struct EditorTextAnimation: Hashable, Codable {
+    var inPreset: EditorTextAnimationPreset
+    var outPreset: EditorTextAnimationPreset
+    var loopPreset: EditorTextAnimationPreset
+    var inDuration: TimeInterval
+    var outDuration: TimeInterval
+    var loopDuration: TimeInterval
+    var intensity: Double
+    var characterDelay: TimeInterval
+
+    static let none = EditorTextAnimation(
+        inPreset: .none,
+        outPreset: .none,
+        loopPreset: .none,
+        inDuration: 0.45,
+        outDuration: 0.35,
+        loopDuration: 1.2,
+        intensity: 1,
+        characterDelay: 0.055
+    )
+
+    var isAnimated: Bool {
+        inPreset != .none || outPreset != .none || loopPreset != .none
+    }
+
+    func sample(localTime: TimeInterval, duration: TimeInterval) -> EditorTextAnimationSample {
+        guard isAnimated, duration > 0 else { return .identity }
+        let time = min(max(0, localTime), duration)
+        var result = EditorTextAnimationSample.identity
+        let strength = min(max(intensity, 0), 2)
+
+        if inPreset != .none, inDuration > 0, time < min(inDuration, duration) {
+            let progress = min(max(time / min(inDuration, duration), 0), 1)
+            result.combine(phaseSample(for: inPreset, progress: progress, entering: true, strength: strength))
+        }
+        if outPreset != .none, outDuration > 0, time > max(0, duration - outDuration) {
+            let progress = min(max((duration - time) / min(outDuration, duration), 0), 1)
+            result.combine(phaseSample(for: outPreset, progress: progress, entering: false, strength: strength))
+        }
+        if loopPreset != .none {
+            let period = max(loopDuration, 0.15)
+            let phase = (time.truncatingRemainder(dividingBy: period)) / period
+            result.combine(loopSample(for: loopPreset, phase: phase, strength: strength))
+        }
+        return result
+    }
+
+    func revealProgress(localTime: TimeInterval, itemCount: Int) -> Double {
+        guard inPreset == .typewriter, itemCount > 0 else { return 1 }
+        let revealDuration = max(0.05, Double(itemCount) * max(characterDelay, 0.015))
+        return min(max(localTime / revealDuration, 0), 1)
+    }
+
+    private func phaseSample(
+        for preset: EditorTextAnimationPreset,
+        progress: Double,
+        entering: Bool,
+        strength: Double
+    ) -> EditorTextAnimationSample {
+        let eased = 1 - pow(1 - progress, 3)
+        let hidden = 1 - eased
+        let direction = entering ? hidden : -hidden
+        var sample = EditorTextAnimationSample.identity
+        switch preset {
+        case .none, .typewriter:
+            break
+        case .fade:
+            sample.opacity = eased
+        case .slideUp:
+            sample.opacity = eased
+            sample.yOffset = 70 * direction * strength
+        case .slideDown:
+            sample.opacity = eased
+            sample.yOffset = -70 * direction * strength
+        case .slideLeft:
+            sample.opacity = eased
+            sample.xOffset = 90 * direction * strength
+        case .slideRight:
+            sample.opacity = eased
+            sample.xOffset = -90 * direction * strength
+        case .zoom:
+            sample.opacity = eased
+            sample.scale = 0.55 + 0.45 * eased
+        case .bounce:
+            sample.opacity = eased
+            sample.yOffset = 55 * hidden * strength - sin(progress * .pi * 3) * 12 * hidden * strength
+        case .blur:
+            sample.opacity = eased
+            sample.blurRadius = 14 * hidden * strength
+        case .pop:
+            sample.opacity = eased
+            sample.scale = 0.6 + 0.4 * eased + sin(progress * .pi) * 0.16 * strength
+        case .pulse, .wiggle:
+            break
+        }
+        return sample
+    }
+
+    private func loopSample(
+        for preset: EditorTextAnimationPreset,
+        phase: Double,
+        strength: Double
+    ) -> EditorTextAnimationSample {
+        var sample = EditorTextAnimationSample.identity
+        let wave = sin(phase * .pi * 2)
+        switch preset {
+        case .pulse, .pop, .zoom:
+            sample.scale = 1 + 0.07 * wave * strength
+        case .bounce:
+            sample.yOffset = -10 * abs(wave) * strength
+        case .wiggle:
+            sample.rotationDegrees = 3.5 * wave * strength
+        case .fade:
+            sample.opacity = 0.82 + 0.18 * (wave + 1) / 2
+        case .blur:
+            sample.blurRadius = 2.5 * (wave + 1) / 2 * strength
+        case .slideUp, .slideDown:
+            sample.yOffset = 5 * wave * strength
+        case .slideLeft, .slideRight:
+            sample.xOffset = 5 * wave * strength
+        case .none, .typewriter:
+            break
+        }
+        return sample
+    }
+}
+
+struct EditorTextAnimationSample: Hashable {
+    var opacity: Double
+    var scale: Double
+    var xOffset: Double
+    var yOffset: Double
+    var rotationDegrees: Double
+    var blurRadius: Double
+    var revealProgress: Double
+
+    static let identity = EditorTextAnimationSample(
+        opacity: 1,
+        scale: 1,
+        xOffset: 0,
+        yOffset: 0,
+        rotationDegrees: 0,
+        blurRadius: 0,
+        revealProgress: 1
+    )
+
+    mutating func combine(_ other: EditorTextAnimationSample) {
+        opacity *= other.opacity
+        scale *= other.scale
+        xOffset += other.xOffset
+        yOffset += other.yOffset
+        rotationDegrees += other.rotationDegrees
+        blurRadius = max(blurRadius, other.blurRadius)
+        revealProgress = min(revealProgress, other.revealProgress)
+    }
+}
+
 // MARK: - Text overlay model
 
 struct EditorTextOverlay: Identifiable, Hashable {
@@ -214,10 +452,17 @@ struct EditorTextOverlay: Identifiable, Hashable {
     var xOffset: CGFloat
     var yOffset: CGFloat
     var keyframes: EditorKeyframeTracks
+    var animation: EditorTextAnimation
     var attachedClipID: UUID?
     var attachedTrackID: UUID?
     var attachRotation: Bool
     var attachScale: Bool
+    /// Non-empty only for transcript-backed text. Keeping captions in the
+    /// normal text-overlay model gives them existing trim/move, undo,
+    /// persistence, preview, and export behavior without a parallel renderer.
+    var captionWords: [EditorCaptionWord]
+    var captionHighlightColor: TextOverlayColor
+    var captionLocaleIdentifier: String?
     /// Display-only rotation contributed by an attached planar track.
     var trackedRotationDegrees: Double
 
@@ -236,10 +481,14 @@ struct EditorTextOverlay: Identifiable, Hashable {
         xOffset: CGFloat = 0,
         yOffset: CGFloat = 0,
         keyframes: EditorKeyframeTracks = .empty,
+        animation: EditorTextAnimation = .none,
         attachedClipID: UUID? = nil,
         attachedTrackID: UUID? = nil,
         attachRotation: Bool = false,
         attachScale: Bool = false,
+        captionWords: [EditorCaptionWord] = [],
+        captionHighlightColor: TextOverlayColor = .yellow,
+        captionLocaleIdentifier: String? = nil,
         trackedRotationDegrees: Double = 0
     ) {
         self.id = id
@@ -256,14 +505,26 @@ struct EditorTextOverlay: Identifiable, Hashable {
         self.xOffset = xOffset
         self.yOffset = yOffset
         self.keyframes = keyframes
+        self.animation = animation
         self.attachedClipID = attachedClipID
         self.attachedTrackID = attachedTrackID
         self.attachRotation = attachRotation
         self.attachScale = attachScale
+        self.captionWords = captionWords
+        self.captionHighlightColor = captionHighlightColor
+        self.captionLocaleIdentifier = captionLocaleIdentifier
         self.trackedRotationDegrees = trackedRotationDegrees
     }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
+
+    var isCaption: Bool { !captionWords.isEmpty }
+
+    func activeCaptionWordID(at timelineTime: TimeInterval) -> UUID? {
+        captionWords.first {
+            timelineTime >= $0.startTime && timelineTime < $0.endTime
+        }?.id
+    }
 
     /// The resolved SwiftUI Font for rendering on the preview.
     /// `sizeScale` maps a stored point size onto a live canvas that is not

@@ -33,9 +33,20 @@ final class AudioLibraryViewModel {
     @ObservationIgnored private var searchGeneration = 0
     @ObservationIgnored private static let favoritesDefaultsKey = "EditorAudioLibrary.favoriteIDs"
 
+    init() {
+        let bundledProvider = BundledAudioLibraryProvider.shared
+        let remoteProvider = FreesoundAudioLibraryProvider.shared
+        self.bundledProvider = bundledProvider
+        self.remoteProvider = remoteProvider
+        self.remoteSourceName = remoteProvider.sourceName
+        self.favoriteIDs = Set(
+            UserDefaults.standard.stringArray(forKey: Self.favoritesDefaultsKey) ?? []
+        )
+    }
+
     init(
-        bundledProvider: EditorAudioLibraryProviding = BundledAudioLibraryProvider.shared,
-        remoteProvider: EditorAudioLibraryProviding? = FreesoundAudioLibraryProvider.shared
+        bundledProvider: EditorAudioLibraryProviding,
+        remoteProvider: EditorAudioLibraryProviding?
     ) {
         self.bundledProvider = bundledProvider
         self.remoteProvider = remoteProvider

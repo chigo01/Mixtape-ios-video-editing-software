@@ -1004,7 +1004,10 @@ private struct TextOverlayThumb: View {
     }
 
     private var barWidth: CGFloat {
-        max(44, endX - displayStartX)
+        // Caption segments are often well under a second. Giving every one a
+        // 44pt minimum made neighboring captions overlap into an unreadable
+        // stack. Their bars must remain faithful to timeline time.
+        overlay.isCaption ? max(2, endX - displayStartX) : max(44, endX - displayStartX)
     }
 
     var body: some View {
@@ -1052,28 +1055,54 @@ private struct TextOverlayThumb: View {
     }
 
     private var barContent: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "textformat")
-                .font(.system(size: 9, weight: .bold))
-            Text(truncated(overlay.text))
-                .font(.system(size: 10, weight: .semibold))
-                .lineLimit(1)
+        Group {
+            if overlay.isCaption {
+                HStack(spacing: 0) {
+                    if barWidth >= 24 {
+                        Text(overlay.text)
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .padding(.horizontal, 5)
+                    }
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "textformat")
+                        .font(.system(size: 9, weight: .bold))
+                    if overlay.animation.isAnimated {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Color.appColors.primaryColor)
+                    }
+                    Text(truncated(overlay.text))
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 8)
+            }
         }
         .foregroundColor(.white)
         .frame(width: barWidth, alignment: .leading)
-        .padding(.horizontal, 8)
         .frame(height: 32)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.appColors.primaryColor.opacity(isSelected ? 0.35 : 0.2))
+            RoundedRectangle(cornerRadius: overlay.isCaption ? 3 : 6, style: .continuous)
+                .fill(Color.appColors.primaryColor.opacity(
+                    isSelected ? 0.7 : (overlay.isCaption ? 0.46 : 0.2)
+                ))
+                .padding(.horizontal, overlay.isCaption && barWidth > 4 ? 1 : 0)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: overlay.isCaption ? 3 : 6, style: .continuous)
                 .stroke(
-                    isSelected ? Color.appColors.primaryColor : Color.appColors.primaryColor.opacity(0.45),
+                    isSelected
+                        ? Color.appColors.primaryColor
+                        : (overlay.isCaption ? .clear : Color.appColors.primaryColor.opacity(0.45)),
                     lineWidth: isSelected ? 2 : 1
                 )
+                .padding(.horizontal, overlay.isCaption && barWidth > 4 ? 1 : 0)
         )
+        .clipped()
     }
 
     private var moveGesture: some Gesture {
@@ -1426,6 +1455,14 @@ private struct ClipThumb: View {
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(Color.appColors.primaryColor.opacity(0.85)))
+                }
+                if clip.isVideo && !clip.isAudioLinked {
+                    Label("J/L", systemImage: "link.slash")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.orange))
                 }
             }
             .padding(4)

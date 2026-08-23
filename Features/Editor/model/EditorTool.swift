@@ -9,12 +9,14 @@ import Foundation
 
 enum EditorTool: String, CaseIterable, Identifiable {
     case split
+    case precision
     case speed
     case duration
     case crop
     case volume
     case filter
     case text
+    case captions
     case overlay
     case opacity
     case compositing
@@ -29,7 +31,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
 
     static var mainTools: [EditorTool] {
         allCases.filter {
-            $0 != .duration && $0 != .opacity && $0 != .compositing
+            $0 != .duration && $0 != .precision && $0 != .opacity && $0 != .compositing
                 && $0 != .filter && $0 != .keyframe && $0 != .track && $0 != .stabilize
                 && $0 != .audioEffect
         }
@@ -38,12 +40,14 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .split: return "SPLIT"
+        case .precision: return "PRECISION"
         case .speed: return "SPEED"
         case .duration: return "DURATION"
         case .crop: return "CROP"
         case .volume: return "VOLUME"
         case .filter: return "COLOR"
         case .text: return "TEXT"
+        case .captions: return "CAPTIONS"
         case .overlay: return "OVERLAY"
         case .opacity: return "OPACITY"
         case .compositing: return "COMPOSITE"
@@ -59,12 +63,14 @@ enum EditorTool: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .split: return "scissors"
+        case .precision: return "arrow.left.and.right"
         case .speed: return "speedometer"
         case .duration: return "timer"
         case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
         case .text: return "textformat"
+        case .captions: return "captions.bubble.fill"
         case .overlay: return "rectangle.on.rectangle"
         case .opacity: return "circle.lefthalf.filled"
         case .compositing: return "square.3.layers.3d"

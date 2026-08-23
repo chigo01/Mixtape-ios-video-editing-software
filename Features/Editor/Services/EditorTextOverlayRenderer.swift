@@ -10,6 +10,8 @@ struct EditorTextOverlayExportView: View {
     let overlay: EditorTextOverlay
     let renderSize: CGSize
     let screenWidth: CGFloat
+    let highlightedCaptionWordID: UUID?
+    let blurRadius: CGFloat
 
     private var scale: CGFloat {
         max(1.0, renderSize.width / screenWidth)
@@ -26,6 +28,7 @@ struct EditorTextOverlayExportView: View {
                     if overlay.horizontalAlignment != .leading { Spacer(minLength: 0) }
 
                     styledTextView(overlay)
+                        .blur(radius: blurRadius)
                         .offset(x: overlay.xOffset, y: overlay.yOffset)
 
                     if overlay.horizontalAlignment != .trailing { Spacer(minLength: 0) }
@@ -42,31 +45,35 @@ struct EditorTextOverlayExportView: View {
 
     @ViewBuilder
     private func styledTextView(_ overlay: EditorTextOverlay) -> some View {
-        let baseText = Text(overlay.text)
+        let baseText: Text = overlay.isCaption
+            ? captionText(overlay)
+            : Text(overlay.text)
+
+        let styledBase = baseText
             .font(overlay.resolvedFont())
             .multilineTextAlignment(overlay.horizontalAlignment.alignment)
 
         switch overlay.fontStyle {
         case .plain, .bold, .italic:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
 
         case .outlined:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .shadow(color: .black, radius: 0, x: 1, y: 1)
                 .shadow(color: .black, radius: 0, x: -1, y: -1)
                 .shadow(color: .black, radius: 0, x: 1, y: -1)
                 .shadow(color: .black, radius: 0, x: -1, y: 1)
 
         case .shadow:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .shadow(color: .black.opacity(0.7), radius: 4, x: 2, y: 2)
 
         case .background:
-            baseText
-                .foregroundColor(overlay.textColor.color)
+            styledBase
+                .foregroundColor(overlay.isCaption ? nil : overlay.textColor.color)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
@@ -75,16 +82,33 @@ struct EditorTextOverlayExportView: View {
                 )
         }
     }
+
+    private func captionText(_ overlay: EditorTextOverlay) -> Text {
+        overlay.captionWords.enumerated().reduce(Text("")) { result, pair in
+            let (index, word) = pair
+            let color = word.id == highlightedCaptionWordID
+                ? overlay.captionHighlightColor.color
+                : overlay.textColor.color
+            return result + Text((index == 0 ? "" : " ") + word.text).foregroundColor(color)
+        }
+    }
 }
 
 @MainActor
 enum EditorTextOverlayRenderer {
-    static func render(overlay: EditorTextOverlay, renderSize: CGSize) -> UIImage? {
+    static func render(
+        overlay: EditorTextOverlay,
+        renderSize: CGSize,
+        highlightedCaptionWordID: UUID? = nil,
+        blurRadius: CGFloat = 0
+    ) -> UIImage? {
         let screenWidth = EditorTextOverlayLayout.referenceWidth
         let view = EditorTextOverlayExportView(
             overlay: overlay,
             renderSize: renderSize,
-            screenWidth: screenWidth
+            screenWidth: screenWidth,
+            highlightedCaptionWordID: highlightedCaptionWordID,
+            blurRadius: blurRadius
         )
         .frame(width: renderSize.width, height: renderSize.height)
 

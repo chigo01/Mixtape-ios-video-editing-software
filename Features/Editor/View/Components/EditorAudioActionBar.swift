@@ -188,14 +188,17 @@ private struct AudioActionButton: View {
                 Text(action.title)
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.5)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                     .foregroundColor(
                         isDisabled
                             ? Color.white.opacity(0.25)
                             : (isSelected ? Color.appColors.primaryColor : Color.white.opacity(0.75))
                     )
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 6)
+            .frame(width: 78)
+            .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

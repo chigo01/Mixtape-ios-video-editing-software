@@ -26,6 +26,8 @@
 		AD10000000000000000000BC /* EditorAudioEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FC /* EditorAudioEffect.swift */; };
 		AD10000000000000000000BD /* EditorAudioEffectRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */; };
 		AD10000000000000000000BE /* EditorAudioEffectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FE /* EditorAudioEffectPanel.swift */; };
+		CA71000000000000000000B1 /* EditorCaptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA71000000000000000000F1 /* EditorCaptionService.swift */; };
+		CA71000000000000000000B2 /* CaptionTranscriptEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA71000000000000000000F2 /* CaptionTranscriptEditorSheet.swift */; };
 		A0B0F00DDEAFB001CAFE0101 /* MediaItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */; };
 		A0B0F00DDEAFB001CAFE0102 /* MediaFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0002 /* MediaFilter.swift */; };
 		A0B0F00DDEAFB001CAFE0103 /* PhotoLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0003 /* PhotoLibraryViewModel.swift */; };
@@ -133,6 +135,8 @@
 		AD10000000000000000000FC /* EditorAudioEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffect.swift; sourceTree = "<group>"; };
 		AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectRenderer.swift; sourceTree = "<group>"; };
 		AD10000000000000000000FE /* EditorAudioEffectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectPanel.swift; sourceTree = "<group>"; };
+		CA71000000000000000000F1 /* EditorCaptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCaptionService.swift; sourceTree = "<group>"; };
+		CA71000000000000000000F2 /* CaptionTranscriptEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionTranscriptEditorSheet.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTopBar.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPreviewPlayer.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0008 /* EditorTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimeline.swift; sourceTree = "<group>"; };
@@ -340,6 +344,7 @@
 				AD10000000000000000000F3 /* AudioLibraryPickerView.swift */,
 				AD10000000000000000000FB /* VoiceoverRecorderView.swift */,
 				AD10000000000000000000FE /* EditorAudioEffectPanel.swift */,
+				CA71000000000000000000F2 /* CaptionTranscriptEditorSheet.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -363,6 +368,7 @@
 				BA0EDF00DEAFB001CAFE0013 /* ClipThumbnailService.swift */,
 				AD10000000000000000000FA /* VoiceoverRecorderService.swift */,
 				AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */,
+				CA71000000000000000000F1 /* EditorCaptionService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -583,6 +589,8 @@
 				AD10000000000000000000BC /* EditorAudioEffect.swift in Sources */,
 				AD10000000000000000000BD /* EditorAudioEffectRenderer.swift in Sources */,
 				AD10000000000000000000BE /* EditorAudioEffectPanel.swift in Sources */,
+				CA71000000000000000000B1 /* EditorCaptionService.swift in Sources */,
+				CA71000000000000000000B2 /* CaptionTranscriptEditorSheet.swift in Sources */,
 				CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */,
 				CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */,
 				CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */,

@@ -17,6 +17,9 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var speed: Float
     var speedRamp: EditorSpeedRamp?
     var volume: Float
+    var audioTrimStart: TimeInterval?
+    var audioTrimEnd: TimeInterval?
+    var isAudioLinked: Bool
     var cropAspect: EditorCropAspect
     var reframeMode: EditorReframeMode
     var rotationQuarterTurns: Int
@@ -43,6 +46,9 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         speed = clip.speed
         speedRamp = clip.speedRamp
         volume = clip.volume
+        audioTrimStart = clip.audioTrimStart
+        audioTrimEnd = clip.audioTrimEnd
+        isAudioLinked = clip.isAudioLinked
         cropAspect = clip.cropAspect
         reframeMode = clip.reframeMode
         rotationQuarterTurns = clip.rotationQuarterTurns
@@ -71,6 +77,9 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         speed = try c.decode(Float.self, forKey: .speed)
         speedRamp = try c.decodeIfPresent(EditorSpeedRamp.self, forKey: .speedRamp)
         volume = try c.decode(Float.self, forKey: .volume)
+        audioTrimStart = try c.decodeIfPresent(TimeInterval.self, forKey: .audioTrimStart)
+        audioTrimEnd = try c.decodeIfPresent(TimeInterval.self, forKey: .audioTrimEnd)
+        isAudioLinked = try c.decodeIfPresent(Bool.self, forKey: .isAudioLinked) ?? true
         cropAspect = try c.decodeIfPresent(EditorCropAspect.self, forKey: .cropAspect) ?? .original
         reframeMode = try c.decodeIfPresent(EditorReframeMode.self, forKey: .reframeMode) ?? .fit
         rotationQuarterTurns = try c.decodeIfPresent(Int.self, forKey: .rotationQuarterTurns) ?? 0
@@ -123,10 +132,14 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
     var xOffset: CGFloat
     var yOffset: CGFloat
     var keyframes: EditorKeyframeTracks
+    var animation: EditorTextAnimation
     var attachedClipID: UUID?
     var attachedTrackID: UUID?
     var attachRotation: Bool
     var attachScale: Bool
+    var captionWords: [EditorCaptionWord]
+    var captionHighlightColor: TextOverlayColor
+    var captionLocaleIdentifier: String?
 
     init(from overlay: EditorTextOverlay) {
         id = overlay.id
@@ -143,10 +156,14 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         xOffset = overlay.xOffset
         yOffset = overlay.yOffset
         keyframes = overlay.keyframes
+        animation = overlay.animation
         attachedClipID = overlay.attachedClipID
         attachedTrackID = overlay.attachedTrackID
         attachRotation = overlay.attachRotation
         attachScale = overlay.attachScale
+        captionWords = overlay.captionWords
+        captionHighlightColor = overlay.captionHighlightColor
+        captionLocaleIdentifier = overlay.captionLocaleIdentifier
     }
 
     func toOverlay() -> EditorTextOverlay {
@@ -165,10 +182,14 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
             xOffset: xOffset,
             yOffset: yOffset,
             keyframes: keyframes,
+            animation: animation,
             attachedClipID: attachedClipID,
             attachedTrackID: attachedTrackID,
             attachRotation: attachRotation,
-            attachScale: attachScale
+            attachScale: attachScale,
+            captionWords: captionWords,
+            captionHighlightColor: captionHighlightColor,
+            captionLocaleIdentifier: captionLocaleIdentifier
         )
     }
 
@@ -189,10 +210,20 @@ struct SavedTextOverlay: Codable, Identifiable, Hashable {
         xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0.0
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0.0
         keyframes = try c.decodeIfPresent(EditorKeyframeTracks.self, forKey: .keyframes) ?? .empty
+        animation = try c.decodeIfPresent(EditorTextAnimation.self, forKey: .animation) ?? .none
         attachedClipID = try c.decodeIfPresent(UUID.self, forKey: .attachedClipID)
         attachedTrackID = try c.decodeIfPresent(UUID.self, forKey: .attachedTrackID)
         attachRotation = try c.decodeIfPresent(Bool.self, forKey: .attachRotation) ?? false
         attachScale = try c.decodeIfPresent(Bool.self, forKey: .attachScale) ?? false
+        captionWords = try c.decodeIfPresent([EditorCaptionWord].self, forKey: .captionWords) ?? []
+        captionHighlightColor = try c.decodeIfPresent(
+            TextOverlayColor.self,
+            forKey: .captionHighlightColor
+        ) ?? .yellow
+        captionLocaleIdentifier = try c.decodeIfPresent(
+            String.self,
+            forKey: .captionLocaleIdentifier
+        )
     }
 }
 
@@ -643,6 +674,9 @@ enum EditorProjectResolver {
                 speed: item.speed,
                 speedRamp: item.speedRamp,
                 volume: item.volume,
+                audioTrimStart: item.audioTrimStart,
+                audioTrimEnd: item.audioTrimEnd,
+                isAudioLinked: item.isAudioLinked,
                 cropAspect: item.cropAspect,
                 reframeMode: item.reframeMode,
                 rotationQuarterTurns: item.rotationQuarterTurns,

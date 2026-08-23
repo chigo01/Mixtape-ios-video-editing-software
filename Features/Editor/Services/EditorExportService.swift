@@ -3,7 +3,7 @@
 //  Mixtape
 //
 
-import AVFoundation
+@preconcurrency import AVFoundation
 import Photos
 import VideoToolbox
 

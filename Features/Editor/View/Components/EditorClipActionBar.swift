@@ -9,6 +9,7 @@ import SwiftUI
 
 enum EditorClipAction: String, CaseIterable, Identifiable {
     case split
+    case precision
     case speed
     case duration
     case crop
@@ -28,6 +29,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .split: return "SPLIT"
+        case .precision: return "PRECISION"
         case .speed: return "SPEED"
         case .duration: return "DURATION"
         case .crop: return "CROP"
@@ -47,6 +49,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .split: return "scissors"
+        case .precision: return "arrow.left.and.right"
         case .speed: return "speedometer"
         case .duration: return "timer"
         case .crop: return "crop.rotate"
@@ -137,6 +140,7 @@ extension EditorClipAction {
     var tool: EditorTool? {
         switch self {
         case .split: return .split
+        case .precision: return .precision
         case .speed: return .speed
         case .duration: return .duration
         case .crop: return .crop
@@ -173,14 +177,17 @@ struct ClipActionButton: View {
                 Text(action.title)
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.5)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                     .foregroundColor(
                         isDisabled
                             ? Color.white.opacity(0.25)
                             : (isSelected ? Color.appColors.primaryColor : Color.white.opacity(0.75))
                     )
             }
-            .padding(.horizontal, 14)
             .padding(.vertical, 6)
+            .frame(width: 78)
+            .frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -321,6 +328,8 @@ struct EditorOverlayActionBar: View {
                                 Text(action.title)
                                     .font(.system(size: 10, weight: .semibold))
                                     .tracking(0.5)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.72)
                             }
                             .foregroundColor(
                                 isDisabled(action)
@@ -331,8 +340,9 @@ struct EditorOverlayActionBar: View {
                                         ? Color.appColors.primaryColor
                                         : Color.white.opacity(0.85))
                             )
-                            .padding(.horizontal, 14)
                             .padding(.vertical, 6)
+                            .frame(width: 78)
+                            .frame(minHeight: 56)
                         }
                         .buttonStyle(.plain)
                         .disabled(isDisabled(action))

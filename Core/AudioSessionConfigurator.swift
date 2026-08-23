@@ -19,7 +19,7 @@ enum AudioSessionConfigurator {
         }
     }
 
-    /// Switches to `.playAndRecord` for voiceover capture. `.allowBluetooth`/`.allowBluetoothA2DP`
+    /// Switches to `.playAndRecord` for voiceover capture. `.allowBluetoothHFP`/`.allowBluetoothA2DP`
     /// keep a paired headset usable as the input, `.defaultToSpeaker` avoids the recorder silently
     /// routing monitoring audio to the earpiece when no headset is attached.
     static func configureForRecording() throws {
@@ -27,7 +27,7 @@ enum AudioSessionConfigurator {
         try session.setCategory(
             .playAndRecord,
             mode: .default,
-            options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+            options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
         )
         try session.setActive(true)
     }
