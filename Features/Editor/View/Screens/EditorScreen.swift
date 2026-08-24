@@ -26,6 +26,7 @@ struct EditorScreen: View {
     @State private var isReplacingClip = false
     @State private var isReplacingOverlayClip = false
     @State private var transitionTarget: EditorTransitionTarget?
+    @State private var isSequenceManagerPresented = false
     @Environment(\.dismiss) private var dismiss
 
     private let editorChromeMinHeight: CGFloat = 248
@@ -37,6 +38,10 @@ struct EditorScreen: View {
     }
 
     var body: some View {
+        editorLifecycleView
+    }
+
+    private var editorBaseView: some View {
         AppGlobalBackgroundScaffold {
             GeometryReader { geo in
                 VStack(spacing: 0) {
@@ -52,7 +57,15 @@ struct EditorScreen: View {
                     }
                 }
             }
-
+        }
+        .overlay {
+            if let progress = vm.reverseGenerationProgress {
+                ReverseGenerationOverlay(
+                    progress: progress,
+                    onCancel: { vm.cancelReverseGeneration() }
+                )
+                .transition(.opacity)
+            }
         }
         .background(EditorNavigationPopGestureLock())
         .navigationBarBackButtonHidden(true)
@@ -61,6 +74,10 @@ struct EditorScreen: View {
             EditorExportScreen(vm: vm)
         }
         .animation(.easeInOut(duration: 0.2), value: vm.selectedTool)
+    }
+
+    private var mediaPresentationView: some View {
+        editorBaseView
         .fullScreenCover(isPresented: $isFullscreenPreview) {
             EditorFullscreenPreviewSheet(vm: vm, onClose: { isFullscreenPreview = false })
         }
@@ -110,6 +127,23 @@ struct EditorScreen: View {
                 insertAfterAudioClipID: $insertAfterAudioClipID
             )
         )
+    }
+
+    private var primaryToolSheetsView: some View {
+        mediaPresentationView
+        .editorSheet(
+            isPresented: $isSequenceManagerPresented,
+            iPadHeight: .fraction(0.72)
+        ) {
+            SequenceStructurePanel(
+                vm: vm,
+                onDone: { isSequenceManagerPresented = false }
+            )
+            .presentationDetents([.fraction(0.72), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
+        }
         .editorSheet(
             isPresented: Binding(
                 get: { vm.selectedTool == .keyframe },
@@ -135,6 +169,32 @@ struct EditorScreen: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(Color.appColors.backgroundColor)
             .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .freeze },
+                set: { if !$0 && vm.selectedTool == .freeze { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(410),
+            allowsBackdropDismiss: false
+        ) {
+            FreezeFrameToolPanel(vm: vm, onDone: { vm.selectedTool = nil })
+                .presentationDetents([.height(410)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .reverse },
+                set: { if !$0 && vm.selectedTool == .reverse { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(300),
+            allowsBackdropDismiss: false
+        ) {
+            ReverseClipToolPanel(vm: vm, onStart: { vm.selectedTool = nil })
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
         }
         .editorSheet(
             isPresented: Binding(
@@ -176,6 +236,10 @@ struct EditorScreen: View {
                 .interactiveDismissDisabled()
             }
         }
+    }
+
+    private var textAndAudioToolSheetsView: some View {
+        primaryToolSheetsView
         .editorSheet(
             isPresented: Binding(
                 get: { vm.isTextEditorPresented },
@@ -254,6 +318,10 @@ struct EditorScreen: View {
             .presentationBackground(Color.appColors.backgroundColor)
             .presentationBackgroundInteraction(.enabled)
         }
+    }
+
+    private var visualToolSheetsView: some View {
+        textAndAudioToolSheetsView
         .editorSheet(
             isPresented: Binding(
                 get: {
@@ -382,6 +450,21 @@ struct EditorScreen: View {
             .presentationBackground(Color.appColors.backgroundColor)
             .presentationBackgroundInteraction(.enabled)
         }
+    }
+
+    private var editorLifecycleView: some View {
+        visualToolSheetsView
+        .alert(
+            "Reverse Error",
+            isPresented: Binding(
+                get: { vm.reverseGenerationErrorMessage != nil },
+                set: { if !$0 { vm.reverseGenerationErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { vm.reverseGenerationErrorMessage = nil }
+        } message: {
+            Text(vm.reverseGenerationErrorMessage ?? "Reverse generation failed.")
+        }
         .task {
             await Task.yield()
             guard !Task.isCancelled else { return }
@@ -466,7 +549,15 @@ struct EditorScreen: View {
             onUndo: { vm.undo() },
             onRedo: { vm.redo() },
             canUndo: vm.canUndo,
-            canRedo: vm.canRedo
+            canRedo: vm.canRedo,
+            isMultiSelectMode: vm.isMultiSelectMode,
+            selectionCount: vm.selectionCount,
+            activeSequenceName: vm.activeSequence?.title,
+            onToggleMultiSelect: {
+                vm.isMultiSelectMode ? vm.endMultiSelection() : vm.beginMultiSelection()
+            },
+            onAddMarker: { vm.addMarkerAtPlayhead() },
+            onExitSequence: { vm.exitActiveSequence() }
         )
         .padding(.top, 4)
     }
@@ -508,7 +599,12 @@ struct EditorScreen: View {
 
     private var selectionActionBar: some View {
         Group {
-            if vm.selectedOverlayClipID != nil {
+            if vm.isMultiSelectMode {
+                SequenceSelectionActionBar(
+                    vm: vm,
+                    onStructure: { isSequenceManagerPresented = true }
+                )
+            } else if vm.selectedOverlayClipID != nil {
                 EditorOverlayActionBar(
                     vm: vm,
                     onAddOverlay: { isOverlayPickerPresented = true },
@@ -549,7 +645,7 @@ struct EditorScreen: View {
         }
         .animation(
             .easeInOut(duration: 0.2),
-            value: vm.selectedClipID != nil
+            value: vm.isMultiSelectMode || vm.selectedClipID != nil
                 || vm.selectedTextOverlayID != nil
                 || vm.selectedAudioClipID != nil
                 || vm.selectedOverlayClipID != nil
@@ -560,6 +656,38 @@ struct EditorScreen: View {
         let maxByChrome = geo.size.height - editorChromeMinHeight
         let maxByFraction = geo.size.height * 0.60
         return max(220, min(maxByChrome, maxByFraction))
+    }
+}
+
+private struct ReverseGenerationOverlay: View {
+    let progress: Double
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.72).ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image(systemName: "backward.end.alt.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(Color.appColors.primaryColor)
+                Text("Generating Reverse Media")
+                    .font(.headline)
+                ProgressView(value: progress)
+                    .tint(Color.appColors.primaryColor)
+                Text("\(Int((progress * 100).rounded()))%")
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .buttonStyle(.bordered)
+            }
+            .padding(24)
+            .frame(maxWidth: 340)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22))
+            .padding(28)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Generating reverse media")
+        .accessibilityValue("\(Int((progress * 100).rounded())) percent")
     }
 }
 

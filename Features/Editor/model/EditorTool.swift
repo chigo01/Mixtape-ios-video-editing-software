@@ -10,6 +10,9 @@ import Foundation
 enum EditorTool: String, CaseIterable, Identifiable {
     case split
     case precision
+    case reverse
+    case freeze
+    case sequence
     case speed
     case duration
     case crop
@@ -31,7 +34,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
 
     static var mainTools: [EditorTool] {
         allCases.filter {
-            $0 != .duration && $0 != .precision && $0 != .opacity && $0 != .compositing
+            $0 != .duration && $0 != .precision && $0 != .reverse && $0 != .freeze
+                && $0 != .opacity && $0 != .compositing
                 && $0 != .filter && $0 != .keyframe && $0 != .track && $0 != .stabilize
                 && $0 != .audioEffect
         }
@@ -41,6 +45,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "SPLIT"
         case .precision: return "PRECISION"
+        case .reverse: return "REVERSE"
+        case .freeze: return "FREEZE"
+        case .sequence: return "SELECT"
         case .speed: return "SPEED"
         case .duration: return "DURATION"
         case .crop: return "CROP"
@@ -64,6 +71,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         switch self {
         case .split: return "scissors"
         case .precision: return "arrow.left.and.right"
+        case .reverse: return "backward.end.alt.fill"
+        case .freeze: return "snowflake"
+        case .sequence: return "checkmark.circle"
         case .speed: return "speedometer"
         case .duration: return "timer"
         case .crop: return "crop.rotate"

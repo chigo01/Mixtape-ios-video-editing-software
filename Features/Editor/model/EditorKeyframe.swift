@@ -362,4 +362,20 @@ struct EditorKeyframeTracks: Codable, Hashable {
         }
         return (EditorKeyframeTracks(tracks: leftTracks), EditorKeyframeTracks(tracks: rightTracks))
     }
+
+    /// Captures the visible value of every animated channel as a constant hold.
+    /// Freeze-frame clips use this so motion does not restart from keyframe zero.
+    func held(at time: TimeInterval) -> EditorKeyframeTracks {
+        EditorKeyframeTracks(tracks: tracks.compactMap { track in
+            guard !track.isEmpty else { return nil }
+            return EditorKeyframeTrack(
+                property: track.property,
+                keyframes: [EditorKeyframe(
+                    time: 0,
+                    value: track.value(at: max(0, time), default: track.property.neutralValue),
+                    curve: EditorKeyframeCurve(preset: .hold)
+                )]
+            )
+        })
+    }
 }

@@ -45,9 +45,50 @@ struct EditorTimelineControls: View {
     var onRedo: () -> Void
     var canUndo: Bool
     var canRedo: Bool
+    var isMultiSelectMode: Bool = false
+    var selectionCount: Int = 0
+    var activeSequenceName: String?
+    var onToggleMultiSelect: () -> Void = {}
+    var onAddMarker: () -> Void = {}
+    var onExitSequence: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 8) {
+            Button(action: onToggleMultiSelect) {
+                HStack(spacing: 5) {
+                    Image(systemName: isMultiSelectMode ? "checkmark.circle.fill" : "checkmark.circle")
+                    if isMultiSelectMode {
+                        Text("\(selectionCount)")
+                            .font(.caption.bold().monospacedDigit())
+                    }
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isMultiSelectMode ? Color.appColors.primaryColor : .white)
+                .frame(minWidth: 36, minHeight: 36)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isMultiSelectMode ? "Finish selecting" : "Select multiple items")
+
+            Button(action: onAddMarker) {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add marker at playhead")
+
+            if let activeSequenceName {
+                Button(action: onExitSequence) {
+                    Label(activeSequenceName, systemImage: "arrow.turn.up.left")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.appColors.primaryColor)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Exit \(activeSequenceName)")
+            }
+
             Spacer(minLength: 0)
 
             Button(action: onUndo) {

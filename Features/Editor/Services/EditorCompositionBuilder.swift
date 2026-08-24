@@ -14,6 +14,228 @@ struct EditorCompositionBuildResult {
     let duration: CMTime
 }
 
+// MARK: - Reverse render cache
+
+enum EditorReverseMediaError: LocalizedError {
+    case unavailableSource
+    case missingVideo
+    case cannotCreateComposition
+    case cannotCreateExporter
+    case exportFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailableSource: return "The original video could not be downloaded from Photos."
+        case .missingVideo: return "The selected asset does not contain a readable video track."
+        case .cannotCreateComposition: return "The reverse timeline could not be prepared."
+        case .cannotCreateExporter: return "This video cannot be encoded on the current device."
+        case let .exportFailed(message): return message
+        }
+    }
+}
+
+/// Creates deterministic, disposable reverse renders. The original PHAsset and
+/// source range remain in the project, so a purged cache is regenerated after
+/// reopen/relink instead of turning into missing media.
+actor EditorReverseMediaService {
+    static let shared = EditorReverseMediaService()
+
+    private var activeExports: [String: AVAssetExportSession] = [:]
+
+    static func cachedURL(
+        for asset: PHAsset,
+        sourceStart: TimeInterval,
+        sourceEnd: TimeInterval,
+        audioPolicy: EditorReverseAudioPolicy,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> URL {
+        try await shared.renderedURL(
+            for: asset,
+            sourceStart: sourceStart,
+            sourceEnd: sourceEnd,
+            audioPolicy: audioPolicy,
+            progress: progress
+        )
+    }
+
+    static func cancel(for assetIdentifier: String) async {
+        await shared.cancel(assetIdentifier: assetIdentifier)
+    }
+
+    private func renderedURL(
+        for asset: PHAsset,
+        sourceStart: TimeInterval,
+        sourceEnd: TimeInterval,
+        audioPolicy: EditorReverseAudioPolicy,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> URL {
+        let lower = max(0, min(sourceStart, sourceEnd))
+        let upper = min(asset.duration, max(sourceStart, sourceEnd))
+        guard upper - lower >= 0.05 else { throw EditorReverseMediaError.missingVideo }
+
+        let key = cacheKey(
+            identifier: asset.localIdentifier,
+            start: lower,
+            end: upper,
+            audioPolicy: audioPolicy
+        )
+        let outputURL = try cacheDirectory().appendingPathComponent("\(key).mov")
+        if isUsableFile(outputURL) {
+            progress?(1)
+            return outputURL
+        }
+
+        let avAsset = try await requestAsset(for: asset)
+        guard let sourceVideo = try await avAsset.loadTracks(withMediaType: .video).first else {
+            throw EditorReverseMediaError.missingVideo
+        }
+        let composition = AVMutableComposition()
+        guard let videoTrack = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+              ) else { throw EditorReverseMediaError.cannotCreateComposition }
+
+        videoTrack.preferredTransform = try await sourceVideo.load(.preferredTransform)
+        let nominalRate = Double(try await sourceVideo.load(.nominalFrameRate))
+        let framesPerSecond = min(max(nominalRate > 0 ? nominalRate : 30, 15), 60)
+        let sliceDuration = 1 / framesPerSecond
+        let span = upper - lower
+        let sliceCount = max(1, Int(ceil(span / sliceDuration)))
+        var reversedSlices: [(range: CMTimeRange, destination: CMTime)] = []
+        reversedSlices.reserveCapacity(sliceCount)
+        var destinationSeconds: TimeInterval = 0
+
+        for outputIndex in 0..<sliceCount {
+            try Task.checkCancellation()
+            let reverseIndex = sliceCount - 1 - outputIndex
+            let sliceStart = lower + Double(reverseIndex) * sliceDuration
+            let actualDuration = min(sliceDuration, upper - sliceStart)
+            guard actualDuration > 0 else { continue }
+            let range = CMTimeRange(
+                start: CMTime(seconds: sliceStart, preferredTimescale: 600),
+                duration: CMTime(seconds: actualDuration, preferredTimescale: 600)
+            )
+            let destination = CMTime(seconds: destinationSeconds, preferredTimescale: 600)
+            reversedSlices.append((range, destination))
+            try videoTrack.insertTimeRange(range, of: sourceVideo, at: destination)
+            destinationSeconds += actualDuration
+            if outputIndex.isMultiple(of: 12) {
+                progress?(0.2 * Double(outputIndex + 1) / Double(sliceCount))
+            }
+        }
+
+        if audioPolicy == .reverse,
+           let sourceAudio = try await avAsset.loadTracks(withMediaType: .audio).first,
+           let audioTrack = composition.addMutableTrack(
+            withMediaType: .audio,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+           ) {
+            // Frame-sized slices keep reverse audio aligned with the reversed
+            // picture while avoiding an unbounded decoded-audio memory buffer.
+            for slice in reversedSlices {
+                try Task.checkCancellation()
+                try? audioTrack.insertTimeRange(slice.range, of: sourceAudio, at: slice.destination)
+            }
+        }
+
+        try? FileManager.default.removeItem(at: outputURL)
+        guard let exporter = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetHighestQuality
+        ) else { throw EditorReverseMediaError.cannotCreateExporter }
+        exporter.outputURL = outputURL
+        exporter.outputFileType = exporter.supportedFileTypes.contains(.mov) ? .mov : .mp4
+        exporter.shouldOptimizeForNetworkUse = false
+        activeExports[asset.localIdentifier] = exporter
+
+        let progressTask = Task {
+            while !Task.isCancelled {
+                progress?(0.2 + 0.8 * Double(exporter.progress))
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+        }
+        defer {
+            progressTask.cancel()
+            activeExports[asset.localIdentifier] = nil
+        }
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                exporter.exportAsynchronously {
+                    switch exporter.status {
+                    case .completed:
+                        continuation.resume()
+                    case .cancelled:
+                        continuation.resume(throwing: CancellationError())
+                    default:
+                        continuation.resume(throwing: EditorReverseMediaError.exportFailed(
+                            exporter.error?.localizedDescription ?? "Reverse generation failed."
+                        ))
+                    }
+                }
+            }
+        } onCancel: {
+            exporter.cancelExport()
+        }
+
+        guard isUsableFile(outputURL) else {
+            throw EditorReverseMediaError.exportFailed("Reverse generation produced an empty file.")
+        }
+        progress?(1)
+        return outputURL
+    }
+
+    private func cancel(assetIdentifier: String) {
+        activeExports[assetIdentifier]?.cancelExport()
+    }
+
+    private func requestAsset(for asset: PHAsset) async throws -> AVAsset {
+        let options = PHVideoRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        return try await withCheckedThrowingContinuation { continuation in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) {
+                avAsset, _, info in
+                if let avAsset {
+                    continuation.resume(returning: avAsset)
+                } else {
+                    let message = (info?[PHImageErrorKey] as? Error)?.localizedDescription
+                    continuation.resume(throwing: EditorReverseMediaError.exportFailed(
+                        message ?? EditorReverseMediaError.unavailableSource.localizedDescription
+                    ))
+                }
+            }
+        }
+    }
+
+    private func cacheDirectory() throws -> URL {
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MixtapeReverseMedia", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func cacheKey(
+        identifier: String,
+        start: TimeInterval,
+        end: TimeInterval,
+        audioPolicy: EditorReverseAudioPolicy
+    ) -> String {
+        let raw = "v1|\(identifier)|\(Int((start * 1_000).rounded()))|\(Int((end * 1_000).rounded()))|\(audioPolicy.rawValue)"
+        return Data(raw.utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private func isUsableFile(_ url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return false }
+        return bytes > 0
+    }
+}
+
 enum EditorCompositionBuilder {
 
     private static let timescale: CMTimeScale = 600
@@ -21,6 +243,7 @@ enum EditorCompositionBuilder {
     private static let previewCanvasSize = CGSize(width: 1080, height: 1920)
     private static var assetCache: [String: AVAsset] = [:]
     private static var photoVideoCache: [String: URL] = [:]
+    private static var freezeVideoCache: [String: URL] = [:]
     private static var solidVideoCache: [String: URL] = [:]
     private static var canvasImageVideoCache: [String: URL] = [:]
     private static var warmedPlayerItem: AVPlayerItem?
@@ -29,7 +252,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -124,6 +347,11 @@ enum EditorCompositionBuilder {
         var cursor = CMTime.zero
         var videoSegments: [VideoSegment] = []
         var embeddedAudioSegments: [(track: AVMutableCompositionTrack, segment: AudioVolumeSegment)] = []
+        var pendingFreezeAudioAdvance: (
+            assetIdentifier: String,
+            sourceTime: TimeInterval,
+            duration: TimeInterval
+        )?
 
         for (clipIndex, clip) in clips.enumerated() {
             let segmentDuration = CMTime(seconds: clip.duration, preferredTimescale: timescale)
@@ -132,17 +360,54 @@ enum EditorCompositionBuilder {
             let segmentRange = CMTimeRange(start: cursor, duration: segmentDuration)
 
             if clip.isVideo {
-                guard let avAsset = await loadVideoAsset(for: clip.asset) else {
+                guard let originalAsset = await loadVideoAsset(for: clip.asset) else {
                     cursor = cursor + segmentDuration
                     continue
                 }
 
-                let sourceStart = CMTime(seconds: clip.trimStart, preferredTimescale: timescale)
-                let sourceDuration = CMTime(
-                    seconds: max(0, clip.trimEnd - clip.trimStart),
-                    preferredTimescale: timescale
-                )
-                if let sourceVideo = try? await avAsset.loadTracks(withMediaType: .video).first {
+                let mediaAsset: AVAsset
+                let sourceStart: CMTime
+                let sourceDuration: CMTime
+                switch clip.playback {
+                case .forward:
+                    mediaAsset = originalAsset
+                    sourceStart = CMTime(seconds: clip.trimStart, preferredTimescale: timescale)
+                    sourceDuration = CMTime(
+                        seconds: max(0, clip.trimEnd - clip.trimStart),
+                        preferredTimescale: timescale
+                    )
+                case let .reverse(audioPolicy):
+                    guard let url = try? await EditorReverseMediaService.cachedURL(
+                        for: clip.asset,
+                        sourceStart: clip.trimStart,
+                        sourceEnd: clip.trimEnd,
+                        audioPolicy: audioPolicy
+                    ) else {
+                        cursor = cursor + segmentDuration
+                        continue
+                    }
+                    mediaAsset = AVURLAsset(url: url)
+                    sourceStart = .zero
+                    sourceDuration = CMTime(
+                        seconds: max(0, clip.trimEnd - clip.trimStart),
+                        preferredTimescale: timescale
+                    )
+                case let .freeze(sourceTime, _):
+                    guard let url = await freezeVideoURL(
+                        for: originalAsset,
+                        assetIdentifier: clip.asset.localIdentifier,
+                        sourceTime: sourceTime,
+                        duration: clip.duration
+                    ) else {
+                        cursor = cursor + segmentDuration
+                        continue
+                    }
+                    mediaAsset = AVURLAsset(url: url)
+                    sourceStart = .zero
+                    sourceDuration = segmentDuration
+                }
+
+                if let sourceVideo = try? await mediaAsset.loadTracks(withMediaType: .video).first {
                     insertSpeedAdjusted(
                         sourceTrack: sourceVideo,
                         into: compositionVideoTrack,
@@ -172,16 +437,62 @@ enum EditorCompositionBuilder {
                     )
                 }
 
-                if let sourceAudio = try? await avAsset.loadTracks(withMediaType: .audio).first,
+                let audioSource: (
+                    asset: AVAsset,
+                    start: TimeInterval,
+                    end: TimeInterval,
+                    anchorsAtClipStart: Bool
+                )? = {
+                    switch clip.playback {
+                    case .forward:
+                        if let pending = pendingFreezeAudioAdvance,
+                           pending.assetIdentifier == clip.asset.localIdentifier,
+                           abs(pending.sourceTime - clip.trimStart) <= 1.0 / 60.0 {
+                            pendingFreezeAudioAdvance = nil
+                            return (
+                                originalAsset,
+                                min(clip.effectiveAudioTrimEnd,
+                                    max(clip.effectiveAudioTrimStart,
+                                        pending.sourceTime + pending.duration)),
+                                clip.effectiveAudioTrimEnd,
+                                true
+                            )
+                        }
+                        pendingFreezeAudioAdvance = nil
+                        return (
+                            originalAsset,
+                            clip.effectiveAudioTrimStart,
+                            clip.effectiveAudioTrimEnd,
+                            false
+                        )
+                    case let .reverse(audioPolicy):
+                        pendingFreezeAudioAdvance = nil
+                        guard audioPolicy == .reverse else { return nil }
+                        return (mediaAsset, 0, max(0, clip.trimEnd - clip.trimStart), true)
+                    case let .freeze(sourceTime, audioPolicy):
+                        guard audioPolicy == .continueSource else { return nil }
+                        return (
+                            originalAsset,
+                            sourceTime,
+                            min(clip.asset.duration, sourceTime + clip.duration),
+                            true
+                        )
+                    }
+                }()
+
+                if let audioSource,
+                   let sourceAudio = try? await audioSource.asset.loadTracks(withMediaType: .audio).first,
                    let clipAudioTrack = composition.addMutableTrack(
                        withMediaType: .audio,
                        preferredTrackID: kCMPersistentTrackID_Invalid
                    ) {
                     let rate = TimeInterval(max(clip.averageSpeed, 0.001))
-                    var audioSourceStart = clip.effectiveAudioTrimStart
-                    let audioSourceEnd = clip.effectiveAudioTrimEnd
+                    var audioSourceStart = audioSource.start
+                    let audioSourceEnd = audioSource.end
                     var audioTimelineStart = cursor.seconds
-                        + (audioSourceStart - clip.trimStart) / rate
+                    if case .forward = clip.playback, !audioSource.anchorsAtClipStart {
+                        audioTimelineStart += (audioSourceStart - clip.trimStart) / rate
+                    }
                     if audioTimelineStart < 0 {
                         audioSourceStart = min(audioSourceEnd, audioSourceStart - audioTimelineStart * rate)
                         audioTimelineStart = 0
@@ -208,9 +519,17 @@ enum EditorCompositionBuilder {
                             timeRange: audioTimeRange,
                             volume: clip.volume,
                             keyframes: clip.keyframes,
-                            keyframeTimeOffset: (audioSourceStart - clip.trimStart) / rate
+                            keyframeTimeOffset: max(0, audioTimelineStart - cursor.seconds)
                         )
                     ))
+                }
+                if case let .freeze(sourceTime, audioPolicy) = clip.playback,
+                   audioPolicy == .continueSource {
+                    pendingFreezeAudioAdvance = (
+                        clip.asset.localIdentifier,
+                        sourceTime,
+                        clip.duration
+                    )
                 }
             } else if let photoURL = await photoVideoURL(for: clip.asset, duration: clip.duration) {
                 let photoAsset = AVURLAsset(url: photoURL)
@@ -263,10 +582,10 @@ enum EditorCompositionBuilder {
         for overlay in orderedOverlayClips {
             guard overlay.duration > 0 else { continue }
 
-            let asset: AVAsset
+            let originalAsset: AVAsset
             if overlay.asset.mediaType == .video {
                 guard let videoAsset = await loadVideoAsset(for: overlay.asset) else { continue }
-                asset = videoAsset
+                originalAsset = videoAsset
             } else {
                 // Reuse the same still-image conversion as primary photo clips so
                 // photo overlays have identical preview/export behavior.
@@ -274,20 +593,50 @@ enum EditorCompositionBuilder {
                     for: overlay.asset,
                     duration: overlay.originalDuration
                 ) else { continue }
-                asset = AVURLAsset(url: photoURL)
+                originalAsset = AVURLAsset(url: photoURL)
             }
 
             let timelineStart = CMTime(seconds: overlay.timelineStart, preferredTimescale: timescale)
-            let sourceStart = CMTime(seconds: overlay.trimStart, preferredTimescale: timescale)
-            let sourceDuration = CMTime(
-                seconds: overlay.trimEnd - overlay.trimStart,
-                preferredTimescale: timescale
-            )
             let timelineDuration = CMTime(seconds: overlay.duration, preferredTimescale: timescale)
+            let mediaAsset: AVAsset
+            let sourceStart: CMTime
+            let sourceDuration: CMTime
+            switch overlay.playback {
+            case .forward:
+                mediaAsset = originalAsset
+                sourceStart = CMTime(seconds: overlay.trimStart, preferredTimescale: timescale)
+                sourceDuration = CMTime(
+                    seconds: overlay.trimEnd - overlay.trimStart,
+                    preferredTimescale: timescale
+                )
+            case let .reverse(audioPolicy):
+                guard let url = try? await EditorReverseMediaService.cachedURL(
+                    for: overlay.asset,
+                    sourceStart: overlay.trimStart,
+                    sourceEnd: overlay.trimEnd,
+                    audioPolicy: audioPolicy
+                ) else { continue }
+                mediaAsset = AVURLAsset(url: url)
+                sourceStart = .zero
+                sourceDuration = CMTime(
+                    seconds: overlay.trimEnd - overlay.trimStart,
+                    preferredTimescale: timescale
+                )
+            case let .freeze(sourceTime, _):
+                guard let url = await freezeVideoURL(
+                    for: originalAsset,
+                    assetIdentifier: overlay.asset.localIdentifier,
+                    sourceTime: sourceTime,
+                    duration: overlay.duration
+                ) else { continue }
+                mediaAsset = AVURLAsset(url: url)
+                sourceStart = .zero
+                sourceDuration = timelineDuration
+            }
             let sourceRange = CMTimeRange(start: sourceStart, duration: sourceDuration)
             let timelineRange = CMTimeRange(start: timelineStart, duration: timelineDuration)
 
-            if let sourceVideo = try? await asset.loadTracks(withMediaType: .video).first,
+            if let sourceVideo = try? await mediaAsset.loadTracks(withMediaType: .video).first,
                let overlayTrack = composition.addMutableTrack(
                     withMediaType: .video,
                     preferredTrackID: kCMPersistentTrackID_Invalid
@@ -331,17 +680,41 @@ enum EditorCompositionBuilder {
                 }
             }
 
-            if let sourceAudio = try? await asset.loadTracks(withMediaType: .audio).first,
+            let audioSource: (asset: AVAsset, range: CMTimeRange, timelineDuration: CMTime)? = {
+                switch overlay.playback {
+                case .forward:
+                    return (originalAsset, sourceRange, timelineDuration)
+                case let .reverse(audioPolicy):
+                    guard audioPolicy == .reverse else { return nil }
+                    return (mediaAsset, sourceRange, timelineDuration)
+                case let .freeze(sourceTime, audioPolicy):
+                    guard audioPolicy == .continueSource else { return nil }
+                    let available = max(0, overlay.asset.duration - sourceTime)
+                    let audioDuration = min(overlay.duration, available)
+                    guard audioDuration > 0 else { return nil }
+                    return (
+                        originalAsset,
+                        CMTimeRange(
+                            start: CMTime(seconds: sourceTime, preferredTimescale: timescale),
+                            duration: CMTime(seconds: audioDuration, preferredTimescale: timescale)
+                        ),
+                        CMTime(seconds: audioDuration, preferredTimescale: timescale)
+                    )
+                }
+            }()
+
+            if let audioSource,
+               let sourceAudio = try? await audioSource.asset.loadTracks(withMediaType: .audio).first,
                let overlayAudioTrack = composition.addMutableTrack(
                     withMediaType: .audio,
                     preferredTrackID: kCMPersistentTrackID_Invalid
-               ) {
+                ) {
                 do {
-                    try overlayAudioTrack.insertTimeRange(sourceRange, of: sourceAudio, at: timelineStart)
+                    try overlayAudioTrack.insertTimeRange(audioSource.range, of: sourceAudio, at: timelineStart)
                     applySpeed(
                         overlay.speed,
-                        sourceDuration: sourceDuration,
-                        timelineDuration: timelineDuration,
+                        sourceDuration: audioSource.range.duration,
+                        timelineDuration: audioSource.timelineDuration,
                         on: overlayAudioTrack,
                         at: timelineStart
                     )
@@ -2054,6 +2427,102 @@ enum EditorCompositionBuilder {
         return url
     }
 
+    /// Samples the exact edited source frame and turns it into a silent video
+    /// segment. Keeping this in the shared builder guarantees preview/export
+    /// use the same frame, transform, grade, masks, and keyframes.
+    private static func freezeVideoURL(
+        for asset: AVAsset,
+        assetIdentifier: String,
+        sourceTime: TimeInterval,
+        duration: TimeInterval
+    ) async -> URL? {
+        let key = "\(assetIdentifier)|\(sourceTime)|\(duration)"
+        if let cached = freezeVideoCache[key],
+           FileManager.default.fileExists(atPath: cached.path) {
+            return cached
+        }
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let loadedDuration = try? await asset.load(.duration)
+        let assetDuration = loadedDuration?.seconds ?? sourceTime
+        let safeSourceTime = min(
+            max(0, sourceTime),
+            max(0, assetDuration - (1 / Double(timescale)))
+        )
+        let time = CMTime(seconds: safeSourceTime, preferredTimescale: timescale)
+        guard let result = try? await generator.image(at: time),
+              let url = await writeStillVideo(
+                image: UIImage(cgImage: result.image),
+                duration: duration,
+                cacheKey: key
+              ) else { return nil }
+        freezeVideoCache[key] = url
+        return url
+    }
+
+    private static func writeStillVideo(
+        image: UIImage,
+        duration: TimeInterval,
+        cacheKey: String
+    ) async -> URL? {
+        let maximumEdge: CGFloat = 1920
+        let scale = min(1, maximumEdge / max(image.size.width, image.size.height, 1))
+        let width = max(2, Int((image.size.width * scale).rounded()) / 2 * 2)
+        let height = max(2, Int((image.size.height * scale).rounded()) / 2 * 2)
+        let renderedSize = CGSize(width: width, height: height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let rendered = UIGraphicsImageRenderer(size: renderedSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: renderedSize))
+        }
+
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MixtapeFreezeFrames", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let safeKey = Data(cacheKey.utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+        let url = directory.appendingPathComponent("\(safeKey).mov")
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else { return nil }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height
+            ]
+        )
+        guard writer.canAdd(input) else { return nil }
+        writer.add(input)
+        guard writer.startWriting() else { return nil }
+        writer.startSession(atSourceTime: .zero)
+        guard let buffer = pixelBuffer(from: rendered, width: width, height: height) else {
+            writer.cancelWriting()
+            return nil
+        }
+        let appended = adaptor.append(buffer, withPresentationTime: .zero)
+        input.markAsFinished()
+        writer.endSession(atSourceTime: CMTime(seconds: max(duration, 0.05), preferredTimescale: timescale))
+        let result: URL? = await withCheckedContinuation { continuation in
+            writer.finishWriting {
+                let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                continuation.resume(returning: appended && (bytes ?? 0) > 0 ? url : nil)
+            }
+        }
+        return result
+    }
+
     private static func writePhotoVideo(image: UIImage, duration: TimeInterval) async -> URL? {
         let oriented = normalizedPortraitImage(image)
         let width = Int(previewCanvasSize.width)
@@ -2326,6 +2795,7 @@ enum EditorCompositionBuilder {
     static func clearCaches() {
         assetCache.removeAll()
         photoVideoCache.removeAll()
+        freezeVideoCache.removeAll()
         solidVideoCache.removeAll()
         warmedPlayerItem = nil
         warmedFingerprint = nil

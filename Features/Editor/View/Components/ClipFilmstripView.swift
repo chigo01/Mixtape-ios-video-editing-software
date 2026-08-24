@@ -45,6 +45,6 @@ struct ClipFilmstripView: View {
     }
 
     private var taskKey: String {
-        "\(clip.id)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(Int(width))"
+        "\(clip.id)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.playback)|\(Int(width))"
     }
 }

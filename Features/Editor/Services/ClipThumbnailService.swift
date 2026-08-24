@@ -15,7 +15,7 @@ actor ClipThumbnailService {
 
     func filmstrip(for clip: EditorClip, width: CGFloat, height: CGFloat) async -> [UIImage] {
         let frameCount = max(1, min(10, Int(width / 26)))
-        let key = "\(clip.id)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(frameCount)|\(Int(width))"
+        let key = "\(clip.id)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(clip.playback)|\(frameCount)|\(Int(width))"
         if let cached = cache[key] { return cached }
 
         let frames: [UIImage]
@@ -43,8 +43,17 @@ actor ClipThumbnailService {
         frames.reserveCapacity(count)
         for index in 0..<count {
             let fraction = count == 1 ? 0.0 : Double(index) / Double(count - 1)
-            let seconds = clip.trimStart + span * fraction
-            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            let seconds: TimeInterval
+            switch clip.playback {
+            case .forward:
+                seconds = clip.trimStart + span * fraction
+            case .reverse:
+                seconds = clip.trimEnd - span * fraction
+            case let .freeze(sourceTime, _):
+                seconds = sourceTime
+            }
+            let safeSeconds = min(max(0, seconds), max(0, clip.asset.duration - 1.0 / 600.0))
+            let time = CMTime(seconds: safeSeconds, preferredTimescale: 600)
             guard let cgImage = try? await generator.image(at: time).image else { continue }
             frames.append(UIImage(cgImage: cgImage))
         }

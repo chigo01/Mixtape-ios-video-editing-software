@@ -16,6 +16,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var trimEnd: TimeInterval
     var speed: Float
     var speedRamp: EditorSpeedRamp?
+    var playback: EditorClipPlayback
     var volume: Float
     var audioTrimStart: TimeInterval?
     var audioTrimEnd: TimeInterval?
@@ -45,6 +46,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimEnd = clip.trimEnd
         speed = clip.speed
         speedRamp = clip.speedRamp
+        playback = clip.playback
         volume = clip.volume
         audioTrimStart = clip.audioTrimStart
         audioTrimEnd = clip.audioTrimEnd
@@ -76,6 +78,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
         speed = try c.decode(Float.self, forKey: .speed)
         speedRamp = try c.decodeIfPresent(EditorSpeedRamp.self, forKey: .speedRamp)
+        playback = try c.decodeIfPresent(EditorClipPlayback.self, forKey: .playback) ?? .forward
         volume = try c.decode(Float.self, forKey: .volume)
         audioTrimStart = try c.decodeIfPresent(TimeInterval.self, forKey: .audioTrimStart)
         audioTrimEnd = try c.decodeIfPresent(TimeInterval.self, forKey: .audioTrimEnd)
@@ -310,6 +313,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
     var laneIndex: Int
     var zIndex: Int
     var speed: Float
+    var playback: EditorClipPlayback
     var scale: CGFloat
     var xOffset: CGFloat
     var yOffset: CGFloat
@@ -344,6 +348,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         laneIndex = clip.laneIndex
         zIndex = clip.zIndex
         speed = clip.speed
+        playback = clip.playback
         scale = clip.scale
         xOffset = clip.xOffset
         yOffset = clip.yOffset
@@ -380,6 +385,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         laneIndex = try c.decodeIfPresent(Int.self, forKey: .laneIndex) ?? -1
         zIndex = try c.decodeIfPresent(Int.self, forKey: .zIndex) ?? laneIndex
         speed = try c.decodeIfPresent(Float.self, forKey: .speed) ?? 1
+        playback = try c.decodeIfPresent(EditorClipPlayback.self, forKey: .playback) ?? .forward
         scale = try c.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 0.55
         xOffset = try c.decodeIfPresent(CGFloat.self, forKey: .xOffset) ?? 0
         yOffset = try c.decodeIfPresent(CGFloat.self, forKey: .yOffset) ?? 0
@@ -453,8 +459,14 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var closingTransitionDuration: TimeInterval
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
+    var selectedTextOverlayID: UUID?
     var selectedAudioClipID: UUID?
     var selectedOverlayClipID: UUID?
+    var sequences: [EditorSequence]
+    var markers: [EditorTimelineMarker]
+    var selectedTimelineItems: [EditorTimelineItemReference]
+    var selectedSequenceID: UUID?
+    var activeSequenceID: UUID?
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
     var exportOutPoint: TimeInterval?
@@ -464,7 +476,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
         case audioClips, audioTrack, overlayClips, timelinePosition
-        case selectedClipID, selectedAudioClipID, selectedOverlayClipID
+        case selectedClipID, selectedTextOverlayID, selectedAudioClipID, selectedOverlayClipID
+        case sequences, markers, selectedTimelineItems, selectedSequenceID, activeSequenceID
         case openingTransitionKind, openingTransitionDuration
         case closingTransitionKind, closingTransitionDuration
         case canvasSettings, exportInPoint, exportOutPoint
@@ -486,8 +499,14 @@ struct EditorProject: Codable, Identifiable, Hashable {
         closingTransitionDuration: TimeInterval = 0,
         timelinePosition: TimeInterval,
         selectedClipID: UUID?,
+        selectedTextOverlayID: UUID? = nil,
         selectedAudioClipID: UUID? = nil,
         selectedOverlayClipID: UUID? = nil,
+        sequences: [EditorSequence] = [],
+        markers: [EditorTimelineMarker] = [],
+        selectedTimelineItems: [EditorTimelineItemReference] = [],
+        selectedSequenceID: UUID? = nil,
+        activeSequenceID: UUID? = nil,
         canvasSettings: EditorCanvasSettings = .default,
         exportInPoint: TimeInterval? = nil,
         exportOutPoint: TimeInterval? = nil,
@@ -512,8 +531,14 @@ struct EditorProject: Codable, Identifiable, Hashable {
             : max(0, closingTransitionDuration)
         self.timelinePosition = timelinePosition
         self.selectedClipID = selectedClipID
+        self.selectedTextOverlayID = selectedTextOverlayID
         self.selectedAudioClipID = selectedAudioClipID
         self.selectedOverlayClipID = selectedOverlayClipID
+        self.sequences = sequences
+        self.markers = markers
+        self.selectedTimelineItems = selectedTimelineItems
+        self.selectedSequenceID = selectedSequenceID
+        self.activeSequenceID = activeSequenceID
         self.canvasSettings = canvasSettings
         self.exportInPoint = exportInPoint
         self.exportOutPoint = exportOutPoint
@@ -563,8 +588,17 @@ struct EditorProject: Codable, Identifiable, Hashable {
             )
         timelinePosition = try c.decodeIfPresent(TimeInterval.self, forKey: .timelinePosition) ?? 0
         selectedClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedClipID)
+        selectedTextOverlayID = try c.decodeIfPresent(UUID.self, forKey: .selectedTextOverlayID)
         selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
         selectedOverlayClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedOverlayClipID)
+        sequences = try c.decodeIfPresent([EditorSequence].self, forKey: .sequences) ?? []
+        markers = try c.decodeIfPresent([EditorTimelineMarker].self, forKey: .markers) ?? []
+        selectedTimelineItems = try c.decodeIfPresent(
+            [EditorTimelineItemReference].self,
+            forKey: .selectedTimelineItems
+        ) ?? []
+        selectedSequenceID = try c.decodeIfPresent(UUID.self, forKey: .selectedSequenceID)
+        activeSequenceID = try c.decodeIfPresent(UUID.self, forKey: .activeSequenceID)
         overlayClips = try c.decodeIfPresent([SavedOverlayClip].self, forKey: .overlayClips) ?? []
         canvasSettings = try c.decodeIfPresent(EditorCanvasSettings.self, forKey: .canvasSettings) ?? .default
         exportInPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportInPoint)
@@ -601,8 +635,14 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(closingTransitionDuration, forKey: .closingTransitionDuration)
         try c.encode(timelinePosition, forKey: .timelinePosition)
         try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
+        try c.encodeIfPresent(selectedTextOverlayID, forKey: .selectedTextOverlayID)
         try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
         try c.encodeIfPresent(selectedOverlayClipID, forKey: .selectedOverlayClipID)
+        try c.encode(sequences, forKey: .sequences)
+        try c.encode(markers, forKey: .markers)
+        try c.encode(selectedTimelineItems, forKey: .selectedTimelineItems)
+        try c.encodeIfPresent(selectedSequenceID, forKey: .selectedSequenceID)
+        try c.encodeIfPresent(activeSequenceID, forKey: .activeSequenceID)
         try c.encode(canvasSettings, forKey: .canvasSettings)
         try c.encodeIfPresent(exportInPoint, forKey: .exportInPoint)
         try c.encodeIfPresent(exportOutPoint, forKey: .exportOutPoint)
@@ -673,6 +713,7 @@ enum EditorProjectResolver {
                 trimEnd: item.trimEnd,
                 speed: item.speed,
                 speedRamp: item.speedRamp,
+                playback: item.playback,
                 volume: item.volume,
                 audioTrimStart: item.audioTrimStart,
                 audioTrimEnd: item.audioTrimEnd,
@@ -721,6 +762,7 @@ enum EditorProjectResolver {
                 laneIndex: item.laneIndex,
                 zIndex: item.zIndex,
                 speed: item.speed,
+                playback: item.playback,
                 scale: item.scale,
                 xOffset: item.xOffset,
                 yOffset: item.yOffset,

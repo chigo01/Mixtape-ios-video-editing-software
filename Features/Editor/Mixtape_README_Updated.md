@@ -146,7 +146,7 @@ This follows **MVVM + unidirectional data flow**: the view model is the source o
 
 - **`@Observable`** (iOS 17+): Swift tracks which properties views read and updates them efficiently. See [Migrating to the Observable macro](https://developer.apple.com/documentation/swiftui/migrating-from-the-observable-object-protocol-to-the-observable-macro).
 - **`@ObservationIgnored`**: used for things that should **not** trigger UI refresh (e.g. `PHCachingImageManager`, `Timer`) — see `EditorViewModel`.
-  
+
 ---
 
 ## 4. Playback: one composition, one player (CapCut-style)
@@ -822,8 +822,8 @@ keyframe behavior.
 
 | Track | Feature | Definition of done |
 |-------|---------|--------------------|
-| T1 | **Precision trim and sync edits** | Ripple delete, ripple trim, roll, slip, slide, J/L cuts, linked audio/video, sync locks, and an explicit unlink/relink workflow. Every operation previews correctly, creates one undo step, preserves transitions/keyframes, and survives reopen/export. |
-| T2 | **Selection and sequence structure** | Multi-select, range selection, batch move/delete/duplicate, named timeline markers, compound clips, and nested sequences with clear enter/exit navigation and deterministic duration propagation. |
+| T1 | **Precision trim and sync edits — core shipped** | A dedicated precision editor provides ripple delete/trim, roll, slip, slide, independent J/L audio handles, and explicit unlink/relink. Operations create one undo step, preserve valid transitions/keyframe ranges, persist across reopen, and use the shared preview/export composition. Track locks remain a separate track-policy follow-up. |
+| T2 | **Selection and sequence structure — core shipped** | Cross-track tap and In/Out range selection, one-step batch move/delete/duplicate, named persisted groups and markers, recursively nested compounds, clear focus navigation, split/delete membership repair, and duration derived from authoritative member boundaries. Preview and export continue rendering the same flat media timeline. |
 
 ### Phase 2 — motion and advanced compositing
 
@@ -831,7 +831,7 @@ keyframe behavior.
 |----------|---------|--------------------|
 | 7 | **Keyframe engine — complete** | Reusable local-time scalar tracks and a graph/curve editor cover transform, opacity, volume, crop/reframe, filter intensity, text motion, and effect parameters. Hold, linear, ease-in, ease-out, ease-in/out, and editable cubic Bézier segments share one deterministic sampler. Clip/overlay GPU rendering, audio mix ramps, SwiftUI text preview, offline text burn-in, split/duplicate/replace, undo, autosave, reopen, and export consume the same persisted tracks. |
 | 8 | **Speed ramps — complete** | Normal/Curve modes, six presets, editable points, linear/smooth interpolation, 0.1×–8× range, source/timeline remapping, split-safe persistence, undo, timeline feedback, and shared preview/export segment rendering. |
-| 9 | **Reverse and freeze frame** | Cached reverse media generation, cancellable progress, freeze insertion, audio policy, and project relinking. |
+| 9 | **Reverse and freeze frame — complete** | Primary clips and video overlays support non-destructive reverse with deterministic disk caching, cancellable progress, reversed-or-muted embedded audio, cache regeneration from the original Photos asset, and toggle-to-restore. Playhead-accurate freeze insertion supports 0.1–10 second holds, lane-aware ripple behavior, held keyframe state, undo, persistence, split/duplicate, relinking, timeline badges, and identical preview/export composition. Primary freezes additionally offer explicit mute/continue-source audio policy; overlay freezes safely mute embedded audio so the resumed overlay remains source-synchronous. |
 | 10 | **Multi-layer video — complete** | Multiple video-overlay tracks render in a persistent back-to-front stack. Each layer has independent trim/move, opacity, transforms, keyframes, and audio controls; contextual Send Back/Bring Front actions are undoable and export matches preview ordering. |
 | 11 | **Blend, mask, and chroma key — complete** | Sixteen blend modes on primary and overlay clips; ellipse, rectangle, linear, and direct-preview custom polygon masks with feather and matte cleanup; chroma and luma keying with spill suppression; configurable layer shadows; manual correction keyframes for tracked color masks; backward-compatible persistence, undo, debounced live preview, and identical GPU export. |
 | 12 | **Stabilization and motion tracking — complete** | Reusable point and planar tracks; Gaussian transform smoothing; tracked text and overlay graphics; Vision camera-path analysis with smoothness and crop sliders; undo, persistence, split-safe samples, and identical GPU preview/export. |
@@ -842,6 +842,14 @@ keyframe behavior.
 - **Editor:** contextual **KEYFRAME** actions open one graph editor for primary clips, video overlays, imported audio, and text. Dragging the graph scrubs the playhead and magnetically snaps to nearby diamonds without changing values; previous/next buttons jump between points. Values change only through the slider or numeric field. Points can be added, selected, deleted, and assigned preset or custom cubic Bézier curves, with undo/redo available inside the sheet.
 - **Rendering:** the transition compositor samples clip and overlay transform/opacity/filter tracks per frame; `AVAudioMix` receives sampled volume ramps; text uses the same tracks in live SwiftUI preview and offline Core Animation burn-in.
 - **Project integrity:** keyframes participate in value equality, snapshot undo/redo, composition fingerprints, autosave, backward-compatible decoding, duplication/replacement, and split operations. Projects created before Priority 7 decode with empty tracks.
+
+#### Reverse and freeze frame
+
+- **Reverse:** select a primary video clip or video overlay and tap **REVERSE**. `EditorReverseMediaService` builds the visible source range in reverse order, optionally reverses its embedded audio, writes a deterministic high-quality file under `Library/Caches/MixtapeReverseMedia`, reports preparation/export progress, and cancels cleanly without changing the project. Tapping **REVERSE** again restores forward playback without touching the original media.
+- **Cache and relinking:** `EditorClipPlayback.reverse` persists only the non-destructive treatment and audio policy. The Photos local identifier plus source range is the cache key and remains the relink authority; if iOS purges the derived file, the shared composition path regenerates it from the original asset. Cache paths are never serialized as authoritative project media.
+- **Freeze:** place the playhead on a selected primary video or video overlay and tap **FREEZE**. The editor samples that exact displayed frame and inserts a 0.1–10 second still segment. Primary freezes ripple the full timeline; overlay freezes ripple later items on that overlay lane without moving unrelated tracks. Animated channels are sampled into hold keyframes instead of restarting their motion.
+- **Audio policy:** **Mute Clip Audio** is the safe default and leaves music, voiceover, and other lanes playing. Primary freezes can use **Continue Clip Audio** to carry source audio forward under the held image as a deliberate J-cut. Overlay freezes mute embedded audio to avoid replaying the same source after the hold. Reverse clips and overlays expose reversed embedded audio by default and retain a persisted mute policy.
+- **Editing and delivery:** REV/HOLD badges and direction-correct filmstrips make derived clips obvious. Reverse/freeze state participates in equality, composition fingerprints, snapshot undo/redo, autosave, backward-compatible project decoding, duplication, source-aware splitting, timeline trimming, preview, and offline export.
 
 #### Multi-layer video
 
@@ -1365,8 +1373,8 @@ The roadmap priorities above remain the detailed source of truth. When choosing 
 |----------------|------|----------------|
 | **P0** | **Captions and transcript editing** | Modern creator workflows depend on fast, editable, styled captions. Timed words, transcript search, word highlighting, SRT import/export, and approved transcript-to-timeline edits provide immediate user value. |
 | **P0** | **Timeline precision: ripple/roll/slip/slide + J/L cuts — core shipped** | A dedicated precision editor now provides frame/0.1s/0.5s ripple, roll, slip, and slide adjustments plus visible linked A/V, reversible unlink/relink, and independent J/L source-audio handles. Operations are single-step undoable, persistent, and shared by preview/export composition. |
-| **P0** | **Multi-select, grouping, compound clips, and sequence structure** | Complex projects become substantially easier to manage when related clips/layers can be selected, moved, duplicated, grouped, compounded, and eventually nested. |
-| **P0** | **Reverse and freeze frame** | These are expected editing primitives and should be completed before adding more specialized creative tools. Reverse generation must be cached/cancellable; freeze insertion must have an explicit audio policy. |
+| **P0** | **Multi-select, grouping, compound clips, and sequence structure — core shipped** | Cross-track tap and In/Out range selection, batch move/duplicate/delete, persisted groups, recursively nested compounds, named markers, focus navigation, and one-step undo now share the authoritative flat render timeline, preventing preview/export divergence. |
+| **P0** | **Reverse and freeze frame — shipped** | Primary clips and video overlays support non-destructive cached reverse generation, cancellable progress, appropriate embedded-audio policy, playhead-accurate ripple freeze insertion, held animation state, relinking/regeneration, persistence, undo, and shared preview/export rendering. |
 | **P0** | **Effects stack + adjustment layers** | A general stackable effects system is more valuable than a large set of hard-coded effects. Effects need ordering, bypass, parameters, presets, keyframe interoperability, caching, and identical preview/export behavior. |
 | **P1** | **Text animation — shipped** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability now make the text system creator-ready. |
 | **P1** | **Stickers and reusable graphics** | Adds fast creator-oriented composition without weakening the professional timeline model. Assets should behave like ordinary timeline elements. |
@@ -1419,7 +1427,22 @@ The core single-selection workflow is shipped. Select a primary video clip and o
 - Slip changes only the selected source range, preserving its timeline position and duration.
 - J/L Cuts use independent embedded-audio composition tracks, visibly mark unlinked clips, persist source-audio boundaries, and support one-tap relinking to picture.
 - Project save/reopen, undo/redo snapshots, composition invalidation, live preview, and offline export all consume the same audio-link and precision-edit state.
-- Precision source edits deliberately reject speed-ramped clips until the curve is committed or removed; track locks and multi-selection remain part of the separate sequence-structure milestone.
+- Precision source edits deliberately reject speed-ramped clips until the curve is committed or removed; track locks remain a separate track-policy milestone.
+
+#### Selection and sequence structure implementation status
+
+The core sequence workflow is shipped. The timeline header exposes multi-select in every editing context, and selected items retain their own track identity rather than being converted into generic placeholders.
+
+- **Cross-track selection:** primary clips, captions/text, imported audio, and video overlays can be selected together. Selection mode disables trim, move, and reorder gestures so tapping cannot accidentally modify media.
+- **Range selection:** existing persisted In/Out points select every intersecting timeline item. Select All respects the currently entered compound sequence.
+- **Batch commands:** Earlier/Later, Duplicate, and Delete operate as one undo transaction. Primary-video moves preserve selected timed-item offsets; primary duplication and deletion ripple downstream timed tracks and named markers through the shared precision-edit engine.
+- **Groups:** named persisted groups retain stable typed references to their members. Their displayed duration is always derived from current member boundaries, so trims and moves propagate automatically.
+- **Compound clips and nesting:** compounds recursively contain timeline items or child sequences. Enter/Up navigation establishes an explicit editing focus; non-members are dimmed and interaction-locked while the full program remains visible for context.
+- **Deterministic rendering:** compound structure never creates a competing render representation. Preview, autosave/reopen, undo/redo, and export continue consuming the same authoritative clips, text, audio, and overlays.
+- **Markers:** named project markers persist, snap the playhead, seek from the structure manager, and remap predictably during ripple insert/delete operations.
+- **Structural safety:** split operations propagate membership to both resulting pieces, deleted or missing media is pruned from containers, recursive lookup is cycle-guarded, and dissolving a compound safely promotes its children to the parent sequence.
+
+The current compound implementation is intentionally non-destructive and structural. Optional future render-and-replace or proxy flattening would be a performance optimization, not a different editing or export model.
 
 ### 14.4 Captions should become a first-class editing workflow
 

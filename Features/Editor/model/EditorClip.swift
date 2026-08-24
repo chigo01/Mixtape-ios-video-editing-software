@@ -91,6 +91,44 @@ enum EditorReframeMode: String, Codable, CaseIterable, Identifiable {
     var title: String { rawValue.capitalized }
 }
 
+enum EditorReverseAudioPolicy: String, Codable, CaseIterable, Identifiable, Hashable {
+    case reverse
+    case mute
+
+    var id: String { rawValue }
+    var title: String { self == .reverse ? "Reverse Audio" : "Mute Audio" }
+}
+
+enum EditorFreezeAudioPolicy: String, Codable, CaseIterable, Identifiable, Hashable {
+    /// The usual freeze-frame edit: music, voiceover, and other timeline lanes
+    /// continue, but the selected clip's embedded source audio is silent.
+    case mute
+    /// Plays source audio forward from the sampled frame for the hold duration.
+    /// This is intentionally explicit because it creates an editorial J-cut.
+    case continueSource
+
+    var id: String { rawValue }
+    var title: String { self == .mute ? "Mute Clip Audio" : "Continue Clip Audio" }
+}
+
+/// Non-destructive source treatment. The original Photos asset remains the
+/// relink authority; reverse media is a deterministic, disposable render cache.
+enum EditorClipPlayback: Codable, Hashable {
+    case forward
+    case reverse(audio: EditorReverseAudioPolicy)
+    case freeze(sourceTime: TimeInterval, audio: EditorFreezeAudioPolicy)
+
+    var isReverse: Bool {
+        if case .reverse = self { return true }
+        return false
+    }
+
+    var isFreezeFrame: Bool {
+        if case .freeze = self { return true }
+        return false
+    }
+}
+
 enum EditorCropAspect: String, Codable, CaseIterable, Identifiable {
     case original
     case vertical
@@ -136,6 +174,7 @@ struct EditorClip: Identifiable, Hashable {
     var trimEnd: TimeInterval
     var speed: Float
     var speedRamp: EditorSpeedRamp?
+    var playback: EditorClipPlayback
     var volume: Float
     /// Embedded source-audio boundaries. While linked, nil values follow the
     /// video trim exactly. Unlinking materializes independent source handles
@@ -179,6 +218,7 @@ struct EditorClip: Identifiable, Hashable {
         trimEnd: TimeInterval,
         speed: Float = 1.0,
         speedRamp: EditorSpeedRamp? = nil,
+        playback: EditorClipPlayback = .forward,
         volume: Float = 1.0,
         audioTrimStart: TimeInterval? = nil,
         audioTrimEnd: TimeInterval? = nil,
@@ -207,6 +247,7 @@ struct EditorClip: Identifiable, Hashable {
         self.trimEnd = trimEnd
         self.speed = speed
         self.speedRamp = speedRamp?.isUsable == true ? speedRamp : nil
+        self.playback = playback
         self.volume = volume
         self.isAudioLinked = isAudioLinked
         let resolvedAudioStart = min(max(audioTrimStart ?? trimStart, 0), originalDuration)
@@ -265,6 +306,7 @@ struct EditorClip: Identifiable, Hashable {
             trimEnd: sourceTime,
             speed: speed,
             speedRamp: splitRamps?.left,
+            playback: playback,
             volume: volume,
             audioTrimStart: isAudioLinked ? nil : effectiveAudioTrimStart,
             audioTrimEnd: isAudioLinked ? nil : min(effectiveAudioTrimEnd, sourceTime),
@@ -293,6 +335,7 @@ struct EditorClip: Identifiable, Hashable {
             trimEnd: trimEnd,
             speed: speed,
             speedRamp: splitRamps?.right,
+            playback: playback,
             volume: volume,
             audioTrimStart: isAudioLinked ? nil : max(effectiveAudioTrimStart, sourceTime),
             audioTrimEnd: isAudioLinked ? nil : effectiveAudioTrimEnd,
@@ -315,6 +358,42 @@ struct EditorClip: Identifiable, Hashable {
             transitionDuration: transitionDuration
         )
         return (left, right)
+    }
+
+    /// Splits in what the editor is displaying. A reversed clip's first
+    /// timeline half comes from the upper source range, so its source halves
+    /// must be returned in the opposite order.
+    func split(atTimelineTime localTime: TimeInterval) -> (left: EditorClip, right: EditorClip)? {
+        let splitSourceTime = displayedSourceTime(atTimelineTime: localTime)
+        guard let parts = split(atSourceTime: splitSourceTime) else { return nil }
+        if playback.isReverse {
+            var left = parts.right
+            var right = parts.left
+            let clampedLocal = min(max(0, localTime), duration)
+            let splitKeyframes = keyframes.split(at: clampedLocal)
+            left.keyframes = splitKeyframes.left
+            right.keyframes = splitKeyframes.right
+            let reversedSourceOffset = sourceTime(forExportedLocal: clampedLocal) - trimStart
+            let sourceSpan = max(trimEnd - trimStart, 0.000_001)
+            let splitRamps = speedRamp?.split(
+                atSourceProgress: min(max(reversedSourceOffset / sourceSpan, 0), 1)
+            )
+            left.speedRamp = splitRamps?.left
+            right.speedRamp = splitRamps?.right
+            let progress = min(max(clampedLocal / max(duration, 0.000_001), 0), 1)
+            let splitTracks = motionTracks.map { $0.split(at: progress) }
+            left.motionTracks = splitTracks.map(\.left)
+            right.motionTracks = splitTracks.map(\.right)
+            let splitStabilization = stabilization.split(at: progress)
+            left.stabilization = splitStabilization.left
+            right.stabilization = splitStabilization.right
+            left.transitionKind = .none
+            left.transitionDuration = 0
+            right.transitionKind = transitionKind
+            right.transitionDuration = transitionDuration
+            return (left, right)
+        }
+        return parts
     }
 
     var isVideo: Bool { asset.mediaType == .video }
@@ -366,6 +445,15 @@ struct EditorClip: Identifiable, Hashable {
         )
     }
 
+    func displayedSourceTime(atTimelineTime local: TimeInterval) -> TimeInterval {
+        let forward = sourceTime(forExportedLocal: local)
+        guard playback.isReverse else {
+            if case let .freeze(sourceTime, _) = playback { return sourceTime }
+            return forward
+        }
+        return min(max(trimEnd - (forward - trimStart), trimStart), trimEnd)
+    }
+
     func timelineTime(forSourceOffset sourceOffset: TimeInterval) -> TimeInterval {
         let trimmed = max(0, trimEnd - trimStart)
         if let speedRamp {
@@ -384,6 +472,7 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.trimEnd == rhs.trimEnd
             && lhs.speed == rhs.speed
             && lhs.speedRamp == rhs.speedRamp
+            && lhs.playback == rhs.playback
             && lhs.volume == rhs.volume
             && lhs.audioTrimStart == rhs.audioTrimStart
             && lhs.audioTrimEnd == rhs.audioTrimEnd
@@ -426,6 +515,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
     /// Back-to-front compositing order. Split pieces retain their parent's layer.
     var zIndex: Int
     var speed: Float
+    var playback: EditorClipPlayback
     var scale: CGFloat
     var xOffset: CGFloat
     var yOffset: CGFloat
@@ -460,6 +550,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
         laneIndex: Int = 0,
         zIndex: Int? = nil,
         speed: Float = 1,
+        playback: EditorClipPlayback = .forward,
         scale: CGFloat = 0.55,
         xOffset: CGFloat = 0,
         yOffset: CGFloat = 0,
@@ -495,6 +586,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
         self.laneIndex = laneIndex
         self.zIndex = max(0, zIndex ?? laneIndex)
         self.speed = min(max(speed, 0.25), 3)
+        self.playback = playback
         self.scale = min(max(scale, 0.15), 1.5)
         self.xOffset = min(max(xOffset, -0.75), 0.75)
         self.yOffset = min(max(yOffset, -0.75), 0.75)
@@ -538,6 +630,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             trimStart: trimStart,
             trimEnd: trimEnd,
             speed: speed,
+            playback: playback,
             volume: volume,
             cropAspect: cropAspect,
             reframeMode: reframeMode,
@@ -553,7 +646,15 @@ struct EditorOverlayClip: Identifiable, Hashable {
     }
 
     func sourceTime(forTimelineLocal local: TimeInterval) -> TimeInterval {
-        min(max(trimStart + local * TimeInterval(speed), trimStart), trimEnd)
+        let clampedLocal = min(max(0, local), duration)
+        switch playback {
+        case .forward:
+            return min(max(trimStart + clampedLocal * TimeInterval(speed), trimStart), trimEnd)
+        case .reverse:
+            return min(max(trimEnd - clampedLocal * TimeInterval(speed), trimStart), trimEnd)
+        case let .freeze(sourceTime, _):
+            return min(max(sourceTime, 0), originalDuration)
+        }
     }
 
     func resolved(at timelineTime: TimeInterval) -> EditorOverlayClip {
@@ -610,6 +711,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             laneIndex: laneIndex,
             zIndex: zIndex,
             speed: speed,
+            playback: playback,
             scale: scale,
             xOffset: xOffset,
             yOffset: yOffset,
@@ -643,6 +745,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             laneIndex: laneIndex,
             zIndex: zIndex,
             speed: speed,
+            playback: playback,
             scale: scale,
             xOffset: xOffset,
             yOffset: yOffset,
@@ -670,6 +773,31 @@ struct EditorOverlayClip: Identifiable, Hashable {
         return (left, right)
     }
 
+    func split(atTimelineTime localTime: TimeInterval) -> (left: EditorOverlayClip, right: EditorOverlayClip)? {
+        guard !playback.isFreezeFrame else { return nil }
+        let clampedLocal = min(max(0, localTime), duration)
+        let sourceTime = sourceTime(forTimelineLocal: clampedLocal)
+        guard let sourceParts = split(atSourceTime: sourceTime) else { return nil }
+        guard playback.isReverse else { return sourceParts }
+
+        var left = sourceParts.right
+        var right = sourceParts.left
+        left.timelineStart = timelineStart
+        right.timelineStart = timelineStart + left.duration
+
+        let splitKeyframes = keyframes.split(at: clampedLocal)
+        left.keyframes = splitKeyframes.left
+        right.keyframes = splitKeyframes.right
+        let progress = duration > 0 ? clampedLocal / duration : 0.5
+        let splitTracks = motionTracks.map { $0.split(at: progress) }
+        left.motionTracks = splitTracks.map(\.left)
+        right.motionTracks = splitTracks.map(\.right)
+        let splitStabilization = stabilization.split(at: progress)
+        left.stabilization = splitStabilization.left
+        right.stabilization = splitStabilization.right
+        return (left, right)
+    }
+
     static func == (lhs: EditorOverlayClip, rhs: EditorOverlayClip) -> Bool {
         lhs.id == rhs.id
             && lhs.asset.localIdentifier == rhs.asset.localIdentifier
@@ -680,6 +808,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             && lhs.laneIndex == rhs.laneIndex
             && lhs.zIndex == rhs.zIndex
             && lhs.speed == rhs.speed
+            && lhs.playback == rhs.playback
             && lhs.scale == rhs.scale
             && lhs.xOffset == rhs.xOffset
             && lhs.yOffset == rhs.yOffset

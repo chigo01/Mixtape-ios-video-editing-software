@@ -32,6 +32,12 @@ final class EditorViewModel {
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
     var exportOutPoint: TimeInterval?
+    private(set) var sequences: [EditorSequence]
+    private(set) var markers: [EditorTimelineMarker]
+    var selectedTimelineItems: Set<EditorTimelineItemReference>
+    var selectedSequenceID: UUID?
+    var activeSequenceID: UUID?
+    var isMultiSelectMode = false
 
     /// Global playhead: 0 … totalDuration across every clip in order.
     var timelinePosition: TimeInterval = 0
@@ -55,6 +61,10 @@ final class EditorViewModel {
     @ObservationIgnored
     var activeTrackingCanvasSize: CGSize?
     private(set) var stabilizationAnalysisProgress: Double?
+    private(set) var reverseGenerationProgress: Double?
+    private(set) var reverseGenerationClipID: UUID?
+    var reverseGenerationErrorMessage: String?
+    @ObservationIgnored private var reverseGenerationTask: Task<Void, Never>?
 
     // MARK: Text overlay editing
 
@@ -206,6 +216,7 @@ final class EditorViewModel {
         self.selectedClipID = project.selectedClipID ?? clips.first?.id
         self.timelinePosition = project.timelinePosition
         self.textOverlays = project.textOverlays.map { $0.toOverlay() }
+        self.selectedTextOverlayID = project.selectedTextOverlayID
         self.audioClips = project.audioClips.compactMap { $0.toAudioClip() }
         self.audioTrackSettings = project.audioTrackSettings
         self.masterVolume = project.masterVolume
@@ -241,6 +252,34 @@ final class EditorViewModel {
         self.canvasSettings = project.canvasSettings
         self.exportInPoint = project.exportInPoint
         self.exportOutPoint = project.exportOutPoint
+        self.sequences = project.sequences
+        self.markers = project.markers.sorted { $0.time < $1.time }
+        self.selectedTimelineItems = Set(project.selectedTimelineItems)
+        self.selectedSequenceID = project.selectedSequenceID
+        self.activeSequenceID = project.activeSequenceID
+        let validSequenceIDs = Set(project.sequences.map(\.id))
+        if activeSequenceID.map({ !validSequenceIDs.contains($0) }) == true { activeSequenceID = nil }
+        if selectedSequenceID.map({ !validSequenceIDs.contains($0) }) == true { selectedSequenceID = nil }
+        if !selectedTimelineItems.isEmpty {
+            self.isMultiSelectMode = true
+            self.selectedTool = .sequence
+            self.selectedClipID = nil
+            self.selectedTextOverlayID = nil
+            self.selectedAudioClipID = nil
+            self.selectedOverlayClipID = nil
+        }
+        pruneSequenceStructure()
+        selectedTimelineItems = Set(selectedTimelineItems.filter { reference in
+            reference.kind == .sequence
+                ? sequences.contains(where: { $0.id == reference.itemID })
+                : allLeafReferences.contains(reference)
+        })
+        if selectedTimelineItems.isEmpty, isMultiSelectMode {
+            isMultiSelectMode = false
+            selectedTool = nil
+            selectedSequenceID = nil
+            selectedClipID = clips.first?.id
+        }
     }
 
     // MARK: Derived
@@ -356,6 +395,10 @@ final class EditorViewModel {
     var selectedOverlayClip: EditorOverlayClip? {
         guard let id = selectedOverlayClipID else { return nil }
         return overlayClips.first { $0.id == id }
+    }
+
+    var selectedVideoPlayback: EditorClipPlayback? {
+        selectedOverlayClip?.playback ?? selectedClip?.playback
     }
 
     var selectedReframeClip: EditorClip? {
@@ -689,6 +732,7 @@ final class EditorViewModel {
     // MARK: Selection
 
     func selectClipForEditing(_ id: UUID) {
+        if handleMultiSelection(.primary(id)) { return }
         cancelColorMaskTracking()
         selectedColorMaskID = nil
         isColorMaskEditing = false
@@ -718,6 +762,7 @@ final class EditorViewModel {
     }
 
     func selectAudioClip(_ id: UUID) {
+        if handleMultiSelection(.audio(id)) { return }
         if punchInClipID != id { cancelPunchInMark() }
         if selectedTool == .duration {
             finalizePhotoDurationEditUndo()
@@ -778,6 +823,7 @@ final class EditorViewModel {
     }
 
     func selectOverlayClip(_ id: UUID) {
+        if handleMultiSelection(.overlay(id)) { return }
         cancelColorMaskTracking()
         selectedColorMaskID = nil
         isColorMaskEditing = false
@@ -903,6 +949,14 @@ final class EditorViewModel {
             selectedTool = .split
         case .precision:
             performToolAction(.precision)
+        case .reverse:
+            if selectedClip?.playback.isReverse == true {
+                toggleReverseSelectedClip()
+            } else {
+                performToolAction(.reverse)
+            }
+        case .freeze:
+            performToolAction(.freeze)
         case .speed:
             performToolAction(.speed)
         case .duration:
@@ -928,6 +982,359 @@ final class EditorViewModel {
         case .replace:
             break
         }
+    }
+
+    var canReverseSelectedClip: Bool {
+        let selectedVideo = selectedOverlayClip?.isVideo == true || selectedClip?.isVideo == true
+        return selectedVideo && reverseGenerationProgress == nil
+            && selectedVideoPlayback?.isFreezeFrame != true
+    }
+
+    var canFreezeSelectedClipAtPlayhead: Bool {
+        if let overlay = selectedOverlayClip {
+            return overlay.isVideo
+                && !overlay.playback.isFreezeFrame
+                && timelinePosition >= overlay.timelineStart - 0.000_001
+                && timelinePosition <= overlay.timelineEnd + 0.000_001
+        }
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips[index].isVideo,
+              !clips[index].playback.isFreezeFrame else { return false }
+        let start = timelineOffsetForClipIndex(index)
+        return timelinePosition >= start - 0.000_001
+            && timelinePosition <= start + clips[index].duration + 0.000_001
+    }
+
+    func toggleReverseSelectedClip(audioPolicy: EditorReverseAudioPolicy = .reverse) {
+        if selectedOverlayClipID != nil {
+            toggleReverseSelectedOverlay(audioPolicy: audioPolicy)
+            return
+        }
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips[index].isVideo, !clips[index].playback.isFreezeFrame else { return }
+
+        if clips[index].playback.isReverse {
+            registerUndoIfNeeded()
+            clips[index].playback = .forward
+            invalidateComposition()
+            scheduleSave()
+            Task { await alignPlaybackToTimeline() }
+            return
+        }
+        if audioPolicy == .reverse && !clips[index].isAudioLinked {
+            reverseGenerationErrorMessage = "Relink the clip audio before reversing it, or choose Mute Audio. Existing J/L handles cannot be reversed as one embedded range."
+            return
+        }
+
+        cancelReverseGeneration()
+        pausePlaybackForEdit()
+        let source = clips[index]
+        reverseGenerationClipID = source.id
+        reverseGenerationProgress = 0
+        reverseGenerationErrorMessage = nil
+        reverseGenerationTask = Task { [weak self] in
+            do {
+                _ = try await EditorReverseMediaService.cachedURL(
+                    for: source.asset,
+                    sourceStart: source.trimStart,
+                    sourceEnd: source.trimEnd,
+                    audioPolicy: audioPolicy
+                ) { progress in
+                    Task { @MainActor [weak self] in
+                        guard self?.reverseGenerationClipID == source.id else { return }
+                        self?.reverseGenerationProgress = min(max(progress, 0), 1)
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
+                guard let liveIndex = self.clips.firstIndex(where: { $0.id == source.id }),
+                      self.clips[liveIndex].trimStart == source.trimStart,
+                      self.clips[liveIndex].trimEnd == source.trimEnd else {
+                    self.reverseGenerationProgress = nil
+                    self.reverseGenerationClipID = nil
+                    self.reverseGenerationTask = nil
+                    return
+                }
+                self.registerUndoIfNeeded()
+                self.clips[liveIndex].playback = .reverse(audio: audioPolicy)
+                self.reverseGenerationProgress = nil
+                self.reverseGenerationClipID = nil
+                self.reverseGenerationTask = nil
+                self.invalidateComposition()
+                self.scheduleSave()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                await self.alignPlaybackToTimeline()
+            } catch is CancellationError {
+                self?.reverseGenerationProgress = nil
+                self?.reverseGenerationClipID = nil
+                self?.reverseGenerationTask = nil
+            } catch {
+                self?.reverseGenerationErrorMessage = error.localizedDescription
+                self?.reverseGenerationProgress = nil
+                self?.reverseGenerationClipID = nil
+                self?.reverseGenerationTask = nil
+            }
+        }
+    }
+
+    private func toggleReverseSelectedOverlay(audioPolicy: EditorReverseAudioPolicy) {
+        guard let id = selectedOverlayClipID,
+              let index = overlayClips.firstIndex(where: { $0.id == id }),
+              overlayClips[index].isVideo,
+              !overlayClips[index].playback.isFreezeFrame else { return }
+
+        if overlayClips[index].playback.isReverse {
+            registerUndoIfNeeded()
+            overlayClips[index].playback = .forward
+            invalidateComposition()
+            scheduleSave()
+            Task { await alignPlaybackToTimeline() }
+            return
+        }
+
+        cancelReverseGeneration()
+        pausePlaybackForEdit()
+        let source = overlayClips[index]
+        reverseGenerationClipID = source.id
+        reverseGenerationProgress = 0
+        reverseGenerationErrorMessage = nil
+        reverseGenerationTask = Task { [weak self] in
+            do {
+                _ = try await EditorReverseMediaService.cachedURL(
+                    for: source.asset,
+                    sourceStart: source.trimStart,
+                    sourceEnd: source.trimEnd,
+                    audioPolicy: audioPolicy
+                ) { progress in
+                    Task { @MainActor [weak self] in
+                        guard self?.reverseGenerationClipID == source.id else { return }
+                        self?.reverseGenerationProgress = min(max(progress, 0), 1)
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
+                guard let liveIndex = self.overlayClips.firstIndex(where: { $0.id == source.id }),
+                      self.overlayClips[liveIndex].trimStart == source.trimStart,
+                      self.overlayClips[liveIndex].trimEnd == source.trimEnd else {
+                    self.reverseGenerationProgress = nil
+                    self.reverseGenerationClipID = nil
+                    self.reverseGenerationTask = nil
+                    return
+                }
+                self.registerUndoIfNeeded()
+                self.overlayClips[liveIndex].playback = .reverse(audio: audioPolicy)
+                self.reverseGenerationProgress = nil
+                self.reverseGenerationClipID = nil
+                self.reverseGenerationTask = nil
+                self.invalidateComposition()
+                self.scheduleSave()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                await self.alignPlaybackToTimeline()
+            } catch is CancellationError {
+                self?.reverseGenerationProgress = nil
+                self?.reverseGenerationClipID = nil
+                self?.reverseGenerationTask = nil
+            } catch {
+                self?.reverseGenerationErrorMessage = error.localizedDescription
+                self?.reverseGenerationProgress = nil
+                self?.reverseGenerationClipID = nil
+                self?.reverseGenerationTask = nil
+            }
+        }
+    }
+
+    func cancelReverseGeneration() {
+        guard let id = reverseGenerationClipID else { return }
+        reverseGenerationTask?.cancel()
+        reverseGenerationTask = nil
+        reverseGenerationProgress = nil
+        reverseGenerationClipID = nil
+        let assetIdentifier = clips.first(where: { $0.id == id })?.asset.localIdentifier
+            ?? overlayClips.first(where: { $0.id == id })?.asset.localIdentifier
+            ?? ""
+        Task { await EditorReverseMediaService.cancel(for: assetIdentifier) }
+    }
+
+    func insertFreezeFrame(
+        duration requestedDuration: TimeInterval,
+        audioPolicy: EditorFreezeAudioPolicy
+    ) {
+        if selectedOverlayClipID != nil {
+            insertOverlayFreezeFrame(duration: requestedDuration, audioPolicy: audioPolicy)
+            return
+        }
+        guard let id = selectedClipID,
+              let index = clips.firstIndex(where: { $0.id == id }),
+              clips[index].isVideo,
+              !clips[index].playback.isFreezeFrame else { return }
+        let source = clips[index]
+        let clipStart = timelineOffsetForClipIndex(index)
+        let localTime = min(max(0, timelinePosition - clipStart), source.duration)
+        let duration = min(max(requestedDuration, 0.1), 10)
+        let sourceTime = source.displayedSourceTime(atTimelineTime: localTime)
+        let heldKeyframes = source.keyframes.held(at: localTime)
+        let resolvedAudioPolicy: EditorFreezeAudioPolicy = source.playback.isReverse
+            ? .mute
+            : audioPolicy
+        let freeze = EditorClip(
+            asset: source.asset,
+            originalDuration: max(source.originalDuration, duration),
+            trimStart: 0,
+            trimEnd: duration,
+            playback: .freeze(sourceTime: sourceTime, audio: resolvedAudioPolicy),
+            volume: source.volume,
+            cropAspect: source.cropAspect,
+            reframeMode: source.reframeMode,
+            rotationQuarterTurns: source.rotationQuarterTurns,
+            straightenDegrees: source.straightenDegrees,
+            isFlippedHorizontally: source.isFlippedHorizontally,
+            isFlippedVertically: source.isFlippedVertically,
+            reframeScale: source.reframeScale,
+            reframeXOffset: source.reframeXOffset,
+            reframeYOffset: source.reframeYOffset,
+            colorAdjustment: source.colorAdjustment,
+            compositing: source.compositing,
+            keyframes: heldKeyframes,
+            motionTracks: [],
+            stabilization: .disabled
+        )
+
+        registerUndoIfNeeded()
+        pausePlaybackForEdit()
+        rippleInsertTimedItems(at: timelinePosition, duration: duration)
+
+        if let parts = source.split(atTimelineTime: localTime) {
+            clips.remove(at: index)
+            clips.insert(contentsOf: [parts.left, freeze, parts.right], at: index)
+            remapSequenceMembershipForFreeze(
+                originalID: source.id,
+                displayedIDs: [parts.left.id, freeze.id, parts.right.id]
+            )
+            remapMotionAttachmentsAfterSplit(
+                left: parts.left,
+                right: parts.right,
+                splitTime: timelinePosition + duration
+            )
+        } else if localTime <= source.duration / 2 {
+            clips.insert(freeze, at: index)
+            remapSequenceMembershipForFreeze(
+                originalID: source.id,
+                displayedIDs: [freeze.id, source.id]
+            )
+        } else {
+            clips[index].transitionKind = .none
+            clips[index].transitionDuration = 0
+            var outgoingFreeze = freeze
+            outgoingFreeze.transitionKind = source.transitionKind
+            outgoingFreeze.transitionDuration = source.transitionDuration
+            clips.insert(outgoingFreeze, at: index + 1)
+            remapSequenceMembershipForFreeze(
+                originalID: source.id,
+                displayedIDs: [source.id, outgoingFreeze.id]
+            )
+        }
+
+        selectedClipID = freeze.id
+        timelinePosition = min(clipStart + localTime, totalDuration)
+        normalizeExportRange()
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func insertOverlayFreezeFrame(
+        duration requestedDuration: TimeInterval,
+        audioPolicy _: EditorFreezeAudioPolicy
+    ) {
+        guard let id = selectedOverlayClipID,
+              let index = overlayClips.firstIndex(where: { $0.id == id }),
+              overlayClips[index].isVideo,
+              !overlayClips[index].playback.isFreezeFrame else { return }
+        let source = overlayClips[index]
+        let localTime = min(max(0, timelinePosition - source.timelineStart), source.duration)
+        let insertionTime = source.timelineStart + localTime
+        let duration = min(max(requestedDuration, 0.1), 10)
+        let sourceTime = source.sourceTime(forTimelineLocal: localTime)
+        let resolvedAudioPolicy = EditorFreezeAudioPolicy.mute
+        let heldKeyframes = source.keyframes.held(at: localTime)
+        let freeze = EditorOverlayClip(
+            asset: source.asset,
+            originalDuration: max(source.originalDuration, duration),
+            trimStart: 0,
+            trimEnd: duration,
+            timelineStart: insertionTime,
+            laneIndex: source.laneIndex,
+            zIndex: source.zIndex,
+            speed: 1,
+            playback: .freeze(sourceTime: sourceTime, audio: resolvedAudioPolicy),
+            scale: source.scale,
+            xOffset: source.xOffset,
+            yOffset: source.yOffset,
+            opacity: source.opacity,
+            volume: source.volume,
+            cropAspect: source.cropAspect,
+            reframeMode: source.reframeMode,
+            rotationQuarterTurns: source.rotationQuarterTurns,
+            straightenDegrees: source.straightenDegrees,
+            isFlippedHorizontally: source.isFlippedHorizontally,
+            isFlippedVertically: source.isFlippedVertically,
+            reframeScale: source.reframeScale,
+            reframeXOffset: source.reframeXOffset,
+            reframeYOffset: source.reframeYOffset,
+            colorAdjustment: source.colorAdjustment,
+            compositing: source.compositing,
+            keyframes: heldKeyframes,
+            motionTracks: [],
+            stabilization: .disabled,
+            attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID,
+            attachRotation: source.attachRotation,
+            attachScale: source.attachScale
+        )
+
+        registerUndoIfNeeded()
+        pausePlaybackForEdit()
+        for otherIndex in overlayClips.indices
+        where overlayClips[otherIndex].id != source.id
+            && overlayClips[otherIndex].laneIndex == source.laneIndex
+            && overlayClips[otherIndex].timelineStart >= insertionTime - 0.000_001 {
+            overlayClips[otherIndex].timelineStart += duration
+        }
+
+        if let parts = source.split(atTimelineTime: localTime) {
+            var right = parts.right
+            right.timelineStart += duration
+            overlayClips[index] = parts.left
+            overlayClips.insert(contentsOf: [freeze, right], at: index + 1)
+            remapSequenceMembershipForFreeze(
+                original: .overlay(source.id),
+                replacements: [.overlay(parts.left.id), .overlay(freeze.id), .overlay(right.id)]
+            )
+        } else if localTime <= source.duration / 2 {
+            overlayClips[index].timelineStart += duration
+            overlayClips.insert(freeze, at: index)
+            remapSequenceMembershipForFreeze(
+                original: .overlay(source.id),
+                replacements: [.overlay(freeze.id), .overlay(source.id)]
+            )
+        } else {
+            overlayClips.insert(freeze, at: index + 1)
+            remapSequenceMembershipForFreeze(
+                original: .overlay(source.id),
+                replacements: [.overlay(source.id), .overlay(freeze.id)]
+            )
+        }
+
+        selectedOverlayClipID = freeze.id
+        timelinePosition = insertionTime
+        normalizeExportRange()
+        invalidateComposition()
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
     }
 
     func jumpToClipStart(_ id: UUID) {
@@ -1032,6 +1439,8 @@ final class EditorViewModel {
             }
         case .captions:
             selectTool(.captions)
+        case .sequence:
+            beginMultiSelection()
         case .canvas:
             selectTool(.canvas)
         default:
@@ -1633,6 +2042,8 @@ final class EditorViewModel {
         guard let id = selectedOverlayClipID else { return }
         registerUndoIfNeeded()
         overlayClips.removeAll { $0.id == id }
+        selectedTimelineItems.remove(.overlay(id))
+        pruneSequenceStructure()
         selectedOverlayClipID = overlayClips.first?.id
         invalidateComposition()
         scheduleSave()
@@ -1653,6 +2064,7 @@ final class EditorViewModel {
             laneIndex: source.laneIndex,
             zIndex: source.zIndex,
             speed: source.speed,
+            playback: source.playback,
             scale: source.scale,
             xOffset: source.xOffset,
             yOffset: source.yOffset,
@@ -1714,6 +2126,7 @@ final class EditorViewModel {
             laneIndex: old.laneIndex,
             zIndex: old.zIndex,
             speed: old.speed,
+            playback: .forward,
             scale: old.scale,
             xOffset: old.xOffset,
             yOffset: old.yOffset,
@@ -1751,11 +2164,16 @@ final class EditorViewModel {
         guard timelinePosition > clip.timelineStart + minimumTimelineSpan,
               timelinePosition < clip.timelineEnd - minimumTimelineSpan else { return }
 
-        let sourceTime = clip.sourceTime(forTimelineLocal: timelinePosition - clip.timelineStart)
-        guard let parts = clip.split(atSourceTime: sourceTime) else { return }
+        guard let parts = clip.split(atTimelineTime: timelinePosition - clip.timelineStart) else {
+            return
+        }
         registerUndoIfNeeded()
         overlayClips[index] = parts.left
         overlayClips.insert(parts.right, at: index + 1)
+        remapSequenceMembershipAfterSplit(
+            original: .overlay(parts.left.id),
+            right: .overlay(parts.right.id)
+        )
         selectedOverlayClipID = parts.right.id
         invalidateComposition()
         scheduleSave()
@@ -1770,15 +2188,22 @@ final class EditorViewModel {
         var clip = overlayClips[index]
         let minimumSpan = EditorClip.minimumSourceSpan(speed: clip.speed)
 
+        let requestedStart = clip.playback.isReverse
+            ? clip.originalDuration - trimEnd
+            : trimStart
+        let requestedEnd = clip.playback.isReverse
+            ? clip.originalDuration - trimStart
+            : trimEnd
+
         if clip.isPhoto {
-            let start = max(0, min(trimStart, trimEnd - minimumSpan))
-            let end = max(trimEnd, start + minimumSpan)
+            let start = max(0, min(requestedStart, requestedEnd - minimumSpan))
+            let end = max(requestedEnd, start + minimumSpan)
             clip.originalDuration = end
             clip.trimStart = start
             clip.trimEnd = end
         } else {
-            let start = min(max(0, trimStart), clip.originalDuration - minimumSpan)
-            let end = max(min(clip.originalDuration, trimEnd), start + minimumSpan)
+            let start = min(max(0, requestedStart), clip.originalDuration - minimumSpan)
+            let end = max(min(clip.originalDuration, requestedEnd), start + minimumSpan)
             clip.trimStart = start
             clip.trimEnd = end
         }
@@ -1791,11 +2216,13 @@ final class EditorViewModel {
         if let before = overlayTrimUndoSnapshot,
            let index = overlayClips.firstIndex(where: { $0.id == clipID }),
            let baseline = before.overlayClips.first(where: { $0.id == clipID }) {
+            let sourceDelta = overlayClips[index].playback.isReverse
+                ? baseline.trimEnd - overlayClips[index].trimEnd
+                : overlayClips[index].trimStart - baseline.trimStart
             overlayClips[index].timelineStart = max(
                 0,
                 baseline.timelineStart
-                    + (overlayClips[index].trimStart - baseline.trimStart)
-                    / TimeInterval(max(overlayClips[index].speed, 0.001))
+                    + sourceDelta / TimeInterval(max(overlayClips[index].speed, 0.001))
             )
         }
         let before = overlayTrimUndoSnapshot
@@ -2654,25 +3081,40 @@ final class EditorViewModel {
         right: EditorClip,
         splitTime: TimeInterval
     ) {
-        let mappedIDs = zip(left.motionTracks, right.motionTracks).reduce(
-            into: [UUID: UUID]()
-        ) { result, pair in
-            result[pair.0.id] = pair.1.id
+        let originalID: UUID
+        let leftTrackIDs: [UUID: UUID]
+        let rightTrackIDs: [UUID: UUID]
+        if left.motionTracks.contains(where: { leftTrack in
+            right.motionTracks.contains(where: { $0.id == leftTrack.id })
+        }) || left.id == selectedClipID {
+            originalID = left.id
+            leftTrackIDs = Dictionary(uniqueKeysWithValues: left.motionTracks.map { ($0.id, $0.id) })
+            rightTrackIDs = Dictionary(uniqueKeysWithValues: zip(left.motionTracks, right.motionTracks).map {
+                ($0.id, $1.id)
+            })
+        } else {
+            originalID = right.id
+            leftTrackIDs = Dictionary(uniqueKeysWithValues: zip(right.motionTracks, left.motionTracks).map {
+                ($0.id, $1.id)
+            })
+            rightTrackIDs = Dictionary(uniqueKeysWithValues: right.motionTracks.map { ($0.id, $0.id) })
         }
         for index in textOverlays.indices {
-            guard textOverlays[index].attachedClipID == left.id,
-                  textOverlays[index].startTime >= splitTime else { continue }
-            textOverlays[index].attachedClipID = right.id
+            guard textOverlays[index].attachedClipID == originalID else { continue }
+            let usesRight = textOverlays[index].startTime >= splitTime
+            textOverlays[index].attachedClipID = usesRight ? right.id : left.id
             if let oldTrack = textOverlays[index].attachedTrackID {
-                textOverlays[index].attachedTrackID = mappedIDs[oldTrack] ?? oldTrack
+                textOverlays[index].attachedTrackID = (usesRight ? rightTrackIDs : leftTrackIDs)[oldTrack]
+                    ?? oldTrack
             }
         }
         for index in overlayClips.indices {
-            guard overlayClips[index].attachedClipID == left.id,
-                  overlayClips[index].timelineStart >= splitTime else { continue }
-            overlayClips[index].attachedClipID = right.id
+            guard overlayClips[index].attachedClipID == originalID else { continue }
+            let usesRight = overlayClips[index].timelineStart >= splitTime
+            overlayClips[index].attachedClipID = usesRight ? right.id : left.id
             if let oldTrack = overlayClips[index].attachedTrackID {
-                overlayClips[index].attachedTrackID = mappedIDs[oldTrack] ?? oldTrack
+                overlayClips[index].attachedTrackID = (usesRight ? rightTrackIDs : leftTrackIDs)[oldTrack]
+                    ?? oldTrack
             }
         }
     }
@@ -3273,6 +3715,7 @@ final class EditorViewModel {
             end: source.endTime
         )
         textOverlays.replaceSubrange(index...index, with: [left, right])
+        remapSequenceMembershipAfterSplit(original: .text(left.id), right: .text(right.id))
         selectedTextOverlayID = right.id
         scheduleSave()
     }
@@ -3295,6 +3738,8 @@ final class EditorViewModel {
             end: max(first.endTime, second.endTime)
         )
         textOverlays.remove(at: secondIndex)
+        selectedTimelineItems.remove(.text(second.id))
+        pruneSequenceStructure()
         selectedTextOverlayID = first.id
         scheduleSave()
     }
@@ -3540,6 +3985,8 @@ final class EditorViewModel {
         clearTextOverlayEditUndo()
         registerUndoIfNeeded()
         textOverlays.removeAll { $0.id == id }
+        selectedTimelineItems.remove(.text(id))
+        pruneSequenceStructure()
         if selectedTextOverlayID == id {
             selectedTextOverlayID = nil
             isTextEditorPresented = false
@@ -3586,6 +4033,7 @@ final class EditorViewModel {
     }
 
     func selectTextOverlay(_ id: UUID) {
+        if handleMultiSelection(.text(id)) { return }
         if selectedTextOverlayID == id {
             selectedTextOverlayID = nil
         } else {
@@ -3689,6 +4137,699 @@ final class EditorViewModel {
         }
     }
 
+    // MARK: Selection and sequence structure
+
+    var selectionCount: Int { expandedSelection.count }
+    var hasSelectionRange: Bool { exportRange != nil }
+    var canCreateSequence: Bool { selectedTimelineItems.count >= 2 }
+
+    var activeSequence: EditorSequence? {
+        guard let activeSequenceID else { return nil }
+        return sequences.first { $0.id == activeSequenceID }
+    }
+
+    var selectedSequence: EditorSequence? {
+        guard let selectedSequenceID else { return nil }
+        return sequences.first { $0.id == selectedSequenceID }
+    }
+
+    var visibleSequences: [EditorSequence] {
+        sequences.filter { $0.parentSequenceID == activeSequenceID }
+    }
+
+    func beginMultiSelection() {
+        finalizeSelectionToolEdits()
+        isMultiSelectMode = true
+        selectedTool = .sequence
+        selectedClipID = nil
+        selectedTextOverlayID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        isTextEditorPresented = false
+    }
+
+    func endMultiSelection(clearSelection: Bool = true) {
+        isMultiSelectMode = false
+        if clearSelection {
+            selectedTimelineItems.removeAll()
+            selectedSequenceID = nil
+        }
+        if selectedTool == .sequence { selectedTool = nil }
+        scheduleSave()
+    }
+
+    private func finalizeSelectionToolEdits() {
+        if selectedTool == .speed { finalizeSpeedEditUndo() }
+        if selectedTool == .duration { finalizePhotoDurationEditUndo() }
+        if selectedTool == .crop { finalizeReframeEditUndo() }
+        if selectedTool == .filter { finalizeColorAdjustmentUndo() }
+        if selectedTool == .compositing { finalizeOverlayCompositingUndo() }
+        if selectedTool == .track || selectedTool == .stabilize { finalizeMotionTrackingUndo() }
+        finalizeAudioVolumeEditUndo()
+        finalizeOverlayTransform()
+        cancelMotionTracking()
+    }
+
+    @discardableResult
+    private func handleMultiSelection(_ reference: EditorTimelineItemReference) -> Bool {
+        guard isMultiSelectMode else {
+            selectedTimelineItems.removeAll()
+            selectedSequenceID = nil
+            return false
+        }
+        guard isItemInActiveSequence(reference) else { return true }
+        if selectedTimelineItems.contains(reference) {
+            selectedTimelineItems.remove(reference)
+        } else {
+            selectedTimelineItems.insert(reference)
+        }
+        selectedSequenceID = reference.kind == .sequence ? reference.itemID : nil
+        UISelectionFeedbackGenerator().selectionChanged()
+        scheduleSave()
+        return true
+    }
+
+    func isItemSelected(_ reference: EditorTimelineItemReference) -> Bool {
+        selectedTimelineItems.contains(reference) || expandedSelection.contains(reference)
+    }
+
+    func isItemInActiveSequence(_ reference: EditorTimelineItemReference) -> Bool {
+        guard let activeSequenceID else { return true }
+        return leafReferences(in: activeSequenceID).contains(reference)
+    }
+
+    func selectAllInActiveSequence() {
+        beginMultiSelection()
+        if let activeSequenceID {
+            selectedTimelineItems = leafReferences(in: activeSequenceID)
+        } else {
+            selectedTimelineItems = allLeafReferences
+        }
+        selectedSequenceID = nil
+        scheduleSave()
+    }
+
+    func selectItemsInExportRange() {
+        guard let range = exportRange else { return }
+        beginMultiSelection()
+        let candidates = activeSequenceID.map { leafReferences(in: $0) } ?? allLeafReferences
+        selectedTimelineItems = Set(candidates.filter { reference in
+            guard let itemRange = timeRange(for: reference) else { return false }
+            return itemRange.upperBound > range.lowerBound && itemRange.lowerBound < range.upperBound
+        })
+        selectedSequenceID = nil
+        scheduleSave()
+    }
+
+    func selectSequence(_ id: UUID) {
+        guard sequences.contains(where: { $0.id == id }) else { return }
+        beginMultiSelection()
+        selectedTimelineItems = [.sequence(id)]
+        selectedSequenceID = id
+        scheduleSave()
+    }
+
+    func groupSelectedItems() { createSequence(kind: .group) }
+    func createCompoundClip() { createSequence(kind: .compound) }
+
+    private func createSequence(kind: EditorSequenceKind) {
+        let roots = Array(selectedTimelineItems).sorted { $0.id < $1.id }
+        guard roots.count >= 2 else { return }
+        registerUndoIfNeeded()
+        let title = kind == .compound
+            ? "Compound \(sequences.filter { $0.kind == .compound }.count + 1)"
+            : "Group \(sequences.filter { $0.kind == .group }.count + 1)"
+        let sequence = EditorSequence(
+            title: title,
+            kind: kind,
+            members: roots,
+            parentSequenceID: activeSequenceID
+        )
+        if kind == .compound {
+            let rootsSet = Set(roots)
+            for index in sequences.indices
+            where sequences[index].kind == .compound
+                && sequences[index].id != activeSequenceID
+                && sequences[index].parentSequenceID == activeSequenceID {
+                sequences[index].members.removeAll { rootsSet.contains($0) }
+            }
+        }
+        if let activeSequenceID,
+           let parentIndex = sequences.firstIndex(where: { $0.id == activeSequenceID }) {
+            let rootsSet = Set(roots)
+            sequences[parentIndex].members.removeAll { rootsSet.contains($0) }
+            sequences[parentIndex].members.append(.sequence(sequence.id))
+        }
+        for reference in roots where reference.kind == .sequence {
+            if let childIndex = sequences.firstIndex(where: { $0.id == reference.itemID }) {
+                sequences[childIndex].parentSequenceID = sequence.id
+            }
+        }
+        sequences.append(sequence)
+        pruneSequenceStructure()
+        selectedTimelineItems = [.sequence(sequence.id)]
+        selectedSequenceID = sequence.id
+        scheduleSave()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    func dissolveSelectedSequence() {
+        guard let sequence = selectedSequence,
+              let index = sequences.firstIndex(where: { $0.id == sequence.id }) else { return }
+        registerUndoIfNeeded()
+        if let parentID = sequence.parentSequenceID,
+           let parentIndex = sequences.firstIndex(where: { $0.id == parentID }) {
+            let insertionIndex = sequences[parentIndex].members.firstIndex(of: .sequence(sequence.id))
+                ?? sequences[parentIndex].members.endIndex
+            sequences[parentIndex].members.removeAll { $0 == .sequence(sequence.id) }
+            sequences[parentIndex].members.insert(contentsOf: sequence.members, at: insertionIndex)
+        }
+        for member in sequence.members where member.kind == .sequence {
+            if let childIndex = sequences.firstIndex(where: { $0.id == member.itemID }) {
+                sequences[childIndex].parentSequenceID = sequence.parentSequenceID
+            }
+        }
+        sequences.remove(at: index)
+        if activeSequenceID == sequence.id { activeSequenceID = sequence.parentSequenceID }
+        selectedTimelineItems = Set(sequence.members)
+        selectedSequenceID = nil
+        scheduleSave()
+    }
+
+    func enterSelectedSequence() {
+        guard let selectedSequence else { return }
+        activeSequenceID = selectedSequence.id
+        selectedTimelineItems.removeAll()
+        selectedSequenceID = nil
+        scheduleSave()
+    }
+
+    func exitActiveSequence() {
+        guard let activeSequence else { return }
+        activeSequenceID = activeSequence.parentSequenceID
+        selectedTimelineItems = [.sequence(activeSequence.id)]
+        selectedSequenceID = activeSequence.id
+        isMultiSelectMode = true
+        selectedTool = .sequence
+        selectedClipID = nil
+        selectedTextOverlayID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        scheduleSave()
+    }
+
+    func renameSequence(id: UUID, title: String) {
+        guard let index = sequences.firstIndex(where: { $0.id == id }) else { return }
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized != sequences[index].title else { return }
+        registerUndoIfNeeded()
+        sequences[index].title = normalized
+        scheduleSave()
+    }
+
+    func addMarkerAtPlayhead() {
+        registerUndoIfNeeded()
+        var number = 1
+        let existingNames = Set(markers.map(\.name))
+        while existingNames.contains("Marker \(number)") { number += 1 }
+        let marker = EditorTimelineMarker(
+            name: "Marker \(number)",
+            time: min(max(0, timelinePosition), totalDuration)
+        )
+        markers.append(marker)
+        markers.sort { $0.time < $1.time }
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    func renameMarker(id: UUID, name: String) {
+        guard let index = markers.firstIndex(where: { $0.id == id }) else { return }
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized != markers[index].name else { return }
+        registerUndoIfNeeded()
+        markers[index].name = normalized
+        scheduleSave()
+    }
+
+    func deleteMarker(id: UUID) {
+        guard markers.contains(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        markers.removeAll { $0.id == id }
+        scheduleSave()
+    }
+
+    func moveSelectionEarlier() { moveSelection(direction: -1) }
+    func moveSelectionLater() { moveSelection(direction: 1) }
+
+    private func moveSelection(direction: Int) {
+        let references = expandedSelection
+        guard !references.isEmpty, direction != 0 else { return }
+        registerUndoIfNeeded()
+        let primaryIDs = Set(references.filter { $0.kind == .primaryClip }.map(\.itemID))
+        let anchorID = clips.first(where: { primaryIDs.contains($0.id) })?.id
+        let oldAnchorStart = anchorID.flatMap { id in
+            clips.firstIndex(where: { $0.id == id }).map { timelineOffsetForClipIndex($0) }
+        }
+        if !primaryIDs.isEmpty, primaryIDs.count < clips.count {
+            if direction < 0 {
+                for index in clips.indices.dropFirst() where primaryIDs.contains(clips[index].id)
+                    && !primaryIDs.contains(clips[index - 1].id) {
+                    clips.swapAt(index, index - 1)
+                }
+            } else if clips.count > 1 {
+                for index in clips.indices.dropLast().reversed() where primaryIDs.contains(clips[index].id)
+                    && !primaryIDs.contains(clips[index + 1].id) {
+                    clips.swapAt(index, index + 1)
+                }
+            }
+        }
+
+        let primaryTimelineDelta: TimeInterval? = anchorID.flatMap { id in
+            guard let oldAnchorStart,
+                  let index = clips.firstIndex(where: { $0.id == id }) else { return nil }
+            return timelineOffsetForClipIndex(index) - oldAnchorStart
+        }
+
+        let timed = references.filter { $0.kind != .primaryClip && $0.kind != .sequence }
+        let proposed = primaryTimelineDelta ?? (TimeInterval(direction) * 0.10)
+        let earliest = timed.compactMap { timeRange(for: $0)?.lowerBound }.min() ?? 0
+        let delta = proposed < 0 ? max(proposed, -earliest) : proposed
+        let textIDs = Set(timed.filter { $0.kind == .textOverlay }.map(\.itemID))
+        let audioIDs = Set(timed.filter { $0.kind == .audioClip }.map(\.itemID))
+        let overlayIDs = Set(timed.filter { $0.kind == .overlayClip }.map(\.itemID))
+        for index in textOverlays.indices where textIDs.contains(textOverlays[index].id) {
+            textOverlays[index].startTime += delta
+            textOverlays[index].endTime += delta
+            for wordIndex in textOverlays[index].captionWords.indices {
+                textOverlays[index].captionWords[wordIndex].startTime += delta
+                textOverlays[index].captionWords[wordIndex].endTime += delta
+            }
+        }
+        for index in audioClips.indices where audioIDs.contains(audioClips[index].id) {
+            audioClips[index].timelineStart += delta
+        }
+        for index in overlayClips.indices where overlayIDs.contains(overlayClips[index].id) {
+            overlayClips[index].timelineStart += delta
+        }
+        finishSequenceMutation(rebuildComposition: !primaryIDs.isEmpty || !audioIDs.isEmpty || !overlayIDs.isEmpty)
+    }
+
+    func deleteSelectedTimelineItems() {
+        let references = expandedSelection
+        guard !references.isEmpty else { return }
+        let requestedPrimaryIDs = Set(references.filter { $0.kind == .primaryClip }.map(\.itemID))
+        var primaryIDs = requestedPrimaryIDs
+        if primaryIDs.count >= clips.count, let retained = clips.last?.id { primaryIDs.remove(retained) }
+        let textIDs = Set(references.filter { $0.kind == .textOverlay }.map(\.itemID))
+        let audioIDs = Set(references.filter { $0.kind == .audioClip }.map(\.itemID))
+        let overlayIDs = Set(references.filter { $0.kind == .overlayClip }.map(\.itemID))
+        guard !primaryIDs.isEmpty || !textIDs.isEmpty || !audioIDs.isEmpty || !overlayIDs.isEmpty else { return }
+        registerUndoIfNeeded()
+
+        var cursor: TimeInterval = 0
+        var removedRanges: [ClosedRange<TimeInterval>] = []
+        for clip in clips {
+            let range = cursor...(cursor + clip.duration)
+            if primaryIDs.contains(clip.id) { removedRanges.append(range) }
+            cursor = range.upperBound
+        }
+        let removedAudioURLs = audioClips.filter { audioIDs.contains($0.id) }.map(\.fileURL)
+        textOverlays.removeAll { textIDs.contains($0.id) }
+        audioClips.removeAll { audioIDs.contains($0.id) }
+        overlayClips.removeAll { overlayIDs.contains($0.id) }
+        clips.removeAll { primaryIDs.contains($0.id) }
+        for range in removedRanges.sorted(by: { $0.lowerBound > $1.lowerBound }) {
+            rippleDeleteTimedItems(from: range.lowerBound, to: range.upperBound)
+        }
+        removedAudioURLs.forEach(releaseAudioFileIfUnused)
+        selectedTimelineItems.removeAll()
+        selectedSequenceID = nil
+        pruneSequenceStructure()
+        finishSequenceMutation(rebuildComposition: true)
+    }
+
+    func duplicateSelectedTimelineItems() {
+        let references = expandedSelection
+        guard !references.isEmpty else { return }
+        let ranges = references.compactMap { timeRange(for: $0) }
+        let selectionStart = ranges.map(\.lowerBound).min() ?? 0
+        let selectionEnd = ranges.map(\.upperBound).max() ?? selectionStart
+        let duplicateOffset = max(0.10, selectionEnd - selectionStart)
+        let selectedTextSources = textOverlays.filter { references.contains(.text($0.id)) }
+        let selectedAudioSources = audioClips.filter { references.contains(.audio($0.id)) }
+        let selectedOverlaySources = overlayClips.filter { references.contains(.overlay($0.id)) }
+        registerUndoIfNeeded()
+        var copiedReferences = Set<EditorTimelineItemReference>()
+        var itemCopyMap: [EditorTimelineItemReference: EditorTimelineItemReference] = [:]
+        var hostIDMap: [UUID: UUID] = [:]
+        var trackIDMap: [UUID: UUID] = [:]
+        var copiedTextIDs = Set<UUID>()
+        var copiedOverlayIDs = Set<UUID>()
+
+        let primaryIDs = Set(references.filter { $0.kind == .primaryClip }.map(\.itemID))
+        for index in clips.indices.reversed() where primaryIDs.contains(clips[index].id) {
+            let source = clips[index]
+            let boundary = timelineOffsetForClipIndex(index) + source.duration
+            let copy = duplicatedPrimaryClip(source)
+            clips.insert(copy, at: index + 1)
+            rippleInsertTimedItems(at: boundary, duration: copy.duration)
+            copiedReferences.insert(.primary(copy.id))
+            itemCopyMap[.primary(source.id)] = .primary(copy.id)
+            hostIDMap[source.id] = copy.id
+            for (oldTrack, newTrack) in zip(source.motionTracks, copy.motionTracks) {
+                trackIDMap[oldTrack.id] = newTrack.id
+            }
+        }
+        for source in selectedTextSources {
+            let copy = duplicatedTextOverlay(source, timelineOffset: duplicateOffset)
+            textOverlays.append(copy)
+            copiedReferences.insert(.text(copy.id))
+            itemCopyMap[.text(source.id)] = .text(copy.id)
+            copiedTextIDs.insert(copy.id)
+        }
+        for source in selectedAudioSources {
+            let copy = EditorAudioClip(
+                title: source.title + " Copy", fileURL: source.fileURL,
+                originalDuration: source.originalDuration, trimStart: source.trimStart,
+                trimEnd: source.trimEnd, timelineStart: source.timelineStart + duplicateOffset,
+                laneIndex: source.laneIndex, volume: source.volume,
+                fadeInDuration: source.fadeInDuration, fadeOutDuration: source.fadeOutDuration,
+                keyframes: source.keyframes, attribution: source.attribution, effect: source.effect
+            )
+            audioClips.append(copy)
+            copiedReferences.insert(.audio(copy.id))
+            itemCopyMap[.audio(source.id)] = .audio(copy.id)
+        }
+        for source in selectedOverlaySources {
+            let copy = duplicatedOverlayClip(source, timelineOffset: duplicateOffset)
+            overlayClips.append(copy)
+            copiedReferences.insert(.overlay(copy.id))
+            itemCopyMap[.overlay(source.id)] = .overlay(copy.id)
+            copiedOverlayIDs.insert(copy.id)
+            hostIDMap[source.id] = copy.id
+            for (oldTrack, newTrack) in zip(source.motionTracks, copy.motionTracks) {
+                trackIDMap[oldTrack.id] = newTrack.id
+            }
+        }
+        for index in textOverlays.indices where copiedTextIDs.contains(textOverlays[index].id) {
+            if let oldHost = textOverlays[index].attachedClipID {
+                textOverlays[index].attachedClipID = hostIDMap[oldHost] ?? oldHost
+            }
+            if let oldTrack = textOverlays[index].attachedTrackID {
+                textOverlays[index].attachedTrackID = trackIDMap[oldTrack] ?? oldTrack
+            }
+        }
+        for index in overlayClips.indices where copiedOverlayIDs.contains(overlayClips[index].id) {
+            if let oldHost = overlayClips[index].attachedClipID {
+                overlayClips[index].attachedClipID = hostIDMap[oldHost] ?? oldHost
+            }
+            if let oldTrack = overlayClips[index].attachedTrackID {
+                overlayClips[index].attachedTrackID = trackIDMap[oldTrack] ?? oldTrack
+            }
+        }
+        let selectedSequenceRoots = selectedTimelineItems.filter { $0.kind == .sequence }
+        let copiedSequenceRoots = selectedSequenceRoots.compactMap {
+            duplicateSequenceTree(
+                sourceID: $0.itemID,
+                parentID: activeSequenceID,
+                itemCopyMap: itemCopyMap
+            )
+        }
+        if !copiedSequenceRoots.isEmpty {
+            if let activeSequenceID,
+               let parentIndex = sequences.firstIndex(where: { $0.id == activeSequenceID }) {
+                sequences[parentIndex].members.append(
+                    contentsOf: copiedSequenceRoots.map(EditorTimelineItemReference.sequence)
+                )
+            }
+            selectedTimelineItems = Set(copiedSequenceRoots.map(EditorTimelineItemReference.sequence))
+            selectedSequenceID = copiedSequenceRoots.count == 1 ? copiedSequenceRoots[0] : nil
+        } else if copiedReferences.count >= 2 {
+            let sourceKind = selectedSequence?.kind ?? .group
+            let copySequence = EditorSequence(
+                title: "\(selectedSequence?.title ?? "Selection") Copy",
+                kind: sourceKind,
+                members: Array(copiedReferences).sorted { $0.id < $1.id },
+                parentSequenceID: activeSequenceID
+            )
+            sequences.append(copySequence)
+            if let activeSequenceID,
+               let parentIndex = sequences.firstIndex(where: { $0.id == activeSequenceID }) {
+                sequences[parentIndex].members.append(.sequence(copySequence.id))
+            }
+            selectedTimelineItems = [.sequence(copySequence.id)]
+            selectedSequenceID = copySequence.id
+        } else {
+            selectedTimelineItems = copiedReferences
+            selectedSequenceID = nil
+        }
+        finishSequenceMutation(rebuildComposition: true)
+    }
+
+    private func duplicateSequenceTree(
+        sourceID: UUID,
+        parentID: UUID?,
+        itemCopyMap: [EditorTimelineItemReference: EditorTimelineItemReference],
+        visited: Set<UUID> = []
+    ) -> UUID? {
+        guard !visited.contains(sourceID),
+              let source = sequences.first(where: { $0.id == sourceID }) else { return nil }
+        var visited = visited
+        visited.insert(sourceID)
+        let newID = UUID()
+        var copiedMembers: [EditorTimelineItemReference] = []
+        for member in source.members {
+            if member.kind == .sequence,
+               let childID = duplicateSequenceTree(
+                   sourceID: member.itemID,
+                   parentID: newID,
+                   itemCopyMap: itemCopyMap,
+                   visited: visited
+               ) {
+                copiedMembers.append(.sequence(childID))
+            } else if let copied = itemCopyMap[member] {
+                copiedMembers.append(copied)
+            }
+        }
+        guard !copiedMembers.isEmpty else { return nil }
+        sequences.append(EditorSequence(
+            id: newID,
+            title: source.title + " Copy",
+            kind: source.kind,
+            members: copiedMembers,
+            parentSequenceID: parentID
+        ))
+        return newID
+    }
+
+    func timeRange(for reference: EditorTimelineItemReference) -> ClosedRange<TimeInterval>? {
+        switch reference.kind {
+        case .primaryClip:
+            guard let index = clips.firstIndex(where: { $0.id == reference.itemID }) else { return nil }
+            let start = timelineOffsetForClipIndex(index)
+            return start...(start + clips[index].duration)
+        case .textOverlay:
+            guard let item = textOverlays.first(where: { $0.id == reference.itemID }) else { return nil }
+            return item.startTime...item.endTime
+        case .audioClip:
+            guard let item = audioClips.first(where: { $0.id == reference.itemID }) else { return nil }
+            return item.timelineStart...item.timelineEnd
+        case .overlayClip:
+            guard let item = overlayClips.first(where: { $0.id == reference.itemID }) else { return nil }
+            return item.timelineStart...item.timelineEnd
+        case .sequence:
+            return sequenceTimeRange(id: reference.itemID)
+        }
+    }
+
+    func sequenceTimeRange(id: UUID) -> ClosedRange<TimeInterval>? {
+        let ranges = leafReferences(in: id).compactMap { timeRange(for: $0) }
+        guard let start = ranges.map(\.lowerBound).min(), let end = ranges.map(\.upperBound).max() else { return nil }
+        return start...end
+    }
+
+    private var allLeafReferences: Set<EditorTimelineItemReference> {
+        Set(clips.map { EditorTimelineItemReference.primary($0.id) }
+            + textOverlays.map { EditorTimelineItemReference.text($0.id) }
+            + audioClips.map { EditorTimelineItemReference.audio($0.id) }
+            + overlayClips.map { EditorTimelineItemReference.overlay($0.id) })
+    }
+
+    private var expandedSelection: Set<EditorTimelineItemReference> {
+        var result = Set<EditorTimelineItemReference>()
+        for reference in selectedTimelineItems {
+            if reference.kind == .sequence {
+                result.formUnion(leafReferences(in: reference.itemID))
+            } else {
+                result.insert(reference)
+            }
+        }
+        return result
+    }
+
+    private func leafReferences(in sequenceID: UUID, visited: Set<UUID> = []) -> Set<EditorTimelineItemReference> {
+        guard !visited.contains(sequenceID),
+              let sequence = sequences.first(where: { $0.id == sequenceID }) else { return [] }
+        var visited = visited
+        visited.insert(sequenceID)
+        var result = Set<EditorTimelineItemReference>()
+        for member in sequence.members {
+            if member.kind == .sequence {
+                result.formUnion(leafReferences(in: member.itemID, visited: visited))
+            } else if allLeafReferences.contains(member) {
+                result.insert(member)
+            }
+        }
+        return result
+    }
+
+    private func pruneSequenceStructure() {
+        let leaves = allLeafReferences
+        var didChange = true
+        while didChange {
+            didChange = false
+            let validIDs = Set(sequences.map(\.id))
+            for index in sequences.indices {
+                let oldCount = sequences[index].members.count
+                sequences[index].members.removeAll {
+                    $0.kind == .sequence ? !validIDs.contains($0.itemID) : !leaves.contains($0)
+                }
+                didChange = didChange || sequences[index].members.count != oldCount
+            }
+            let oldSequenceCount = sequences.count
+            sequences.removeAll { $0.members.isEmpty }
+            didChange = didChange || sequences.count != oldSequenceCount
+        }
+        let validSequenceIDs = Set(sequences.map(\.id))
+        for index in sequences.indices where sequences[index].parentSequenceID.map({ !validSequenceIDs.contains($0) }) == true {
+            sequences[index].parentSequenceID = nil
+        }
+        if let activeSequenceID, !validSequenceIDs.contains(activeSequenceID) { self.activeSequenceID = nil }
+        if let selectedSequenceID, !validSequenceIDs.contains(selectedSequenceID) {
+            self.selectedSequenceID = nil
+            selectedTimelineItems.remove(.sequence(selectedSequenceID))
+        }
+    }
+
+    private func remapSequenceMembershipAfterSplit(
+        original: EditorTimelineItemReference,
+        right: EditorTimelineItemReference
+    ) {
+        for index in sequences.indices {
+            guard let memberIndex = sequences[index].members.firstIndex(of: original),
+                  !sequences[index].members.contains(right) else { continue }
+            sequences[index].members.insert(right, at: memberIndex + 1)
+        }
+        if selectedTimelineItems.contains(original) { selectedTimelineItems.insert(right) }
+    }
+
+    private func remapSequenceMembershipForFreeze(
+        originalID: UUID,
+        displayedIDs: [UUID]
+    ) {
+        remapSequenceMembershipForFreeze(
+            original: .primary(originalID),
+            replacements: displayedIDs.map(EditorTimelineItemReference.primary)
+        )
+    }
+
+    private func remapSequenceMembershipForFreeze(
+        original: EditorTimelineItemReference,
+        replacements: [EditorTimelineItemReference]
+    ) {
+        for index in sequences.indices {
+            guard let memberIndex = sequences[index].members.firstIndex(of: original) else { continue }
+            sequences[index].members.remove(at: memberIndex)
+            var insertionIndex = memberIndex
+            for replacement in replacements where !sequences[index].members.contains(replacement) {
+                sequences[index].members.insert(replacement, at: insertionIndex)
+                insertionIndex += 1
+            }
+        }
+        if selectedTimelineItems.contains(original) {
+            selectedTimelineItems.formUnion(replacements)
+        }
+    }
+
+    private func finishSequenceMutation(rebuildComposition: Bool) {
+        timelinePosition = min(max(0, timelinePosition), totalDuration)
+        normalizeExportRange()
+        if rebuildComposition { invalidateComposition() }
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if rebuildComposition { Task { await alignPlaybackToTimeline() } }
+    }
+
+    private func duplicatedPrimaryClip(_ source: EditorClip) -> EditorClip {
+        EditorClip(
+            asset: source.asset, originalDuration: source.originalDuration,
+            trimStart: source.trimStart, trimEnd: source.trimEnd, speed: source.speed,
+            speedRamp: source.speedRamp, playback: source.playback, volume: source.volume,
+            audioTrimStart: source.audioTrimStart, audioTrimEnd: source.audioTrimEnd,
+            isAudioLinked: source.isAudioLinked, cropAspect: source.cropAspect,
+            reframeMode: source.reframeMode, rotationQuarterTurns: source.rotationQuarterTurns,
+            straightenDegrees: source.straightenDegrees,
+            isFlippedHorizontally: source.isFlippedHorizontally,
+            isFlippedVertically: source.isFlippedVertically,
+            reframeScale: source.reframeScale, reframeXOffset: source.reframeXOffset,
+            reframeYOffset: source.reframeYOffset, colorAdjustment: source.colorAdjustment,
+            compositing: source.compositing, keyframes: source.keyframes,
+            motionTracks: source.motionTracks.map { track in var copy = track; copy.id = UUID(); return copy },
+            stabilization: source.stabilization, transitionKind: source.transitionKind,
+            transitionDuration: source.transitionDuration
+        )
+    }
+
+    private func duplicatedTextOverlay(
+        _ source: EditorTextOverlay,
+        timelineOffset offset: TimeInterval
+    ) -> EditorTextOverlay {
+        return EditorTextOverlay(
+            text: source.text, startTime: source.startTime + offset, endTime: source.endTime + offset,
+            fontSize: source.fontSize, fontFamily: source.fontFamily, fontStyle: source.fontStyle,
+            textColor: source.textColor, opacity: source.opacity,
+            horizontalAlignment: source.horizontalAlignment, verticalAlignment: source.verticalAlignment,
+            xOffset: source.xOffset, yOffset: source.yOffset, keyframes: source.keyframes,
+            animation: source.animation, attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID, attachRotation: source.attachRotation,
+            attachScale: source.attachScale,
+            captionWords: source.captionWords.map {
+                EditorCaptionWord(text: $0.text, startTime: $0.startTime + offset,
+                                  endTime: $0.endTime + offset, confidence: $0.confidence)
+            },
+            captionHighlightColor: source.captionHighlightColor,
+            captionLocaleIdentifier: source.captionLocaleIdentifier,
+            trackedRotationDegrees: source.trackedRotationDegrees
+        )
+    }
+
+    private func duplicatedOverlayClip(
+        _ source: EditorOverlayClip,
+        timelineOffset: TimeInterval
+    ) -> EditorOverlayClip {
+        EditorOverlayClip(
+            asset: source.asset, originalDuration: source.originalDuration,
+            trimStart: source.trimStart, trimEnd: source.trimEnd,
+            timelineStart: source.timelineStart + timelineOffset,
+            laneIndex: source.laneIndex, zIndex: source.zIndex,
+            speed: source.speed, playback: source.playback,
+            scale: source.scale, xOffset: source.xOffset,
+            yOffset: source.yOffset, opacity: source.opacity, volume: source.volume,
+            cropAspect: source.cropAspect, reframeMode: source.reframeMode,
+            rotationQuarterTurns: source.rotationQuarterTurns,
+            straightenDegrees: source.straightenDegrees,
+            isFlippedHorizontally: source.isFlippedHorizontally,
+            isFlippedVertically: source.isFlippedVertically,
+            reframeScale: source.reframeScale, reframeXOffset: source.reframeXOffset,
+            reframeYOffset: source.reframeYOffset, colorAdjustment: source.colorAdjustment,
+            compositing: source.compositing, keyframes: source.keyframes,
+            motionTracks: source.motionTracks.map { track in var copy = track; copy.id = UUID(); return copy },
+            stabilization: source.stabilization, attachedClipID: source.attachedClipID,
+            attachedTrackID: source.attachedTrackID, attachRotation: source.attachRotation,
+            attachScale: source.attachScale
+        )
+    }
+
     // MARK: Clips
 
     var precisionEditMessage: String? {
@@ -3697,6 +4838,9 @@ final class EditorViewModel {
         }
         if selectedClip.speedRamp != nil {
             return "Commit or remove the speed curve before source-precision edits."
+        }
+        if selectedClip.playback != .forward {
+            return "Return generated reverse/freeze media to a forward source clip before precision edits."
         }
         return nil
     }
@@ -3707,6 +4851,7 @@ final class EditorViewModel {
               let index = clips.firstIndex(where: { $0.id == id }),
               index + 1 < clips.count else { return false }
         return clips[index + 1].isVideo && clips[index + 1].speedRamp == nil
+            && clips[index + 1].playback == .forward
     }
 
     var canSlideSelectedClip: Bool {
@@ -3716,6 +4861,7 @@ final class EditorViewModel {
               index > 0, index + 1 < clips.count else { return false }
         return clips[index - 1].isVideo && clips[index + 1].isVideo
             && clips[index - 1].speedRamp == nil && clips[index + 1].speedRamp == nil
+            && clips[index - 1].playback == .forward && clips[index + 1].playback == .forward
     }
 
     func slipSelectedClip(by timelineDelta: TimeInterval) {
@@ -3885,6 +5031,11 @@ final class EditorViewModel {
 
     private func rippleInsertTimedItems(at boundary: TimeInterval, duration: TimeInterval) {
         guard duration > 0.000_001 else { return }
+        for index in markers.indices where markers[index].time >= boundary - 0.000_001 {
+            markers[index].time += duration
+        }
+        if let exportInPoint, exportInPoint >= boundary { self.exportInPoint = exportInPoint + duration }
+        if let exportOutPoint, exportOutPoint >= boundary { self.exportOutPoint = exportOutPoint + duration }
         for index in textOverlays.indices {
             if textOverlays[index].startTime >= boundary - 0.000_001 {
                 textOverlays[index].startTime += duration
@@ -3918,6 +5069,10 @@ final class EditorViewModel {
                     var tail = parts.right
                     tail.timelineStart += duration
                     insertedAudio.append(tail)
+                    remapSequenceMembershipAfterSplit(
+                        original: .audio(parts.left.id),
+                        right: .audio(tail.id)
+                    )
                 } else {
                     insertedAudio.append(clip)
                 }
@@ -3939,6 +5094,10 @@ final class EditorViewModel {
                     var tail = parts.right
                     tail.timelineStart += duration
                     insertedOverlays.append(tail)
+                    remapSequenceMembershipAfterSplit(
+                        original: .overlay(parts.left.id),
+                        right: .overlay(tail.id)
+                    )
                 } else {
                     insertedOverlays.append(clip)
                 }
@@ -3954,6 +5113,23 @@ final class EditorViewModel {
         let upper = max(lower, max(start, end))
         let removedDuration = upper - lower
         guard removedDuration > 0.000_001 else { return }
+
+        for index in markers.indices {
+            if markers[index].time >= upper {
+                markers[index].time -= removedDuration
+            } else if markers[index].time > lower {
+                markers[index].time = lower
+            }
+        }
+        markers.sort { $0.time < $1.time }
+        func remappedRangePoint(_ point: TimeInterval?) -> TimeInterval? {
+            guard let point else { return nil }
+            if point >= upper { return point - removedDuration }
+            if point > lower { return lower }
+            return point
+        }
+        exportInPoint = remappedRangePoint(exportInPoint)
+        exportOutPoint = remappedRangePoint(exportOutPoint)
 
         var remappedText: [EditorTextOverlay] = []
         for var overlay in textOverlays {
@@ -4012,6 +5188,10 @@ final class EditorViewModel {
                     var tail = splitAtEnd.right
                     tail.timelineStart = lower
                     remappedAudio.append(tail)
+                    remapSequenceMembershipAfterSplit(
+                        original: .audio(splitAtStart.left.id),
+                        right: .audio(tail.id)
+                    )
                 } else {
                     remappedAudio.append(clip)
                 }
@@ -4042,6 +5222,10 @@ final class EditorViewModel {
                     var tail = splitAtEnd.right
                     tail.timelineStart = lower
                     remappedOverlays.append(tail)
+                    remapSequenceMembershipAfterSplit(
+                        original: .overlay(splitAtStart.left.id),
+                        right: .overlay(tail.id)
+                    )
                 } else {
                     remappedOverlays.append(clip)
                 }
@@ -4055,11 +5239,13 @@ final class EditorViewModel {
             }
         }
         overlayClips = remappedOverlays
+        pruneSequenceStructure()
     }
 
     private func finishPrecisionEdit() {
         pausePlaybackForEdit()
         timelinePosition = min(max(0, timelinePosition), totalDuration)
+        normalizeExportRange()
         invalidateComposition()
         scheduleSave()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -4074,16 +5260,22 @@ final class EditorViewModel {
         guard let idx = clips.firstIndex(where: { $0.id == clipID }) else { return }
         var clip = clips[idx]
         let minSpan = EditorClip.minimumSourceSpan(speed: clip.averageSpeed)
+        let requestedStart = clip.playback.isReverse
+            ? clip.originalDuration - trimEnd
+            : trimStart
+        let requestedEnd = clip.playback.isReverse
+            ? clip.originalDuration - trimStart
+            : trimEnd
 
         let start: TimeInterval
         let end: TimeInterval
         if clip.isPhoto {
-            start = max(0, min(trimStart, trimEnd - minSpan))
-            end = max(trimEnd, start + minSpan)
+            start = max(0, min(requestedStart, requestedEnd - minSpan))
+            end = max(requestedEnd, start + minSpan)
             clip.originalDuration = end
         } else {
-            start = min(max(0, trimStart), clip.originalDuration - minSpan)
-            end = max(min(clip.originalDuration, trimEnd), start + minSpan)
+            start = min(max(0, requestedStart), clip.originalDuration - minSpan)
+            end = max(min(clip.originalDuration, requestedEnd), start + minSpan)
         }
 
         var resolvedStart = start
@@ -4122,8 +5314,7 @@ final class EditorViewModel {
     func splitAtPlayhead() {
         guard let info = clipAndLocalTime(at: timelinePosition) else { return }
 
-        let splitSource = info.clip.sourceTime(forExportedLocal: info.localTime)
-        guard let parts = info.clip.split(atSourceTime: splitSource) else { return }
+        guard let parts = info.clip.split(atTimelineTime: info.localTime) else { return }
 
         registerUndoIfNeeded()
 
@@ -4132,6 +5323,10 @@ final class EditorViewModel {
         let index = info.index
         clips.remove(at: index)
         clips.insert(contentsOf: [parts.left, parts.right], at: index)
+        remapSequenceMembershipAfterSplit(
+            original: .primary(info.clip.id),
+            right: .primary(parts.left.id == info.clip.id ? parts.right.id : parts.left.id)
+        )
         remapMotionAttachmentsAfterSplit(
             left: parts.left,
             right: parts.right,
@@ -4160,7 +5355,9 @@ final class EditorViewModel {
         let clipEnd = clipStart + removedDuration
 
         clips.remove(at: index)
+        selectedTimelineItems.remove(.primary(id))
         rippleDeleteTimedItems(from: clipStart, to: clipEnd)
+        normalizeExportRange()
         for overlayIndex in textOverlays.indices
         where textOverlays[overlayIndex].attachedClipID == id {
             textOverlays[overlayIndex].attachedClipID = nil
@@ -4171,6 +5368,7 @@ final class EditorViewModel {
             overlayClips[overlayIndex].attachedClipID = nil
             overlayClips[overlayIndex].attachedTrackID = nil
         }
+        pruneSequenceStructure()
 
         if timelinePosition >= clipEnd {
             timelinePosition -= removedDuration
@@ -4199,6 +5397,7 @@ final class EditorViewModel {
             asset: source.asset, originalDuration: source.originalDuration,
             trimStart: source.trimStart, trimEnd: source.trimEnd, speed: source.speed,
             speedRamp: source.speedRamp,
+            playback: source.playback,
             volume: source.volume,
             audioTrimStart: source.audioTrimStart,
             audioTrimEnd: source.audioTrimEnd,
@@ -4525,6 +5724,8 @@ final class EditorViewModel {
         registerUndoIfNeeded()
         cancelPunchInMark()
         let removed = audioClips.remove(at: index)
+        selectedTimelineItems.remove(.audio(id))
+        pruneSequenceStructure()
         releaseAudioFileIfUnused(removed.fileURL)
         selectedAudioClipID = audioClips.first?.id
         if selectedAudioClipID == nil { selectedTool = nil }
@@ -4628,6 +5829,10 @@ final class EditorViewModel {
         registerUndoIfNeeded()
         audioClips[idx] = parts.left
         audioClips.insert(parts.right, at: idx + 1)
+        remapSequenceMembershipAfterSplit(
+            original: .audio(parts.left.id),
+            right: .audio(parts.right.id)
+        )
         selectedAudioClipID = parts.right.id
         invalidateComposition()
         scheduleSave()
@@ -4937,6 +6142,7 @@ final class EditorViewModel {
         compositionFingerprint = nil
         saveTask?.cancel()
         exportTask?.cancel()
+        cancelReverseGeneration()
         cancelCaptionTranscription()
         cancelMotionTracking()
         cancelColorMaskTracking()
@@ -4961,6 +6167,7 @@ final class EditorViewModel {
             closingTransitionDuration: closingTransitionDuration,
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
+            selectedTextOverlayID: selectedTextOverlayID,
             selectedAudioClipID: selectedAudioClipID,
             selectedOverlayClipID: selectedOverlayClipID,
             textOverlays: textOverlays,
@@ -4970,7 +6177,12 @@ final class EditorViewModel {
             overlayClips: overlayClips,
             canvasSettings: canvasSettings,
             exportInPoint: exportInPoint,
-            exportOutPoint: exportOutPoint
+            exportOutPoint: exportOutPoint,
+            sequences: sequences,
+            markers: markers,
+            selectedTimelineItems: selectedTimelineItems,
+            selectedSequenceID: selectedSequenceID,
+            activeSequenceID: activeSequenceID
         )
     }
 
@@ -4982,6 +6194,7 @@ final class EditorViewModel {
         closingTransitionDuration = snapshot.closingTransitionDuration
         timelinePosition = min(snapshot.timelinePosition, totalDuration)
         selectedClipID = snapshot.selectedClipID
+        selectedTextOverlayID = snapshot.selectedTextOverlayID
         selectedAudioClipID = snapshot.selectedAudioClipID
         selectedOverlayClipID = snapshot.selectedOverlayClipID
         textOverlays = snapshot.textOverlays
@@ -4992,6 +6205,21 @@ final class EditorViewModel {
         canvasSettings = snapshot.canvasSettings
         exportInPoint = snapshot.exportInPoint
         exportOutPoint = snapshot.exportOutPoint
+        sequences = snapshot.sequences
+        markers = snapshot.markers
+        selectedTimelineItems = snapshot.selectedTimelineItems
+        selectedSequenceID = snapshot.selectedSequenceID
+        activeSequenceID = snapshot.activeSequenceID
+        isMultiSelectMode = !selectedTimelineItems.isEmpty
+        if isMultiSelectMode {
+            selectedTool = .sequence
+            selectedClipID = nil
+            selectedTextOverlayID = nil
+            selectedAudioClipID = nil
+            selectedOverlayClipID = nil
+        } else if selectedTool == .sequence {
+            selectedTool = nil
+        }
         invalidateComposition()
     }
 
@@ -5021,8 +6249,14 @@ final class EditorViewModel {
             closingTransitionDuration: closingTransitionDuration,
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
+            selectedTextOverlayID: selectedTextOverlayID,
             selectedAudioClipID: selectedAudioClipID,
             selectedOverlayClipID: selectedOverlayClipID,
+            sequences: sequences,
+            markers: markers,
+            selectedTimelineItems: Array(selectedTimelineItems).sorted { $0.id < $1.id },
+            selectedSequenceID: selectedSequenceID,
+            activeSequenceID: activeSequenceID,
             canvasSettings: canvasSettings,
             exportInPoint: exportInPoint,
             exportOutPoint: exportOutPoint,
@@ -5066,6 +6300,7 @@ final class EditorViewModel {
         }
         if let exportInPoint { candidates.append(exportInPoint) }
         if let exportOutPoint { candidates.append(exportOutPoint) }
+        candidates.append(contentsOf: markers.map(\.time))
 
         let threshold = TimeInterval(thresholdPoints / max(pixelsPerSecond, 1))
         guard let nearest = candidates.min(by: { abs($0 - clamped) < abs($1 - clamped) }),
@@ -5089,13 +6324,13 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.volume)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.volume)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)|\($0.effect.rawValue)"
         }.joined(separator: ";")
         let overlayHash = overlayClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.playback)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
         }.joined(separator: ";")
         let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
         let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"
