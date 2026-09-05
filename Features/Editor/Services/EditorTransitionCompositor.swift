@@ -55,9 +55,17 @@ struct EditorOverlayRenderLayer {
     let transform: CGAffineTransform
     let opacity: Float
     let colorAdjustment: EditorColorAdjustment
+    let effects: [EditorVisualEffect]
     let compositing: EditorOverlayCompositing
     let animation: EditorRenderKeyframeAnimation?
     let trackedMotion: EditorRenderTrackedMotion?
+}
+
+struct EditorAdjustmentRenderLayer {
+    let timeRange: CMTimeRange
+    let colorAdjustment: EditorColorAdjustment
+    let effects: [EditorVisualEffect]
+    let zIndex: Int
 }
 
 /// Immutable adapter between reusable editor tracks and frame rendering.
@@ -139,10 +147,12 @@ final class EditorTransitionRenderInstruction:
     let foregroundTrackID: CMPersistentTrackID
     let backgroundTrackID: CMPersistentTrackID?
     let overlayLayers: [EditorOverlayRenderLayer]
+    let adjustmentLayers: [EditorAdjustmentRenderLayer]
     let baseTransform: CGAffineTransform
     let animation: EditorRenderKeyframeAnimation?
     let stabilization: EditorRenderStabilization?
     let colorAdjustment: EditorColorAdjustment
+    let effects: [EditorVisualEffect]
     let compositing: EditorOverlayCompositing
     let incomingKind: EditorTransitionKind
     let outgoingKind: EditorTransitionKind
@@ -158,10 +168,12 @@ final class EditorTransitionRenderInstruction:
         foregroundTrackID: CMPersistentTrackID,
         backgroundTrackID: CMPersistentTrackID?,
         overlayLayers: [EditorOverlayRenderLayer],
+        adjustmentLayers: [EditorAdjustmentRenderLayer],
         baseTransform: CGAffineTransform,
         animation: EditorRenderKeyframeAnimation?,
         stabilization: EditorRenderStabilization?,
         colorAdjustment: EditorColorAdjustment,
+        effects: [EditorVisualEffect],
         compositing: EditorOverlayCompositing,
         incomingKind: EditorTransitionKind,
         outgoingKind: EditorTransitionKind,
@@ -177,10 +189,12 @@ final class EditorTransitionRenderInstruction:
         self.foregroundTrackID = foregroundTrackID
         self.backgroundTrackID = backgroundTrackID
         self.overlayLayers = overlayLayers
+        self.adjustmentLayers = adjustmentLayers.sorted { $0.zIndex < $1.zIndex }
         self.baseTransform = baseTransform
         self.animation = animation
         self.stabilization = stabilization
         self.colorAdjustment = colorAdjustment
+        self.effects = effects
         self.compositing = compositing
         self.incomingKind = incomingKind
         self.outgoingKind = outgoingKind
@@ -437,6 +451,11 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     animatedColor,
                     to: CIImage(cvPixelBuffer: foregroundBuffer)
                 )
+                foreground = EditorVisualEffectRenderer.apply(
+                    instruction.effects,
+                    to: foreground,
+                    localTime: instructionLocalTime
+                )
                 foreground = EditorOverlayCompositingRenderer.applyChromaKey(
                     instruction.compositing.chromaKey,
                     to: foreground
@@ -524,6 +543,11 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     overlayColor,
                     to: CIImage(cvPixelBuffer: overlayBuffer)
                 )
+                overlayImage = EditorVisualEffectRenderer.apply(
+                    overlay.effects,
+                    to: overlayImage,
+                    localTime: overlayLocalTime
+                )
                 overlayImage = EditorOverlayCompositingRenderer.applyChromaKey(
                     overlay.compositing.chromaKey,
                     to: overlayImage
@@ -566,6 +590,17 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
                     over: overlayBackground,
                     using: overlay.compositing.blendMode,
                     extent: extent
+                )
+            }
+
+            for layer in instruction.adjustmentLayers
+            where CMTimeRangeContainsTime(layer.timeRange, time: request.compositionTime) {
+                let localTime = max(0, (request.compositionTime - layer.timeRange.start).seconds)
+                composed = EditorColorGradeRenderer.apply(layer.colorAdjustment, to: composed)
+                composed = EditorVisualEffectRenderer.apply(
+                    layer.effects,
+                    to: composed,
+                    localTime: localTime
                 )
             }
 

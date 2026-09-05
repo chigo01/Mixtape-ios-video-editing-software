@@ -17,6 +17,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
     case crop
     case volume
     case filter
+    case effects
     case compositing
     case text
     case keyframe
@@ -39,6 +40,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .crop: return "CROP"
         case .volume: return "VOLUME"
         case .filter: return "ADJUST"
+        case .effects: return "EFFECTS"
         case .compositing: return "COMPOSITE"
         case .text: return "TEXT"
         case .keyframe: return "KEYFRAME"
@@ -61,6 +63,7 @@ enum EditorClipAction: String, CaseIterable, Identifiable {
         case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
+        case .effects: return "wand.and.stars"
         case .compositing: return "square.3.layers.3d"
         case .text: return "textformat"
         case .keyframe: return "diamond.fill"
@@ -160,6 +163,7 @@ extension EditorClipAction {
         case .crop: return .crop
         case .volume: return .volume
         case .filter: return .filter
+        case .effects: return .effects
         case .compositing: return .compositing
         case .text: return .text
         case .keyframe: return .keyframe
@@ -358,6 +362,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
     case crop
     case volume
     case filter
+    case effects
     case compositing
     case opacity
     case smaller
@@ -385,6 +390,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return "CROP"
         case .volume: return "VOLUME"
         case .filter: return "ADJUST"
+        case .effects: return "EFFECTS"
         case .compositing: return "COMPOSITE"
         case .opacity: return "OPACITY"
         case .smaller: return "SMALLER"
@@ -412,6 +418,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return "crop.rotate"
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
+        case .effects: return "wand.and.stars"
         case .compositing: return "square.3.layers.3d"
         case .opacity: return "circle.lefthalf.filled"
         case .smaller: return "minus.magnifyingglass"
@@ -438,6 +445,7 @@ enum EditorOverlayAction: String, CaseIterable, Identifiable {
         case .crop: return .crop
         case .volume: return .volume
         case .filter: return .filter
+        case .effects: return .effects
         case .compositing: return .compositing
         case .opacity: return .opacity
         case .text: return .text
@@ -565,6 +573,8 @@ struct EditorOverlayActionBar: View {
             vm.selectTool(.volume)
         case .filter:
             vm.selectTool(.filter)
+        case .effects:
+            vm.selectTool(.effects)
         case .compositing:
             vm.selectTool(.compositing)
         case .opacity:

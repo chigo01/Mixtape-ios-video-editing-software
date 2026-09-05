@@ -111,6 +111,365 @@ enum EditorFreezeAudioPolicy: String, Codable, CaseIterable, Identifiable, Hasha
     var title: String { self == .mute ? "Mute Clip Audio" : "Continue Clip Audio" }
 }
 
+// MARK: - Stackable visual effects
+
+enum EditorEffectCategory: String, CaseIterable, Identifiable, Hashable {
+    case featured, motion, light, glitch, pixel, retro, stylize, blur
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var systemImage: String {
+        switch self {
+        case .featured: return "sparkles"
+        case .motion: return "move.3d"
+        case .light: return "sun.max.fill"
+        case .glitch: return "waveform.path.ecg"
+        case .pixel: return "square.grid.3x3.fill"
+        case .retro: return "film.stack"
+        case .stylize: return "wand.and.stars"
+        case .blur: return "drop.fill"
+        }
+    }
+}
+
+/// A render operation in a clip or adjustment-layer effect stack. Effects are
+/// evaluated in array order and use the shared keyframe sampler for Amount.
+enum EditorVisualEffectKind: String, Codable, CaseIterable, Identifiable, Hashable {
+    case gaussianBlur, motionBlur, bloom, sharpen, vignette, grain
+    case pixelate, crystallize, comic, monochrome, sepia, hueShift
+    case zoomBlur, edgeGlow, posterize, invert, falseColor, noir, chrome
+    case rgbSplit, scanlines, lineScreen, dotScreen, hexPixelate
+    case kaleidoscope, twirl, bump, zoomPulse, shake, strobe
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .gaussianBlur: return "Gaussian Blur"
+        case .motionBlur: return "Motion Blur"
+        case .bloom: return "Bloom"
+        case .sharpen: return "Sharpen"
+        case .vignette: return "Vignette"
+        case .grain: return "Film Grain"
+        case .pixelate: return "Pixelate"
+        case .crystallize: return "Crystallize"
+        case .comic: return "Comic"
+        case .monochrome: return "Monochrome"
+        case .sepia: return "Sepia"
+        case .hueShift: return "Hue Shift"
+        case .zoomBlur: return "Zoom Blur"
+        case .edgeGlow: return "Edge Glow"
+        case .posterize: return "Posterize"
+        case .invert: return "Invert"
+        case .falseColor: return "False Color"
+        case .noir: return "Noir"
+        case .chrome: return "Chrome"
+        case .rgbSplit: return "RGB Split"
+        case .scanlines: return "Scanlines"
+        case .lineScreen: return "Line Screen"
+        case .dotScreen: return "Dot Screen"
+        case .hexPixelate: return "Hex Pixel"
+        case .kaleidoscope: return "Kaleidoscope"
+        case .twirl: return "Twirl"
+        case .bump: return "Lens Bump"
+        case .zoomPulse: return "Zoom Pulse"
+        case .shake: return "Camera Shake"
+        case .strobe: return "Strobe"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .gaussianBlur, .motionBlur: return "drop"
+        case .bloom: return "sun.max.fill"
+        case .sharpen: return "triangle"
+        case .vignette: return "circle.dotted"
+        case .grain: return "circle.grid.cross"
+        case .pixelate, .crystallize: return "square.grid.3x3.fill"
+        case .comic: return "text.bubble.fill"
+        case .monochrome: return "circle.lefthalf.filled"
+        case .sepia: return "photo.artframe"
+        case .hueShift: return "paintpalette.fill"
+        case .zoomBlur, .zoomPulse: return "scope"
+        case .edgeGlow: return "scribble.variable"
+        case .posterize, .falseColor: return "swatchpalette.fill"
+        case .invert: return "circle.lefthalf.filled.inverse"
+        case .noir: return "circle.righthalf.filled"
+        case .chrome: return "circle.hexagongrid.fill"
+        case .rgbSplit: return "square.3.layers.3d"
+        case .scanlines, .lineScreen: return "line.3.horizontal"
+        case .dotScreen: return "circle.grid.3x3.fill"
+        case .hexPixelate: return "hexagon.fill"
+        case .kaleidoscope: return "camera.aperture"
+        case .twirl: return "tornado"
+        case .bump: return "circle.circle"
+        case .shake: return "move.3d"
+        case .strobe: return "bolt.fill"
+        }
+    }
+
+    var category: EditorEffectCategory {
+        switch self {
+        case .gaussianBlur, .motionBlur, .zoomBlur: return .blur
+        case .bloom, .strobe: return .light
+        case .pixelate, .crystallize, .hexPixelate, .dotScreen, .lineScreen: return .pixel
+        case .grain, .sepia, .monochrome, .noir: return .retro
+        case .rgbSplit, .scanlines, .invert: return .glitch
+        case .zoomPulse, .shake: return .motion
+        case .sharpen, .vignette, .comic, .hueShift, .edgeGlow, .posterize,
+             .falseColor, .chrome, .kaleidoscope, .twirl, .bump:
+            return .stylize
+        }
+    }
+
+    var secondaryControlTitle: String? {
+        switch self {
+        case .motionBlur: return "Direction"
+        case .vignette, .twirl, .bump: return "Radius"
+        case .rgbSplit: return "Direction"
+        case .scanlines, .lineScreen, .dotScreen: return "Scale"
+        case .kaleidoscope: return "Segments"
+        case .zoomPulse, .shake, .strobe: return "Speed"
+        default: return nil
+        }
+    }
+
+    var isTemporal: Bool {
+        switch self {
+        case .zoomPulse, .shake, .strobe: return true
+        default: return false
+        }
+    }
+}
+
+struct EditorVisualEffect: Codable, Identifiable, Hashable {
+    var id: UUID = UUID()
+    var kind: EditorVisualEffectKind
+    var isEnabled: Bool = true
+    var amount: Double = 0.65
+    /// A second normalized control used where an effect needs direction/size.
+    var secondaryAmount: Double = 0.5
+    var amountKeyframes: EditorKeyframeTrack = .init(property: .effectAmount)
+
+    func resolvedAmount(at localTime: TimeInterval) -> Double {
+        amountKeyframes.value(at: localTime, default: min(max(amount, 0), 1))
+    }
+
+    func split(at localTime: TimeInterval) -> (left: Self, right: Self) {
+        let pair = EditorKeyframeTracks(tracks: [amountKeyframes]).split(at: localTime)
+        var left = self
+        var right = self
+        left.amountKeyframes = pair.left.track(for: .effectAmount)
+        right.amountKeyframes = pair.right.track(for: .effectAmount)
+        return (left, right)
+    }
+
+    func held(at localTime: TimeInterval) -> Self {
+        var result = self
+        result.amount = resolvedAmount(at: localTime)
+        result.amountKeyframes = EditorKeyframeTrack(
+            property: .effectAmount,
+            keyframes: [EditorKeyframe(
+                time: 0,
+                value: result.amount,
+                curve: .init(preset: .hold)
+            )]
+        )
+        return result
+    }
+}
+
+struct EditorEffectPreset: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let category: EditorEffectCategory
+    let effects: [EditorVisualEffect]
+
+    static let builtIn: [Self] = [
+        .init(id: "dreamy", title: "Dreamy", category: .featured, effects: [
+            .init(kind: .bloom, amount: 0.55), .init(kind: .gaussianBlur, amount: 0.12)
+        ]),
+        .init(id: "film", title: "Film", category: .featured, effects: [
+            .init(kind: .grain, amount: 0.32), .init(kind: .vignette, amount: 0.28)
+        ]),
+        .init(id: "graphic", title: "Graphic", category: .featured, effects: [
+            .init(kind: .comic, amount: 0.72), .init(kind: .sharpen, amount: 0.25)
+        ]),
+        .init(id: "retro", title: "Retro", category: .featured, effects: [
+            .init(kind: .sepia, amount: 0.46), .init(kind: .grain, amount: 0.18)
+        ]),
+        .init(id: "slowZoom", title: "Slow Zoom", category: .motion, effects: [
+            .init(kind: .zoomPulse, amount: 0.35, secondaryAmount: 0.12)
+        ]),
+        .init(id: "backOff", title: "Back Off", category: .motion, effects: [
+            .init(kind: .zoomPulse, amount: 0.48, secondaryAmount: 0.34),
+            .init(kind: .motionBlur, amount: 0.12, secondaryAmount: 0.5)
+        ]),
+        .init(id: "cameraShake", title: "Camera Shake", category: .motion, effects: [
+            .init(kind: .shake, amount: 0.42, secondaryAmount: 0.55)
+        ]),
+        .init(id: "dynamicBlur", title: "Dynamic Blur", category: .motion, effects: [
+            .init(kind: .shake, amount: 0.16, secondaryAmount: 0.65),
+            .init(kind: .motionBlur, amount: 0.28, secondaryAmount: 0.08)
+        ]),
+        .init(id: "zoomFlash", title: "Zoom Flash", category: .motion, effects: [
+            .init(kind: .zoomPulse, amount: 0.52, secondaryAmount: 0.72),
+            .init(kind: .zoomBlur, amount: 0.3), .init(kind: .strobe, amount: 0.22, secondaryAmount: 0.35)
+        ]),
+        .init(id: "rebound", title: "Rebound", category: .motion, effects: [
+            .init(kind: .zoomPulse, amount: 0.68, secondaryAmount: 0.82),
+            .init(kind: .shake, amount: 0.12, secondaryAmount: 0.7)
+        ]),
+        .init(id: "whiteFlash", title: "White Flash", category: .light, effects: [
+            .init(kind: .strobe, amount: 0.72, secondaryAmount: 0.38), .init(kind: .bloom, amount: 0.45)
+        ]),
+        .init(id: "neonBloom", title: "Neon Bloom", category: .light, effects: [
+            .init(kind: .edgeGlow, amount: 0.58), .init(kind: .bloom, amount: 0.7),
+            .init(kind: .hueShift, amount: 0.72)
+        ]),
+        .init(id: "heatImprint", title: "Heat Imprint", category: .light, effects: [
+            .init(kind: .falseColor, amount: 0.68), .init(kind: .bloom, amount: 0.28)
+        ]),
+        .init(id: "softLeak", title: "Soft Leak", category: .light, effects: [
+            .init(kind: .bloom, amount: 0.76), .init(kind: .hueShift, amount: 0.1),
+            .init(kind: .vignette, amount: 0.18, secondaryAmount: 0.8)
+        ]),
+        .init(id: "offsetSlice", title: "Offset Slice", category: .glitch, effects: [
+            .init(kind: .rgbSplit, amount: 0.7, secondaryAmount: 0.08),
+            .init(kind: .scanlines, amount: 0.22, secondaryAmount: 0.45)
+        ]),
+        .init(id: "glitchQuake", title: "Glitch Quake", category: .glitch, effects: [
+            .init(kind: .shake, amount: 0.35, secondaryAmount: 0.78),
+            .init(kind: .rgbSplit, amount: 0.62, secondaryAmount: 0.82),
+            .init(kind: .scanlines, amount: 0.34, secondaryAmount: 0.6)
+        ]),
+        .init(id: "signalBreak", title: "Signal Break", category: .glitch, effects: [
+            .init(kind: .posterize, amount: 0.42), .init(kind: .rgbSplit, amount: 0.56),
+            .init(kind: .strobe, amount: 0.15, secondaryAmount: 0.82)
+        ]),
+        .init(id: "digitalDamage", title: "Digital Damage", category: .glitch, effects: [
+            .init(kind: .pixelate, amount: 0.24), .init(kind: .invert, amount: 0.2),
+            .init(kind: .rgbSplit, amount: 0.46)
+        ]),
+        .init(id: "pixelArt", title: "Pixel Art", category: .pixel, effects: [
+            .init(kind: .pixelate, amount: 0.48), .init(kind: .posterize, amount: 0.72),
+            .init(kind: .sharpen, amount: 0.55)
+        ]),
+        .init(id: "pixelMosaic", title: "Pixel Mosaic", category: .pixel, effects: [
+            .init(kind: .crystallize, amount: 0.38), .init(kind: .pixelate, amount: 0.18)
+        ]),
+        .init(id: "hexWorld", title: "Hex World", category: .pixel, effects: [
+            .init(kind: .hexPixelate, amount: 0.5), .init(kind: .sharpen, amount: 0.24)
+        ]),
+        .init(id: "dotPrint", title: "Dot Print", category: .pixel, effects: [
+            .init(kind: .dotScreen, amount: 0.58, secondaryAmount: 0.46),
+            .init(kind: .monochrome, amount: 0.25)
+        ]),
+        .init(id: "comicPixel", title: "Comic Pixel", category: .pixel, effects: [
+            .init(kind: .comic, amount: 0.62), .init(kind: .lineScreen, amount: 0.3)
+        ]),
+        .init(id: "nostalgic", title: "Nostalgic Light", category: .retro, effects: [
+            .init(kind: .sepia, amount: 0.3), .init(kind: .grain, amount: 0.28),
+            .init(kind: .bloom, amount: 0.16)
+        ]),
+        .init(id: "vintageDark", title: "Vintage Dark", category: .retro, effects: [
+            .init(kind: .sepia, amount: 0.22), .init(kind: .grain, amount: 0.42),
+            .init(kind: .vignette, amount: 0.7, secondaryAmount: 0.35)
+        ]),
+        .init(id: "bwNoise", title: "B&W Noise", category: .retro, effects: [
+            .init(kind: .noir, amount: 0.84), .init(kind: .grain, amount: 0.58),
+            .init(kind: .scanlines, amount: 0.12)
+        ]),
+        .init(id: "chromeFilm", title: "Chrome Film", category: .retro, effects: [
+            .init(kind: .chrome, amount: 0.7), .init(kind: .grain, amount: 0.16)
+        ]),
+        .init(id: "thermal", title: "Thermal", category: .stylize, effects: [
+            .init(kind: .falseColor, amount: 0.92), .init(kind: .posterize, amount: 0.16)
+        ]),
+        .init(id: "edgeNeon", title: "Edge Neon", category: .stylize, effects: [
+            .init(kind: .edgeGlow, amount: 0.82), .init(kind: .hueShift, amount: 0.82)
+        ]),
+        .init(id: "prism", title: "Prism", category: .stylize, effects: [
+            .init(kind: .kaleidoscope, amount: 0.56, secondaryAmount: 0.45),
+            .init(kind: .bloom, amount: 0.18)
+        ]),
+        .init(id: "vortex", title: "Vortex", category: .stylize, effects: [
+            .init(kind: .twirl, amount: 0.54, secondaryAmount: 0.68)
+        ]),
+        .init(id: "fisheye", title: "Fisheye", category: .stylize, effects: [
+            .init(kind: .bump, amount: 0.62, secondaryAmount: 0.72)
+        ]),
+        .init(id: "chromeBlur", title: "Chrome Blur", category: .blur, effects: [
+            .init(kind: .chrome, amount: 0.62), .init(kind: .gaussianBlur, amount: 0.16)
+        ]),
+        .init(id: "softFocus", title: "Soft Focus", category: .blur, effects: [
+            .init(kind: .gaussianBlur, amount: 0.08), .init(kind: .bloom, amount: 0.38)
+        ]),
+        .init(id: "speedSmear", title: "Speed Smear", category: .blur, effects: [
+            .init(kind: .zoomBlur, amount: 0.48), .init(kind: .motionBlur, amount: 0.22)
+        ]),
+        .init(id: "dreamBlur", title: "Dream Blur", category: .blur, effects: [
+            .init(kind: .gaussianBlur, amount: 0.18), .init(kind: .bloom, amount: 0.65),
+            .init(kind: .vignette, amount: 0.16)
+        ])
+    ]
+}
+
+/// A non-media timeline item that processes the fully composited program frame.
+/// Overlapping layers are evaluated in z-order, then array order.
+struct EditorAdjustmentLayer: Codable, Identifiable, Hashable {
+    var id: UUID = UUID()
+    var title: String = "Adjustment Layer"
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+    var zIndex: Int = 0
+    var isEnabled: Bool = true
+    var colorAdjustment: EditorColorAdjustment = .neutral
+    var effects: [EditorVisualEffect] = []
+
+    var duration: TimeInterval { max(0, endTime - startTime) }
+    func contains(_ time: TimeInterval) -> Bool {
+        isEnabled && time >= startTime && time < endTime
+    }
+
+    init(
+        id: UUID = UUID(),
+        title: String = "Adjustment Layer",
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        zIndex: Int = 0,
+        isEnabled: Bool = true,
+        colorAdjustment: EditorColorAdjustment = .neutral,
+        effects: [EditorVisualEffect] = []
+    ) {
+        self.id = id
+        self.title = title
+        self.startTime = max(0, startTime)
+        self.endTime = max(self.startTime + 0.1, endTime)
+        self.zIndex = zIndex
+        self.isEnabled = isEnabled
+        self.colorAdjustment = colorAdjustment
+        self.effects = effects
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Adjustment Layer"
+        startTime = max(0, try container.decode(TimeInterval.self, forKey: .startTime))
+        endTime = max(
+            startTime + 0.1,
+            try container.decode(TimeInterval.self, forKey: .endTime)
+        )
+        zIndex = try container.decodeIfPresent(Int.self, forKey: .zIndex) ?? 0
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        colorAdjustment = try container.decodeIfPresent(
+            EditorColorAdjustment.self,
+            forKey: .colorAdjustment
+        ) ?? .neutral
+        effects = try container.decodeIfPresent([EditorVisualEffect].self, forKey: .effects) ?? []
+    }
+}
+
 /// Non-destructive source treatment. The original Photos asset remains the
 /// relink authority; reverse media is a deterministic, disposable render cache.
 enum EditorClipPlayback: Codable, Hashable {
@@ -192,6 +551,7 @@ struct EditorClip: Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var effects: [EditorVisualEffect]
     var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
     var motionTracks: [EditorMotionTrack]
@@ -233,6 +593,7 @@ struct EditorClip: Identifiable, Hashable {
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
         colorAdjustment: EditorColorAdjustment = .neutral,
+        effects: [EditorVisualEffect] = [],
         compositing: EditorOverlayCompositing = .standard,
         keyframes: EditorKeyframeTracks = .empty,
         motionTracks: [EditorMotionTrack] = [],
@@ -267,6 +628,7 @@ struct EditorClip: Identifiable, Hashable {
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
         self.colorAdjustment = colorAdjustment
+        self.effects = effects
         var sanitizedCompositing = compositing
         sanitizedCompositing.sanitize()
         self.compositing = sanitizedCompositing
@@ -291,6 +653,7 @@ struct EditorClip: Identifiable, Hashable {
         let splitSourceOffset = sourceTime - trimStart
         let splitLocalTime = timelineTime(forSourceOffset: splitSourceOffset)
         let splitKeyframes = keyframes.split(at: splitLocalTime)
+        let splitEffects = effects.map { $0.split(at: splitLocalTime) }
         let splitRamps = speedRamp?.split(
             atSourceProgress: sourceSpan > 0 ? splitSourceOffset / sourceSpan : 0.5
         )
@@ -321,6 +684,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            effects: splitEffects.map(\.left),
             compositing: compositing,
             keyframes: splitKeyframes.left,
             motionTracks: splitTracks.map(\.left),
@@ -350,6 +714,7 @@ struct EditorClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            effects: splitEffects.map(\.right),
             compositing: compositing,
             keyframes: splitKeyframes.right,
             motionTracks: splitTracks.map(\.right),
@@ -371,8 +736,11 @@ struct EditorClip: Identifiable, Hashable {
             var right = parts.left
             let clampedLocal = min(max(0, localTime), duration)
             let splitKeyframes = keyframes.split(at: clampedLocal)
+            let splitEffects = effects.map { $0.split(at: clampedLocal) }
             left.keyframes = splitKeyframes.left
             right.keyframes = splitKeyframes.right
+            left.effects = splitEffects.map(\.left)
+            right.effects = splitEffects.map(\.right)
             let reversedSourceOffset = sourceTime(forExportedLocal: clampedLocal) - trimStart
             let sourceSpan = max(trimEnd - trimStart, 0.000_001)
             let splitRamps = speedRamp?.split(
@@ -487,6 +855,7 @@ struct EditorClip: Identifiable, Hashable {
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
             && lhs.colorAdjustment == rhs.colorAdjustment
+            && lhs.effects == rhs.effects
             && lhs.compositing == rhs.compositing
             && lhs.keyframes == rhs.keyframes
             && lhs.motionTracks == rhs.motionTracks
@@ -531,6 +900,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var effects: [EditorVisualEffect]
     var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
     var motionTracks: [EditorMotionTrack]
@@ -566,6 +936,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
         reframeXOffset: CGFloat = 0,
         reframeYOffset: CGFloat = 0,
         colorAdjustment: EditorColorAdjustment = .neutral,
+        effects: [EditorVisualEffect] = [],
         compositing: EditorOverlayCompositing = .standard,
         keyframes: EditorKeyframeTracks = .empty,
         motionTracks: [EditorMotionTrack] = [],
@@ -602,6 +973,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
         self.reframeXOffset = min(max(reframeXOffset, -1), 1)
         self.reframeYOffset = min(max(reframeYOffset, -1), 1)
         self.colorAdjustment = colorAdjustment
+        self.effects = effects
         var sanitizedCompositing = compositing
         sanitizedCompositing.sanitize()
         self.compositing = sanitizedCompositing
@@ -641,7 +1013,8 @@ struct EditorOverlayClip: Identifiable, Hashable {
             reframeScale: reframeScale,
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
-            colorAdjustment: colorAdjustment
+            colorAdjustment: colorAdjustment,
+            effects: effects
         )
     }
 
@@ -697,6 +1070,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
 
         let splitLocalTime = (sourceTime - trimStart) / TimeInterval(max(speed, 0.001))
         let splitKeyframes = keyframes.split(at: splitLocalTime)
+        let splitEffects = effects.map { $0.split(at: splitLocalTime) }
         let splitProgress = duration > 0 ? splitLocalTime / duration : 0.5
         let splitTracks = motionTracks.map { $0.split(at: splitProgress) }
         let splitStabilization = stabilization.split(at: splitProgress)
@@ -727,6 +1101,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            effects: splitEffects.map(\.left),
             compositing: compositing,
             keyframes: splitKeyframes.left,
             motionTracks: splitTracks.map(\.left),
@@ -761,6 +1136,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             reframeXOffset: reframeXOffset,
             reframeYOffset: reframeYOffset,
             colorAdjustment: colorAdjustment,
+            effects: splitEffects.map(\.right),
             compositing: compositing,
             keyframes: splitKeyframes.right,
             motionTracks: splitTracks.map(\.right),
@@ -824,6 +1200,7 @@ struct EditorOverlayClip: Identifiable, Hashable {
             && lhs.reframeXOffset == rhs.reframeXOffset
             && lhs.reframeYOffset == rhs.reframeYOffset
             && lhs.colorAdjustment == rhs.colorAdjustment
+            && lhs.effects == rhs.effects
             && lhs.compositing == rhs.compositing
             && lhs.keyframes == rhs.keyframes
             && lhs.motionTracks == rhs.motionTracks

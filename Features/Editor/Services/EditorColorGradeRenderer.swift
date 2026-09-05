@@ -713,6 +713,293 @@ enum EditorColorGradeRenderer {
     private static func clamp(_ value: Double) -> Double { min(max(value, 0), 1) }
 }
 
+/// Ordered Core Image effect evaluation shared by player preview and export.
+/// Cropping after extent-growing filters prevents blur/bloom from changing the
+/// program-frame bounds. Core Image caches the compiled graph on the compositor's
+/// long-lived CIContext; the model itself remains cheap, immutable render input.
+enum EditorVisualEffectRenderer {
+    private final class StackPlan: NSObject {
+        let effects: [EditorVisualEffect]
+        init(effects: [EditorVisualEffect]) { self.effects = effects }
+    }
+    private static let stackPlanCache: NSCache<NSString, StackPlan> = {
+        let cache = NSCache<NSString, StackPlan>()
+        cache.countLimit = 96
+        return cache
+    }()
+
+    static func apply(
+        _ effects: [EditorVisualEffect],
+        to source: CIImage,
+        localTime: TimeInterval
+    ) -> CIImage {
+        let extent = source.extent
+        let key = String(describing: effects) as NSString
+        let plan: StackPlan
+        if let cached = stackPlanCache.object(forKey: key) {
+            plan = cached
+        } else {
+            plan = StackPlan(effects: effects.filter(\.isEnabled))
+            stackPlanCache.setObject(plan, forKey: key)
+        }
+        return plan.effects.reduce(source) { image, effect in
+            let amount = min(max(effect.resolvedAmount(at: localTime), 0), 1)
+            guard amount > 0.0001 else { return image }
+            let secondary = min(max(effect.secondaryAmount, 0), 1)
+            let result: CIImage
+            switch effect.kind {
+            case .gaussianBlur:
+                result = image.clampedToExtent().applyingFilter(
+                    "CIGaussianBlur", parameters: [kCIInputRadiusKey: 0.5 + amount * 28]
+                )
+            case .motionBlur:
+                result = image.clampedToExtent().applyingFilter(
+                    "CIMotionBlur",
+                    parameters: [
+                        kCIInputRadiusKey: 0.5 + amount * 34,
+                        kCIInputAngleKey: secondary * .pi * 2
+                    ]
+                )
+            case .bloom:
+                result = image.applyingFilter(
+                    "CIBloom",
+                    parameters: [kCIInputRadiusKey: 2 + amount * 28, kCIInputIntensityKey: amount]
+                )
+            case .sharpen:
+                result = image.applyingFilter(
+                    "CISharpenLuminance", parameters: [kCIInputSharpnessKey: amount * 2.4]
+                )
+            case .vignette:
+                result = image.applyingFilter(
+                    "CIVignette",
+                    parameters: [kCIInputIntensityKey: amount * 2.2, kCIInputRadiusKey: 0.7 + secondary * 1.8]
+                )
+            case .grain:
+                let noise = CIFilter(name: "CIRandomGenerator")?.outputImage?
+                    .cropped(to: extent)
+                    .applyingFilter("CIColorMatrix", parameters: [
+                        "inputRVector": CIVector(x: amount * 0.12, y: 0, z: 0, w: 0),
+                        "inputGVector": CIVector(x: 0, y: amount * 0.12, z: 0, w: 0),
+                        "inputBVector": CIVector(x: 0, y: 0, z: amount * 0.12, w: 0),
+                        "inputAVector": CIVector(x: 0, y: 0, z: 0, w: amount * 0.22)
+                    ])
+                result = noise.map {
+                    $0.applyingFilter("CISoftLightBlendMode", parameters: [kCIInputBackgroundImageKey: image])
+                } ?? image
+            case .pixelate:
+                result = image.applyingFilter(
+                    "CIPixellate", parameters: [kCIInputScaleKey: 2 + amount * 70]
+                )
+            case .crystallize:
+                result = image.applyingFilter(
+                    "CICrystallize", parameters: [kCIInputRadiusKey: 1 + amount * 55]
+                )
+            case .comic:
+                let treated = image.applyingFilter("CIComicEffect")
+                result = image.applyingFilter("CIDissolveTransition", parameters: [
+                    kCIInputTargetImageKey: treated, kCIInputTimeKey: amount
+                ])
+            case .monochrome:
+                let treated = image.applyingFilter("CIPhotoEffectMono")
+                result = image.applyingFilter("CIDissolveTransition", parameters: [
+                    kCIInputTargetImageKey: treated, kCIInputTimeKey: amount
+                ])
+            case .sepia:
+                result = image.applyingFilter("CISepiaTone", parameters: [kCIInputIntensityKey: amount])
+            case .hueShift:
+                result = image.applyingFilter("CIHueAdjust", parameters: [kCIInputAngleKey: amount * .pi * 2])
+            case .zoomBlur:
+                result = image.clampedToExtent().applyingFilter(
+                    "CIZoomBlur",
+                    parameters: [
+                        kCIInputCenterKey: CIVector(x: extent.midX, y: extent.midY),
+                        kCIInputAmountKey: amount * 42
+                    ]
+                )
+            case .edgeGlow:
+                let edges = image.applyingFilter(
+                    "CIEdges",
+                    parameters: [kCIInputIntensityKey: 1 + amount * 8]
+                ).applyingFilter(
+                    "CIBloom",
+                    parameters: [kCIInputRadiusKey: 2 + amount * 16, kCIInputIntensityKey: amount]
+                )
+                result = edges.applyingFilter(
+                    "CIScreenBlendMode",
+                    parameters: [kCIInputBackgroundImageKey: image]
+                )
+            case .posterize:
+                result = image.applyingFilter(
+                    "CIColorPosterize",
+                    parameters: ["inputLevels": max(2, 18 - amount * 15)]
+                )
+            case .invert:
+                let treated = image.applyingFilter("CIColorInvert")
+                result = dissolve(from: image, to: treated, amount: amount)
+            case .falseColor:
+                let treated = image.applyingFilter(
+                    "CIFalseColor",
+                    parameters: [
+                        "inputColor0": CIColor(red: 0.02, green: 0.08, blue: 0.32),
+                        "inputColor1": CIColor(red: 1, green: 0.34, blue: 0.02)
+                    ]
+                )
+                result = dissolve(from: image, to: treated, amount: amount)
+            case .noir:
+                result = dissolve(from: image, to: image.applyingFilter("CIPhotoEffectNoir"), amount: amount)
+            case .chrome:
+                result = dissolve(from: image, to: image.applyingFilter("CIPhotoEffectChrome"), amount: amount)
+            case .rgbSplit:
+                result = rgbSplit(image, extent: extent, amount: amount, direction: secondary)
+            case .scanlines:
+                result = scanlines(image, extent: extent, amount: amount, scale: secondary)
+            case .lineScreen:
+                let treated = image.applyingFilter(
+                    "CILineScreen",
+                    parameters: [
+                        kCIInputWidthKey: 3 + secondary * 18,
+                        kCIInputSharpnessKey: 0.45 + amount * 0.5,
+                        kCIInputAngleKey: amount * .pi
+                    ]
+                )
+                result = dissolve(from: image, to: treated, amount: amount)
+            case .dotScreen:
+                let treated = image.applyingFilter(
+                    "CIDotScreen",
+                    parameters: [
+                        kCIInputCenterKey: CIVector(x: extent.midX, y: extent.midY),
+                        kCIInputWidthKey: 3 + secondary * 22,
+                        kCIInputSharpnessKey: 0.45 + amount * 0.5
+                    ]
+                )
+                result = dissolve(from: image, to: treated, amount: amount)
+            case .hexPixelate:
+                result = image.applyingFilter(
+                    "CIHexagonalPixellate",
+                    parameters: [
+                        kCIInputCenterKey: CIVector(x: extent.midX, y: extent.midY),
+                        kCIInputScaleKey: 2 + amount * 72
+                    ]
+                )
+            case .kaleidoscope:
+                let treated = image.clampedToExtent().applyingFilter(
+                    "CIKaleidoscope",
+                    parameters: [
+                        "inputCount": 3 + secondary * 17,
+                        "inputCenter": CIVector(x: extent.midX, y: extent.midY),
+                        "inputAngle": amount * .pi * 2
+                    ]
+                )
+                result = dissolve(from: image, to: treated, amount: amount)
+            case .twirl:
+                result = image.clampedToExtent().applyingFilter(
+                    "CITwirlDistortion",
+                    parameters: [
+                        kCIInputCenterKey: CIVector(x: extent.midX, y: extent.midY),
+                        kCIInputRadiusKey: max(extent.width, extent.height) * (0.15 + secondary * 0.6),
+                        kCIInputAngleKey: amount * .pi * 2
+                    ]
+                )
+            case .bump:
+                result = image.clampedToExtent().applyingFilter(
+                    "CIBumpDistortion",
+                    parameters: [
+                        kCIInputCenterKey: CIVector(x: extent.midX, y: extent.midY),
+                        kCIInputRadiusKey: max(extent.width, extent.height) * (0.12 + secondary * 0.55),
+                        kCIInputScaleKey: amount * 0.9
+                    ]
+                )
+            case .zoomPulse:
+                let frequency = 0.35 + secondary * 3.4
+                let pulse = (sin(localTime * .pi * 2 * frequency) + 1) / 2
+                let scale = 1 + amount * (0.015 + pulse * 0.12)
+                result = centeredTransform(image.clampedToExtent(), extent: extent, transform: CGAffineTransform(scaleX: scale, y: scale))
+            case .shake:
+                let frequency = 3 + secondary * 15
+                let distance = amount * min(extent.width, extent.height) * 0.035
+                let x = sin(localTime * frequency * 2.31) * distance
+                let y = cos(localTime * frequency * 1.73) * distance
+                let rotation = sin(localTime * frequency * 1.11) * amount * 0.015
+                result = centeredTransform(
+                    image.clampedToExtent(),
+                    extent: extent,
+                    transform: CGAffineTransform(rotationAngle: rotation).translatedBy(x: x, y: y)
+                )
+            case .strobe:
+                let frequency = 1 + secondary * 11
+                let wave = max(0, sin(localTime * .pi * 2 * frequency))
+                result = image.applyingFilter(
+                    "CIExposureAdjust",
+                    parameters: [kCIInputEVKey: wave * amount * 2.8]
+                )
+            }
+            return result.cropped(to: extent)
+        }
+    }
+
+    private static func dissolve(from source: CIImage, to target: CIImage, amount: Double) -> CIImage {
+        source.applyingFilter(
+            "CIDissolveTransition",
+            parameters: [kCIInputTargetImageKey: target, kCIInputTimeKey: amount]
+        )
+    }
+
+    private static func centeredTransform(
+        _ image: CIImage,
+        extent: CGRect,
+        transform: CGAffineTransform
+    ) -> CIImage {
+        image.transformed(
+            by: CGAffineTransform(translationX: -extent.midX, y: -extent.midY)
+                .concatenating(transform)
+                .concatenating(CGAffineTransform(translationX: extent.midX, y: extent.midY))
+        )
+    }
+
+    private static func rgbSplit(
+        _ image: CIImage,
+        extent: CGRect,
+        amount: Double,
+        direction: Double
+    ) -> CIImage {
+        let distance = amount * min(extent.width, extent.height) * 0.035
+        let angle = direction * .pi * 2
+        let offset = CGVector(dx: cos(angle) * distance, dy: sin(angle) * distance)
+        let red = image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ]).transformed(by: CGAffineTransform(translationX: offset.dx, y: offset.dy))
+        let cyan = image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0)
+        ]).transformed(by: CGAffineTransform(translationX: -offset.dx, y: -offset.dy))
+        return red.applyingFilter(
+            "CIAdditionCompositing",
+            parameters: [kCIInputBackgroundImageKey: cyan]
+        ).cropped(to: extent)
+    }
+
+    private static func scanlines(
+        _ image: CIImage,
+        extent: CGRect,
+        amount: Double,
+        scale: Double
+    ) -> CIImage {
+        let lines = CIFilter(name: "CIStripesGenerator", parameters: [
+            "inputCenter": CIVector(x: extent.midX, y: extent.midY),
+            "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: amount * 0.55),
+            "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: 0),
+            "inputWidth": 2 + scale * 10,
+            "inputSharpness": 0.85
+        ])?.outputImage?
+            .transformed(by: CGAffineTransform(rotationAngle: .pi / 2))
+            .cropped(to: extent)
+        return lines?.composited(over: image) ?? image
+    }
+}
+
 private struct FilterRecipe {
     var brightness = 0.0
     var exposure = 0.0

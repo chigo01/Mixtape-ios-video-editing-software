@@ -29,6 +29,9 @@ final class EditorViewModel {
     /// Final output gain applied on top of every track's own volume/keyframes.
     var masterVolume: Float = 1.0
     var overlayClips: [EditorOverlayClip]
+    var adjustmentLayers: [EditorAdjustmentLayer]
+    var selectedAdjustmentLayerID: UUID?
+    var selectedVisualEffectID: UUID?
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
     var exportOutPoint: TimeInterval?
@@ -248,6 +251,7 @@ final class EditorViewModel {
             resolvedOverlays[index].zIndex = normalizedZIndex[resolvedOverlays[index].laneIndex] ?? 0
         }
         self.overlayClips = resolvedOverlays
+        self.adjustmentLayers = project.adjustmentLayers
         self.selectedOverlayClipID = project.selectedOverlayClipID
         self.canvasSettings = project.canvasSettings
         self.exportInPoint = project.exportInPoint
@@ -680,15 +684,19 @@ final class EditorViewModel {
     }
 
     var selectedColorAdjustment: EditorColorAdjustment? {
-        selectedOverlayClip?.colorAdjustment ?? selectedClip?.colorAdjustment
+        if let id = selectedAdjustmentLayerID {
+            return adjustmentLayers.first(where: { $0.id == id })?.colorAdjustment
+        }
+        return selectedOverlayClip?.colorAdjustment ?? selectedClip?.colorAdjustment
     }
 
     var selectedColorAsset: PHAsset? {
-        selectedOverlayClip?.asset ?? selectedClip?.asset
+        guard selectedAdjustmentLayerID == nil else { return nil }
+        return selectedOverlayClip?.asset ?? selectedClip?.asset
     }
 
     var selectedColorTargetID: UUID? {
-        selectedOverlayClipID ?? selectedClipID
+        selectedAdjustmentLayerID ?? selectedOverlayClipID ?? selectedClipID
     }
 
     /// `MM:SS:CC` (hundredths) — HUD uses global timeline.
@@ -754,6 +762,7 @@ final class EditorViewModel {
         cancelMotionTracking()
         selectedMotionTrackID = nil
         selectedClipID = id
+        selectedAdjustmentLayerID = nil
         selectedTextOverlayID = nil
         selectedAudioClipID = nil
         selectedOverlayClipID = nil
@@ -782,6 +791,7 @@ final class EditorViewModel {
         cancelMotionTracking()
         selectedMotionTrackID = nil
         selectedAudioClipID = id
+        selectedAdjustmentLayerID = nil
         selectedClipID = nil
         selectedTextOverlayID = nil
         selectedOverlayClipID = nil
@@ -852,6 +862,7 @@ final class EditorViewModel {
         selectedMotionTrackID = nil
         finalizeOverlayTransform()
         selectedOverlayClipID = id
+        selectedAdjustmentLayerID = nil
         selectedClipID = nil
         selectedTextOverlayID = nil
         selectedAudioClipID = nil
@@ -966,7 +977,10 @@ final class EditorViewModel {
         case .volume:
             performToolAction(.volume)
         case .filter:
+            selectedAdjustmentLayerID = nil
             performToolAction(.filter)
+        case .effects:
+            performToolAction(.effects)
         case .compositing:
             performToolAction(.compositing)
         case .text:
@@ -1195,6 +1209,7 @@ final class EditorViewModel {
             reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset,
             colorAdjustment: source.colorAdjustment,
+            effects: source.effects.map { $0.held(at: localTime) },
             compositing: source.compositing,
             keyframes: heldKeyframes,
             motionTracks: [],
@@ -1285,6 +1300,7 @@ final class EditorViewModel {
             reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset,
             colorAdjustment: source.colorAdjustment,
+            effects: source.effects.map { $0.held(at: localTime) },
             compositing: source.compositing,
             keyframes: heldKeyframes,
             motionTracks: [],
@@ -1559,6 +1575,15 @@ final class EditorViewModel {
     }
 
     private var selectedColorMaskProgress: Double? {
+        if let id = selectedAdjustmentLayerID,
+           let layer = adjustmentLayers.first(where: { $0.id == id }) {
+            guard timelinePosition >= layer.startTime,
+                  timelinePosition <= layer.endTime else { return nil }
+            return min(max(
+                (timelinePosition - layer.startTime) / max(layer.duration, 0.001),
+                0
+            ), 1)
+        }
         if let overlay = selectedOverlayClip {
             guard timelinePosition >= overlay.timelineStart,
                   timelinePosition <= overlay.timelineEnd else { return nil }
@@ -1649,9 +1674,11 @@ final class EditorViewModel {
     }
 
     var isColorMaskTracking: Bool { colorMaskTrackingDirection != nil }
+    var canTrackSelectedColorMask: Bool { selectedAdjustmentLayerID == nil }
 
     func trackSelectedColorMask(_ direction: EditorColorMaskTrackingDirection) {
-        guard colorMaskTrackingTask == nil,
+        guard canTrackSelectedColorMask,
+              colorMaskTrackingTask == nil,
               let mask = selectedColorMask,
               let item = player?.currentItem else { return }
 
@@ -1777,7 +1804,8 @@ final class EditorViewModel {
     }
 
     func applySelectedColorToAllClips() {
-        guard let adjustment = selectedColorAdjustment else { return }
+        guard selectedAdjustmentLayerID == nil,
+              let adjustment = selectedColorAdjustment else { return }
         beginColorAdjustmentEditIfNeeded()
         for index in clips.indices {
             clips[index].colorAdjustment = adjustment
@@ -1799,7 +1827,10 @@ final class EditorViewModel {
 
     private func updateSelectedClipColor(_ update: (inout EditorColorAdjustment) -> Void) {
         beginColorAdjustmentEditIfNeeded()
-        if let id = selectedOverlayClipID,
+        if let id = selectedAdjustmentLayerID,
+           let index = adjustmentLayers.firstIndex(where: { $0.id == id }) {
+            update(&adjustmentLayers[index].colorAdjustment)
+        } else if let id = selectedOverlayClipID,
            let index = overlayClips.firstIndex(where: { $0.id == id }) {
             update(&overlayClips[index].colorAdjustment)
         } else if let id = selectedClipID,
@@ -1837,6 +1868,227 @@ final class EditorViewModel {
             guard !Task.isCancelled, let self else { return }
             await self.alignPlaybackToTimeline()
         }
+    }
+
+    // MARK: Effects stack and adjustment layers
+
+    var selectedEffectStack: [EditorVisualEffect] {
+        if let id = selectedAdjustmentLayerID {
+            return adjustmentLayers.first(where: { $0.id == id })?.effects ?? []
+        }
+        return selectedOverlayClip?.effects ?? selectedClip?.effects ?? []
+    }
+
+    var selectedVisualEffect: EditorVisualEffect? {
+        guard let selectedVisualEffectID else { return nil }
+        return selectedEffectStack.first { $0.id == selectedVisualEffectID }
+    }
+
+    var selectedEffectTargetStartTime: TimeInterval {
+        if let id = selectedAdjustmentLayerID,
+           let layer = adjustmentLayers.first(where: { $0.id == id }) {
+            return layer.startTime
+        }
+        if let overlay = selectedOverlayClip { return overlay.timelineStart }
+        if let id = selectedClipID,
+           let index = clips.firstIndex(where: { $0.id == id }) {
+            return timelineOffsetForClipIndex(index)
+        }
+        return 0
+    }
+
+    var selectedEffectTargetDuration: TimeInterval {
+        if let id = selectedAdjustmentLayerID,
+           let layer = adjustmentLayers.first(where: { $0.id == id }) {
+            return layer.duration
+        }
+        return selectedOverlayClip?.duration ?? selectedClip?.duration ?? 0
+    }
+
+    var selectedEffectLocalTime: TimeInterval {
+        min(
+            max(0, timelinePosition - selectedEffectTargetStartTime),
+            selectedEffectTargetDuration
+        )
+    }
+
+    func selectAdjustmentLayer(_ id: UUID?) {
+        selectedAdjustmentLayerID = id
+        selectedVisualEffectID = selectedEffectStack.first?.id
+        if let id, let layer = adjustmentLayers.first(where: { $0.id == id }) {
+            timelinePosition = min(max(layer.startTime, 0), totalDuration)
+            Task { await alignPlaybackToTimeline() }
+        }
+    }
+
+    func addAdjustmentLayer() {
+        registerUndoIfNeeded()
+        let availableEnd = max(totalDuration, videoDuration)
+        let start = exportRange?.lowerBound ?? 0
+        let end = exportRange?.upperBound ?? availableEnd
+        let layer = EditorAdjustmentLayer(
+            title: "Adjustment \(adjustmentLayers.count + 1)",
+            startTime: start,
+            endTime: max(start + 0.1, end),
+            zIndex: (adjustmentLayers.map(\.zIndex).max() ?? -1) + 1
+        )
+        adjustmentLayers.append(layer)
+        selectedAdjustmentLayerID = layer.id
+        selectedVisualEffectID = nil
+        finishEffectsMutation()
+    }
+
+    func deleteSelectedAdjustmentLayer() {
+        guard let id = selectedAdjustmentLayerID else { return }
+        registerUndoIfNeeded()
+        adjustmentLayers.removeAll { $0.id == id }
+        selectedAdjustmentLayerID = nil
+        selectedVisualEffectID = nil
+        finishEffectsMutation()
+    }
+
+    func updateSelectedAdjustmentRange(start: TimeInterval? = nil, end: TimeInterval? = nil) {
+        guard let id = selectedAdjustmentLayerID,
+              let index = adjustmentLayers.firstIndex(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        let ceiling = max(videoDuration, totalDuration)
+        var layer = adjustmentLayers[index]
+        if let start {
+            layer.startTime = min(max(0, start), layer.endTime - 0.1)
+        }
+        if let end {
+            layer.endTime = min(
+                max(layer.startTime + 0.1, end),
+                max(ceiling, layer.startTime + 0.1)
+            )
+        }
+        adjustmentLayers[index] = layer
+        finishEffectsMutation()
+    }
+
+    func toggleSelectedAdjustmentLayer() {
+        guard let id = selectedAdjustmentLayerID,
+              let index = adjustmentLayers.firstIndex(where: { $0.id == id }) else { return }
+        registerUndoIfNeeded()
+        adjustmentLayers[index].isEnabled.toggle()
+        finishEffectsMutation()
+    }
+
+    func addVisualEffect(_ kind: EditorVisualEffectKind) {
+        let effect = EditorVisualEffect(kind: kind)
+        mutateSelectedEffectStack { stack in
+            stack.append(effect)
+        }
+        selectedVisualEffectID = effect.id
+    }
+
+    func applyEffectPreset(_ preset: EditorEffectPreset) {
+        let effects = preset.effects.map {
+            var copy = $0
+            copy.id = UUID()
+            return copy
+        }
+        mutateSelectedEffectStack { stack in
+            stack = effects
+        }
+        selectedVisualEffectID = effects.first?.id
+    }
+
+    func toggleVisualEffect(_ id: UUID) {
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+            stack[index].isEnabled.toggle()
+        }
+    }
+
+    func setVisualEffectAmount(_ id: UUID, amount: Double) {
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+            stack[index].amount = min(max(amount, 0), 1)
+        }
+    }
+
+    func setVisualEffectSecondaryAmount(_ id: UUID, amount: Double) {
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+            stack[index].secondaryAmount = min(max(amount, 0), 1)
+        }
+    }
+
+    func keyframeVisualEffectAmount(_ id: UUID) {
+        let localTime = selectedEffectLocalTime
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+            var track = stack[index].amountKeyframes
+            _ = track.upsert(
+                at: localTime,
+                value: stack[index].amount,
+                curve: .init(preset: .easeInOut)
+            )
+            stack[index].amountKeyframes = track
+        }
+    }
+
+    func seekToVisualEffectKeyframe(localTime: TimeInterval) {
+        seekTimeline(
+            to: selectedEffectTargetStartTime
+                + min(max(0, localTime), selectedEffectTargetDuration)
+        )
+    }
+
+    func deleteVisualEffectAmountKeyframe(effectID: UUID, keyframeID: UUID) {
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == effectID }) else { return }
+            var track = stack[index].amountKeyframes
+            track.remove(id: keyframeID)
+            stack[index].amountKeyframes = track
+        }
+    }
+
+    func moveVisualEffect(_ id: UUID, by offset: Int) {
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+            let destination = min(max(0, index + offset), stack.count - 1)
+            guard destination != index else { return }
+            stack.swapAt(index, destination)
+        }
+    }
+
+    func deleteVisualEffect(_ id: UUID) {
+        mutateSelectedEffectStack { stack in
+            stack.removeAll { $0.id == id }
+        }
+        selectedVisualEffectID = selectedEffectStack.first?.id
+    }
+
+    func editSelectedAdjustmentColor() {
+        guard selectedAdjustmentLayerID != nil else { return }
+        selectedTool = .filter
+        colorUndoSnapshot = currentSnapshot()
+        pausePlaybackForEdit()
+    }
+
+    private func mutateSelectedEffectStack(_ mutation: (inout [EditorVisualEffect]) -> Void) {
+        registerUndoIfNeeded()
+        if let id = selectedAdjustmentLayerID,
+           let index = adjustmentLayers.firstIndex(where: { $0.id == id }) {
+            mutation(&adjustmentLayers[index].effects)
+        } else if let id = selectedOverlayClipID,
+                  let index = overlayClips.firstIndex(where: { $0.id == id }) {
+            mutation(&overlayClips[index].effects)
+        } else if let id = selectedClipID,
+                  let index = clips.firstIndex(where: { $0.id == id }) {
+            mutation(&clips[index].effects)
+        } else {
+            return
+        }
+        finishEffectsMutation()
+    }
+
+    private func finishEffectsMutation() {
+        invalidateComposition()
+        scheduleSave()
+        scheduleColorPreviewRefresh()
     }
 
     // MARK: Crop and reframe
@@ -2080,6 +2332,7 @@ final class EditorViewModel {
             reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset,
             colorAdjustment: source.colorAdjustment,
+            effects: source.effects,
             compositing: source.compositing,
             keyframes: source.keyframes,
             motionTracks: source.motionTracks.map { track in
@@ -2142,6 +2395,7 @@ final class EditorViewModel {
             reframeXOffset: old.reframeXOffset,
             reframeYOffset: old.reframeYOffset,
             colorAdjustment: old.colorAdjustment,
+            effects: old.effects,
             compositing: old.compositing,
             keyframes: old.keyframes,
             attachedClipID: old.attachedClipID,
@@ -4041,6 +4295,7 @@ final class EditorViewModel {
                 finalizeMotionTrackingUndo()
             }
             selectedTextOverlayID = id
+            selectedAdjustmentLayerID = nil
             selectedClipID = nil
             selectedAudioClipID = nil
             selectedOverlayClipID = nil
@@ -4773,6 +5028,7 @@ final class EditorViewModel {
             isFlippedVertically: source.isFlippedVertically,
             reframeScale: source.reframeScale, reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset, colorAdjustment: source.colorAdjustment,
+            effects: source.effects,
             compositing: source.compositing, keyframes: source.keyframes,
             motionTracks: source.motionTracks.map { track in var copy = track; copy.id = UUID(); return copy },
             stabilization: source.stabilization, transitionKind: source.transitionKind,
@@ -4822,6 +5078,7 @@ final class EditorViewModel {
             isFlippedVertically: source.isFlippedVertically,
             reframeScale: source.reframeScale, reframeXOffset: source.reframeXOffset,
             reframeYOffset: source.reframeYOffset, colorAdjustment: source.colorAdjustment,
+            effects: source.effects,
             compositing: source.compositing, keyframes: source.keyframes,
             motionTracks: source.motionTracks.map { track in var copy = track; copy.id = UUID(); return copy },
             stabilization: source.stabilization, attachedClipID: source.attachedClipID,
@@ -5106,6 +5363,15 @@ final class EditorViewModel {
             }
         }
         overlayClips = insertedOverlays
+
+        for index in adjustmentLayers.indices {
+            if adjustmentLayers[index].startTime >= boundary - 0.000_001 {
+                adjustmentLayers[index].startTime += duration
+                adjustmentLayers[index].endTime += duration
+            } else if adjustmentLayers[index].endTime > boundary {
+                adjustmentLayers[index].endTime += duration
+            }
+        }
     }
 
     private func rippleDeleteTimedItems(from start: TimeInterval, to end: TimeInterval) {
@@ -5239,6 +5505,25 @@ final class EditorViewModel {
             }
         }
         overlayClips = remappedOverlays
+
+        adjustmentLayers = adjustmentLayers.compactMap { original in
+            var layer = original
+            if layer.endTime <= lower { return layer }
+            if layer.startTime >= upper {
+                layer.startTime -= removedDuration
+                layer.endTime -= removedDuration
+            } else if layer.startTime < lower, layer.endTime > upper {
+                layer.endTime -= removedDuration
+            } else if layer.startTime < lower {
+                layer.endTime = lower
+            } else if layer.endTime > upper {
+                layer.startTime = lower
+                layer.endTime -= removedDuration
+            } else {
+                return nil
+            }
+            return layer.duration >= 0.1 ? layer : nil
+        }
         pruneSequenceStructure()
     }
 
@@ -5407,7 +5692,8 @@ final class EditorViewModel {
             isFlippedHorizontally: source.isFlippedHorizontally,
             isFlippedVertically: source.isFlippedVertically, reframeScale: source.reframeScale,
             reframeXOffset: source.reframeXOffset, reframeYOffset: source.reframeYOffset,
-            colorAdjustment: source.colorAdjustment, compositing: source.compositing,
+            colorAdjustment: source.colorAdjustment, effects: source.effects,
+            compositing: source.compositing,
             keyframes: source.keyframes,
             motionTracks: source.motionTracks.map { track in
                 var copy = track
@@ -5445,7 +5731,8 @@ final class EditorViewModel {
             isFlippedHorizontally: old.isFlippedHorizontally,
             isFlippedVertically: old.isFlippedVertically, reframeScale: old.reframeScale,
             reframeXOffset: old.reframeXOffset, reframeYOffset: old.reframeYOffset,
-            colorAdjustment: old.colorAdjustment, compositing: old.compositing,
+            colorAdjustment: old.colorAdjustment, effects: old.effects,
+            compositing: old.compositing,
             keyframes: old.keyframes,
             transitionKind: old.transitionKind,
             transitionDuration: min(old.transitionDuration, old.duration)
@@ -6010,6 +6297,7 @@ final class EditorViewModel {
                 let textOverlaysSnapshot = textOverlays
                 let audioClipsSnapshot = audioClips
                 let overlayClipsSnapshot = overlayClips
+                let adjustmentLayersSnapshot = adjustmentLayers
                 let openingKindSnapshot = openingTransitionKind
                 let openingDurationSnapshot = openingTransitionDuration
                 let closingKindSnapshot = closingTransitionKind
@@ -6024,6 +6312,7 @@ final class EditorViewModel {
                     textOverlays: textOverlaysSnapshot,
                     audioClips: audioClipsSnapshot,
                     overlayClips: overlayClipsSnapshot,
+                    adjustmentLayers: adjustmentLayersSnapshot,
                     openingTransitionKind: openingKindSnapshot,
                     openingTransitionDuration: openingDurationSnapshot,
                     closingTransitionKind: closingKindSnapshot,
@@ -6175,6 +6464,7 @@ final class EditorViewModel {
             audioTrackSettings: audioTrackSettings,
             masterVolume: masterVolume,
             overlayClips: overlayClips,
+            adjustmentLayers: adjustmentLayers,
             canvasSettings: canvasSettings,
             exportInPoint: exportInPoint,
             exportOutPoint: exportOutPoint,
@@ -6202,6 +6492,7 @@ final class EditorViewModel {
         audioTrackSettings = snapshot.audioTrackSettings
         masterVolume = snapshot.masterVolume
         overlayClips = snapshot.overlayClips
+        adjustmentLayers = snapshot.adjustmentLayers
         canvasSettings = snapshot.canvasSettings
         exportInPoint = snapshot.exportInPoint
         exportOutPoint = snapshot.exportOutPoint
@@ -6243,6 +6534,7 @@ final class EditorViewModel {
             textOverlays: textOverlays.map { SavedTextOverlay(from: $0) },
             audioClips: audioClips.map { SavedAudioClip(from: $0) },
             overlayClips: overlayClips.map { SavedOverlayClip(from: $0) },
+            adjustmentLayers: adjustmentLayers,
             openingTransitionKind: openingTransitionKind,
             openingTransitionDuration: openingTransitionDuration,
             closingTransitionKind: closingTransitionKind,
@@ -6324,20 +6616,21 @@ final class EditorViewModel {
 
     private func clipsFingerprint() -> String {
         let clipsHash = clips.map { clip in
-            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.volume)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
+            "\(clip.id.uuidString)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.volume)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.effects)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)|\(clip.asset.localIdentifier)"
         }.joined(separator: ";")
         let audioHash = audioClips.map {
             "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.volume)|\($0.fadeInDuration)|\($0.fadeOutDuration)|\($0.keyframes)|\($0.fileURL.path)|\($0.effect.rawValue)"
         }.joined(separator: ";")
         let overlayHash = overlayClips.map {
-            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.playback)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
+            "\($0.id.uuidString)|\($0.trimStart)|\($0.trimEnd)|\($0.timelineStart)|\($0.laneIndex)|\($0.zIndex)|\($0.speed)|\($0.playback)|\($0.scale)|\($0.xOffset)|\($0.yOffset)|\($0.opacity)|\($0.volume)|\($0.cropAspect.rawValue)|\($0.reframeMode.rawValue)|\($0.rotationQuarterTurns)|\($0.straightenDegrees)|\($0.isFlippedHorizontally)|\($0.isFlippedVertically)|\($0.reframeScale)|\($0.reframeXOffset)|\($0.reframeYOffset)|\($0.colorAdjustment)|\($0.effects)|\($0.compositing)|\($0.keyframes)|\($0.motionTracks)|\($0.stabilization)|\($0.attachedClipID?.uuidString ?? "")|\($0.attachedTrackID?.uuidString ?? "")|\($0.asset.localIdentifier)"
         }.joined(separator: ";")
         let openingHash = "\(openingTransitionKind.rawValue)|\(openingTransitionDuration)"
         let closingHash = "\(closingTransitionKind.rawValue)|\(closingTransitionDuration)"
         let mixHash = audioTrackSettings.keys.sorted()
             .map { "\($0):\(audioTrackSettings[$0]!.gain)|\(audioTrackSettings[$0]!.isMuted)|\(audioTrackSettings[$0]!.isSoloed)" }
             .joined(separator: ";") + "|||\(masterVolume)"
-        return clipsHash + "|||" + audioHash + "|||" + overlayHash + "|||" + openingHash + "|||" + closingHash + "|||\(canvasSettings)" + "|||" + mixHash
+        let adjustmentHash = String(describing: adjustmentLayers)
+        return clipsHash + "|||" + audioHash + "|||" + overlayHash + "|||" + adjustmentHash + "|||" + openingHash + "|||" + closingHash + "|||\(canvasSettings)" + "|||" + mixHash
     }
 
     private func invalidateComposition() {
@@ -6367,6 +6660,7 @@ final class EditorViewModel {
         let clipsSnapshot = clips
         let audioClipsSnapshot = audioClips
         let overlayClipsSnapshot = overlayClips
+        let adjustmentLayersSnapshot = adjustmentLayers
         let openingKindSnapshot = openingTransitionKind
         let openingDurationSnapshot = openingTransitionDuration
         let closingKindSnapshot = closingTransitionKind
@@ -6378,6 +6672,7 @@ final class EditorViewModel {
         let item: AVPlayerItem?
         if audioClipsSnapshot.isEmpty,
            overlayClipsSnapshot.isEmpty,
+           adjustmentLayersSnapshot.isEmpty,
            openingKindSnapshot == .none,
            closingKindSnapshot == .none,
            canvasSnapshot == .default,
@@ -6390,6 +6685,7 @@ final class EditorViewModel {
                     from: clipsSnapshot,
                     audioClips: audioClipsSnapshot,
                     overlayClips: overlayClipsSnapshot,
+                    adjustmentLayers: adjustmentLayersSnapshot,
                     openingTransitionKind: openingKindSnapshot,
                     openingTransitionDuration: openingDurationSnapshot,
                     closingTransitionKind: closingKindSnapshot,

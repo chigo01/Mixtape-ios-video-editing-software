@@ -1221,7 +1221,7 @@ attribution anywhere at export time (currently only shown at insert time).
 | 26 | **Captions and transcript editing — core workflow shipped** | Timeline-mix speech transcription, editable timed words/segments, per-word highlighting, caption styles and safe-zone placement, transcript search/tap-to-seek, Smart Review for fillers/low-confidence words/pauses, and SRT import/export ship with persistence, undo, and preview/export parity. An explicit transcript approval UI remains to connect range deletion to the shipped precision-edit commands. |
 | 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
 | 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
-| 29 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
+| 29 | **Effects architecture — core complete** | Ordered per-clip, overlay, and time-ranged adjustment-layer effects; bypass, parameters, presets, amount keyframes, cached render plans, undo/persistence, and shared preview/export rendering. |
 
 #### Priority 25 — Text animation (complete)
 
@@ -1375,7 +1375,7 @@ The roadmap priorities above remain the detailed source of truth. When choosing 
 | **P0** | **Timeline precision: ripple/roll/slip/slide + J/L cuts — core shipped** | A dedicated precision editor now provides frame/0.1s/0.5s ripple, roll, slip, and slide adjustments plus visible linked A/V, reversible unlink/relink, and independent J/L source-audio handles. Operations are single-step undoable, persistent, and shared by preview/export composition. |
 | **P0** | **Multi-select, grouping, compound clips, and sequence structure — core shipped** | Cross-track tap and In/Out range selection, batch move/duplicate/delete, persisted groups, recursively nested compounds, named markers, focus navigation, and one-step undo now share the authoritative flat render timeline, preventing preview/export divergence. |
 | **P0** | **Reverse and freeze frame — shipped** | Primary clips and video overlays support non-destructive cached reverse generation, cancellable progress, appropriate embedded-audio policy, playhead-accurate ripple freeze insertion, held animation state, relinking/regeneration, persistence, undo, and shared preview/export rendering. |
-| **P0** | **Effects stack + adjustment layers** | A general stackable effects system is more valuable than a large set of hard-coded effects. Effects need ordering, bypass, parameters, presets, keyframe interoperability, caching, and identical preview/export behavior. |
+| **P0** | **Effects stack + adjustment layers — core shipped** | Primary clips and media overlays own ordered effect stacks. A time-ranged adjustment layer applies one shared color grade and effect stack to every clip and overlay underneath it, with bypass, parameters, amount keyframes, cached render plans, undo/persistence, and identical preview/export composition. The searchable library ships 36 curated recipes across eight categories, backed by 30 GPU-accelerated primitives including temporal motion, RGB/glitch, screen, pixel, blur, light, and distortion treatments. New layers cover the In/Out range or, when none is marked, the full project. Each effect has a large keyframe timeline with project timecode/frame labels and tap-to-seek editing. |
 | **P1** | **Text animation — shipped** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability now make the text system creator-ready. |
 | **P1** | **Stickers and reusable graphics** | Adds fast creator-oriented composition without weakening the professional timeline model. Assets should behave like ordinary timeline elements. |
 | **P1** | **Proxy and render cache** | Critical for long projects, high-resolution media, thermal limits, and older supported devices. Full-resolution originals remain authoritative for export. |
@@ -1491,7 +1491,7 @@ Each effect:
   - cached preview/render instructions
 ```
 
-Adjustment layers should use the same stack model and affect eligible content below them for their timeline range. Avoid implementing adjustment-layer behavior as a separate preview-only system.
+Adjustment layers use the same stack model and apply their shared color grade and effects to all eligible content below them for their timeline range. They are timeline processors, not duplicates of source clips and not a separate preview-only system.
 
 ### 14.6 What not to prioritize yet
 

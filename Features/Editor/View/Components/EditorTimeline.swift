@@ -66,6 +66,7 @@ struct EditorTimeline: View {
     @State private var reorderState = ClipReorderState()
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 36 }
+    private var adjustmentLaneHeight: CGFloat { vm.adjustmentLayers.isEmpty ? 0 : 32 }
     private let sequenceBandHeight: CGFloat = 26
     private let sequenceBandSpacing: CGFloat = 4
     private var sequenceLanePlacements: [SequenceLanePlacement] {
@@ -166,6 +167,7 @@ struct EditorTimeline: View {
     private var playheadStackHeight: CGFloat {
         4 + rulerLabelHeight + scrubRailHeight
             + (sequenceLaneHeight > 0 ? 8 + sequenceLaneHeight : 0)
+            + (adjustmentLaneHeight > 0 ? 8 + adjustmentLaneHeight : 0)
             + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
             + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
             + (isOverlayTracksExpanded ? 0 : 8 + audioViewportHeight)
@@ -197,6 +199,11 @@ struct EditorTimeline: View {
                         if sequenceLaneHeight > 0 {
                             sequenceRow(totalWidth: totalWidth, layout: layout)
                                 .frame(height: sequenceLaneHeight, alignment: .leading)
+                        }
+
+                        if adjustmentLaneHeight > 0 {
+                            adjustmentLayerRow(totalWidth: totalWidth, layout: layout)
+                                .frame(height: adjustmentLaneHeight, alignment: .leading)
                         }
 
                         if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
@@ -521,6 +528,42 @@ struct EditorTimeline: View {
     }
 
     // MARK: Text overlays
+
+    private func adjustmentLayerRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(vm.adjustmentLayers.sorted(by: { $0.zIndex < $1.zIndex })) { layer in
+                let startX = layout.contentX(forTime: layer.startTime)
+                let endX = layout.contentX(forTime: layer.endTime)
+                Button {
+                    vm.selectAdjustmentLayer(layer.id)
+                    vm.selectTool(.effects)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: layer.isEnabled ? "wand.and.stars" : "eye.slash")
+                        Text(layer.title).lineLimit(1)
+                    }
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .frame(width: max(48, endX - startX), height: adjustmentLaneHeight, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.orange.opacity(layer.isEnabled ? 0.55 : 0.22))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6).stroke(
+                                    vm.selectedAdjustmentLayerID == layer.id
+                                        ? Color.appColors.primaryColor : Color.white.opacity(0.2),
+                                    lineWidth: vm.selectedAdjustmentLayerID == layer.id ? 2 : 1
+                                )
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+                .offset(x: startX)
+            }
+        }
+        .frame(width: totalWidth, height: adjustmentLaneHeight, alignment: .leading)
+    }
 
     private func textOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         ZStack(alignment: .topLeading) {

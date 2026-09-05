@@ -31,6 +31,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var effects: [EditorVisualEffect]
     var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
     var motionTracks: [EditorMotionTrack]
@@ -61,6 +62,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
         colorAdjustment = clip.colorAdjustment
+        effects = clip.effects
         compositing = clip.compositing
         keyframes = clip.keyframes
         motionTracks = clip.motionTracks
@@ -96,6 +98,7 @@ struct SavedEditorClip: Codable, Identifiable, Hashable {
             EditorColorAdjustment.self,
             forKey: .colorAdjustment
         ) ?? .neutral
+        effects = try c.decodeIfPresent([EditorVisualEffect].self, forKey: .effects) ?? []
         compositing = try c.decodeIfPresent(
             EditorOverlayCompositing.self,
             forKey: .compositing
@@ -329,6 +332,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
     var reframeXOffset: CGFloat
     var reframeYOffset: CGFloat
     var colorAdjustment: EditorColorAdjustment
+    var effects: [EditorVisualEffect]
     var compositing: EditorOverlayCompositing
     var keyframes: EditorKeyframeTracks
     var motionTracks: [EditorMotionTrack]
@@ -364,6 +368,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         reframeXOffset = clip.reframeXOffset
         reframeYOffset = clip.reframeYOffset
         colorAdjustment = clip.colorAdjustment
+        effects = clip.effects
         compositing = clip.compositing
         keyframes = clip.keyframes
         motionTracks = clip.motionTracks
@@ -401,6 +406,7 @@ struct SavedOverlayClip: Codable, Identifiable, Hashable {
         reframeXOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeXOffset) ?? 0
         reframeYOffset = try c.decodeIfPresent(CGFloat.self, forKey: .reframeYOffset) ?? 0
         colorAdjustment = try c.decodeIfPresent(EditorColorAdjustment.self, forKey: .colorAdjustment) ?? .neutral
+        effects = try c.decodeIfPresent([EditorVisualEffect].self, forKey: .effects) ?? []
         compositing = try c.decodeIfPresent(
             EditorOverlayCompositing.self,
             forKey: .compositing
@@ -453,6 +459,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var textOverlays: [SavedTextOverlay]
     var audioClips: [SavedAudioClip]
     var overlayClips: [SavedOverlayClip]
+    var adjustmentLayers: [EditorAdjustmentLayer]
     var openingTransitionKind: EditorTransitionKind
     var openingTransitionDuration: TimeInterval
     var closingTransitionKind: EditorTransitionKind
@@ -475,7 +482,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, createdAt, modifiedAt, clips, textOverlays
-        case audioClips, audioTrack, overlayClips, timelinePosition
+        case audioClips, audioTrack, overlayClips, adjustmentLayers, timelinePosition
         case selectedClipID, selectedTextOverlayID, selectedAudioClipID, selectedOverlayClipID
         case sequences, markers, selectedTimelineItems, selectedSequenceID, activeSequenceID
         case openingTransitionKind, openingTransitionDuration
@@ -493,6 +500,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         textOverlays: [SavedTextOverlay],
         audioClips: [SavedAudioClip],
         overlayClips: [SavedOverlayClip] = [],
+        adjustmentLayers: [EditorAdjustmentLayer] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
@@ -521,6 +529,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.textOverlays = textOverlays
         self.audioClips = audioClips
         self.overlayClips = overlayClips
+        self.adjustmentLayers = adjustmentLayers
         self.openingTransitionKind = openingTransitionKind
         self.openingTransitionDuration = openingTransitionKind == .none
             ? 0
@@ -600,6 +609,10 @@ struct EditorProject: Codable, Identifiable, Hashable {
         selectedSequenceID = try c.decodeIfPresent(UUID.self, forKey: .selectedSequenceID)
         activeSequenceID = try c.decodeIfPresent(UUID.self, forKey: .activeSequenceID)
         overlayClips = try c.decodeIfPresent([SavedOverlayClip].self, forKey: .overlayClips) ?? []
+        adjustmentLayers = try c.decodeIfPresent(
+            [EditorAdjustmentLayer].self,
+            forKey: .adjustmentLayers
+        ) ?? []
         canvasSettings = try c.decodeIfPresent(EditorCanvasSettings.self, forKey: .canvasSettings) ?? .default
         exportInPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportInPoint)
         exportOutPoint = try c.decodeIfPresent(TimeInterval.self, forKey: .exportOutPoint)
@@ -629,6 +642,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(textOverlays, forKey: .textOverlays)
         try c.encode(audioClips, forKey: .audioClips)
         try c.encode(overlayClips, forKey: .overlayClips)
+        try c.encode(adjustmentLayers, forKey: .adjustmentLayers)
         try c.encode(openingTransitionKind, forKey: .openingTransitionKind)
         try c.encode(openingTransitionDuration, forKey: .openingTransitionDuration)
         try c.encode(closingTransitionKind, forKey: .closingTransitionKind)
@@ -672,6 +686,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
             textOverlays: [],
             audioClips: [],
             overlayClips: [],
+            adjustmentLayers: [],
             openingTransitionKind: .none,
             openingTransitionDuration: 0,
             closingTransitionKind: .none,
@@ -728,6 +743,7 @@ enum EditorProjectResolver {
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
                 colorAdjustment: item.colorAdjustment,
+                effects: item.effects,
                 compositing: item.compositing,
                 keyframes: item.keyframes,
                 motionTracks: item.motionTracks,
@@ -778,6 +794,7 @@ enum EditorProjectResolver {
                 reframeXOffset: item.reframeXOffset,
                 reframeYOffset: item.reframeYOffset,
                 colorAdjustment: item.colorAdjustment,
+                effects: item.effects,
                 compositing: item.compositing,
                 keyframes: item.keyframes,
                 motionTracks: item.motionTracks,

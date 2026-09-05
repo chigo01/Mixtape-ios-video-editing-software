@@ -1227,7 +1227,15 @@ attribution anywhere at export time (currently only shown at insert time).
 | 26 | **Captions and transcript editing — core workflow shipped** | Timeline-mix speech transcription, editable timed words/segments, per-word highlighting, caption styles and safe-zone placement, transcript search/tap-to-seek, Smart Review for fillers/low-confidence words/pauses, and SRT import/export ship with persistence, undo, and preview/export parity. An explicit transcript approval UI remains to connect range deletion to the shipped precision-edit commands. |
 | 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
 | 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
-| 29 | **Effects architecture** | Stackable per-clip and adjustment-layer effects with ordering, enable/bypass, parameters, presets, and render caching. |
+| 29 | **Effects architecture — core complete** | Ordered per-clip, overlay, and time-ranged adjustment-layer effects; bypass, parameters, presets, amount keyframes, cached render plans, undo/persistence, and shared preview/export rendering. |
+
+#### Priority 29 — Effects stack and adjustment layers (core complete)
+
+- **Targets:** primary clips and media overlays own non-destructive effect stacks. Program-level adjustment layers occupy visible timeline ranges and apply one shared color grade plus effect stack to every clip and overlay underneath them without changing those source items.
+- **Workflow:** a new adjustment layer covers the current In/Out range, or the full project when no range is marked. The Effects sheet provides a searchable, categorized library of 36 curated recipes backed by 30 GPU-accelerated render primitives. Categories cover Featured, Motion, Light, Glitch, Pixel, Retro, Stylize, and Blur; recipes can combine temporal motion, distortion, color, texture, and screen treatments. Users can still add individual primitives, reorder operations, bypass effects or the entire layer, edit parameters, and remove stack items. Each effect also opens a large keyframe timeline with a time ruler, project timecode/frame labels, amount and curve summaries, tap-to-seek diamonds, add-at-playhead, and deletion.
+- **Animation:** every effect owns an `EditorKeyframeTrack` for Amount, using the same hold/linear/eased cubic sampler as the rest of the editor. The diamond control writes at the current item-local time.
+- **Rendering and caching:** `EditorVisualEffectRenderer` evaluates the ordered stack inside `EditorTransitionCompositor`. Immutable enabled-stack plans are cached, and the compositor's long-lived `CIContext` caches Core Image intermediates. Preview and export pass the same clip, overlay, and adjustment-layer instructions.
+- **Project integrity:** effects and adjustment layers are Codable with safe empty defaults for older projects, included in composition fingerprints and snapshot undo/redo, inherited by split/freeze/duplicate/replace operations, and autosaved.
 
 #### Priority 25 — Text animation (complete)
 

@@ -65,6 +65,7 @@ struct EditorTimelineSnapshot: Equatable {
     var audioTrackSettings: [Int: EditorAudioTrackSettings]
     var masterVolume: Float
     var overlayClips: [EditorOverlayClip]
+    var adjustmentLayers: [EditorAdjustmentLayer]
     var canvasSettings: EditorCanvasSettings
     var exportInPoint: TimeInterval?
     var exportOutPoint: TimeInterval?

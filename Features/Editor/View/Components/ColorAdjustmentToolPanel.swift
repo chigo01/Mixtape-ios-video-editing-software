@@ -618,11 +618,13 @@ struct ColorAdjustmentToolPanel: View {
                 }
             }
             HStack(spacing: 7) {
-                compactMaskButton("Track back", systemImage: "backward.end.fill") {
-                    vm.trackSelectedColorMask(.backward)
-                }
-                compactMaskButton("Track forward", systemImage: "forward.end.fill") {
-                    vm.trackSelectedColorMask(.forward)
+                if vm.canTrackSelectedColorMask {
+                    compactMaskButton("Track back", systemImage: "backward.end.fill") {
+                        vm.trackSelectedColorMask(.backward)
+                    }
+                    compactMaskButton("Track forward", systemImage: "forward.end.fill") {
+                        vm.trackSelectedColorMask(.forward)
+                    }
                 }
                 if vm.isColorMaskTracking {
                     compactMaskButton("Cancel", systemImage: "xmark.circle", roleColor: .red) {
@@ -868,8 +870,10 @@ struct ColorAdjustmentToolPanel: View {
                 systemImage: "doc.on.clipboard",
                 isEnabled: vm.canPasteColorAdjustment
             ) { vm.pasteColorToSelectedClip() }
-            footerButton("Apply all", systemImage: "square.stack.3d.up.fill") {
-                vm.applySelectedColorToAllClips()
+            if vm.selectedAdjustmentLayerID == nil {
+                footerButton("Apply all", systemImage: "square.stack.3d.up.fill") {
+                    vm.applySelectedColorToAllClips()
+                }
             }
         }
     }

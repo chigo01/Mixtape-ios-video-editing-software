@@ -252,7 +252,7 @@ enum EditorCompositionBuilder {
     /// Stable key for matching a warmed composition to a freshly built clip list (IDs differ per init).
     static func timelineFingerprint(for clips: [EditorClip]) -> String {
         clips.map { clip in
-            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
+            "\(clip.asset.localIdentifier)|\(clip.trimStart)|\(clip.trimEnd)|\(clip.speed)|\(String(describing: clip.speedRamp))|\(clip.playback)|\(clip.audioTrimStart ?? -1)|\(clip.audioTrimEnd ?? -1)|\(clip.isAudioLinked)|\(clip.cropAspect.rawValue)|\(clip.reframeMode.rawValue)|\(clip.rotationQuarterTurns)|\(clip.straightenDegrees)|\(clip.isFlippedHorizontally)|\(clip.isFlippedVertically)|\(clip.reframeScale)|\(clip.reframeXOffset)|\(clip.reframeYOffset)|\(clip.colorAdjustment)|\(clip.effects)|\(clip.compositing)|\(clip.keyframes)|\(clip.motionTracks)|\(clip.stabilization)|\(clip.transitionKind.rawValue)|\(clip.transitionDuration)|\(clip.duration)"
         }.joined(separator: ";")
     }
 
@@ -288,6 +288,7 @@ enum EditorCompositionBuilder {
         let timeRange: CMTimeRange
         let transform: CGAffineTransform
         let colorAdjustment: EditorColorAdjustment
+        let effects: [EditorVisualEffect]
         let compositing: EditorOverlayCompositing
         let animation: EditorRenderKeyframeAnimation?
         let stabilization: EditorRenderStabilization?
@@ -303,6 +304,7 @@ enum EditorCompositionBuilder {
         let transform: CGAffineTransform
         let opacity: Float
         let colorAdjustment: EditorColorAdjustment
+        let effects: [EditorVisualEffect]
         let compositing: EditorOverlayCompositing
         let animation: EditorRenderKeyframeAnimation?
         let trackedMotion: EditorRenderTrackedMotion?
@@ -321,6 +323,7 @@ enum EditorCompositionBuilder {
         textOverlays: [EditorTextOverlay] = [],
         audioClips: [EditorAudioClip] = [],
         overlayClips: [EditorOverlayClip] = [],
+        adjustmentLayers: [EditorAdjustmentLayer] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
@@ -666,6 +669,7 @@ enum EditorCompositionBuilder {
                             ),
                             opacity: Float(overlay.opacity),
                             colorAdjustment: overlay.colorAdjustment,
+                            effects: overlay.effects,
                             compositing: overlay.compositing,
                             animation: renderAnimation(for: overlay),
                             trackedMotion: trackedMotion(
@@ -975,6 +979,7 @@ enum EditorCompositionBuilder {
                 backgroundTracks: backgroundTracks,
                 segments: segmentsSnapshot,
                 overlaySegments: overlayVideoSegments,
+                adjustmentLayers: adjustmentLayers,
                 frameRate: frameRate,
                 renderSize: renderSize,
                 canvasSettings: canvasSettings,
@@ -1180,6 +1185,7 @@ enum EditorCompositionBuilder {
         from clips: [EditorClip],
         audioClips: [EditorAudioClip] = [],
         overlayClips: [EditorOverlayClip] = [],
+        adjustmentLayers: [EditorAdjustmentLayer] = [],
         openingTransitionKind: EditorTransitionKind = .none,
         openingTransitionDuration: TimeInterval = 0,
         closingTransitionKind: EditorTransitionKind = .none,
@@ -1192,6 +1198,7 @@ enum EditorCompositionBuilder {
             from: clips,
             audioClips: audioClips,
             overlayClips: overlayClips,
+            adjustmentLayers: adjustmentLayers,
             openingTransitionKind: openingTransitionKind,
             openingTransitionDuration: openingTransitionDuration,
             closingTransitionKind: closingTransitionKind,
@@ -1302,6 +1309,7 @@ enum EditorCompositionBuilder {
                 timeRange: holdRange,
                 transform: last.transform,
                 colorAdjustment: last.colorAdjustment,
+                effects: last.effects,
                 compositing: last.compositing,
                 animation: nil,
                 stabilization: last.stabilization,
@@ -1342,6 +1350,7 @@ enum EditorCompositionBuilder {
             timeRange: timeRange,
             transform: transform,
             colorAdjustment: clips[clipIndex].colorAdjustment,
+            effects: clips[clipIndex].effects,
             compositing: clips[clipIndex].compositing,
             animation: renderAnimation(for: clips[clipIndex]),
             stabilization: clips[clipIndex].stabilization.isActive
@@ -1365,6 +1374,7 @@ enum EditorCompositionBuilder {
         backgroundTracks: BackgroundVideoTracks,
         segments: [VideoSegment],
         overlaySegments: [OverlayVideoSegment],
+        adjustmentLayers: [EditorAdjustmentLayer],
         frameRate: Int32,
         renderSize: CGSize,
         canvasSettings: EditorCanvasSettings,
@@ -1379,6 +1389,7 @@ enum EditorCompositionBuilder {
 
         let needsGPUCompositor = segments.contains {
             !$0.colorAdjustment.isNeutral
+                || $0.effects.contains(where: \.isEnabled)
                 || $0.compositing.requiresGPUCompositor
                 || $0.transitionIn.usesGPUCompositor
                 || $0.transitionOut.usesGPUCompositor
@@ -1386,10 +1397,15 @@ enum EditorCompositionBuilder {
                 || $0.stabilization?.isActive == true
         } || overlaySegments.contains {
             !$0.colorAdjustment.isNeutral
+                || $0.effects.contains(where: \.isEnabled)
                 || $0.compositing.requiresGPUCompositor
                 || $0.animation?.hasVisualAnimation == true
                 || $0.trackedMotion?.isActive == true
-        } || canvasSettings.backgroundKind == .blur
+        } || adjustmentLayers.contains {
+            $0.isEnabled
+                && (!$0.colorAdjustment.isNeutral || $0.effects.contains(where: \.isEnabled))
+        }
+            || canvasSettings.backgroundKind == .blur
         if needsGPUCompositor {
             composition.customVideoCompositorClass = EditorTransitionCompositor.self
             composition.instructions = segments.map { segment in
@@ -1410,15 +1426,36 @@ enum EditorCompositionBuilder {
                             transform: $0.transform,
                             opacity: $0.opacity,
                             colorAdjustment: $0.colorAdjustment,
+                            effects: $0.effects,
                             compositing: $0.compositing,
                             animation: $0.animation,
                             trackedMotion: $0.trackedMotion
                         )
                     },
+                    adjustmentLayers: adjustmentLayers
+                        .filter(\.isEnabled)
+                        .map {
+                            EditorAdjustmentRenderLayer(
+                                timeRange: CMTimeRange(
+                                    start: CMTime(
+                                        seconds: max(0, $0.startTime),
+                                        preferredTimescale: timescale
+                                    ),
+                                    duration: CMTime(
+                                        seconds: max(0, $0.duration),
+                                        preferredTimescale: timescale
+                                    )
+                                ),
+                                colorAdjustment: $0.colorAdjustment,
+                                effects: $0.effects,
+                                zIndex: $0.zIndex
+                            )
+                        },
                     baseTransform: segment.transform,
                     animation: segment.animation,
                     stabilization: segment.stabilization,
                     colorAdjustment: segment.colorAdjustment,
+                    effects: segment.effects,
                     compositing: segment.compositing,
                     incomingKind: segment.transitionIn,
                     outgoingKind: segment.transitionOut,

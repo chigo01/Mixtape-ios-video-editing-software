@@ -348,7 +348,9 @@ struct EditorScreen: View {
             isPresented: Binding(
                 get: {
                     vm.selectedTool == .filter
-                        && (vm.selectedClipID != nil || vm.selectedOverlayClipID != nil)
+                        && (vm.selectedClipID != nil
+                            || vm.selectedOverlayClipID != nil
+                            || vm.selectedAdjustmentLayerID != nil)
                 },
                 set: { newValue in
                     if !newValue && vm.selectedTool == .filter {
@@ -364,6 +366,22 @@ struct EditorScreen: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
                 .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .effects },
+                set: { if !$0 && vm.selectedTool == .effects { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fraction(0.72)
+        ) {
+            VisualEffectsStackPanel(
+                vm: vm,
+                isEmbedded: UIDevice.current.userInterfaceIdiom == .pad
+            )
+            .presentationDetents([.fraction(0.72), .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color.appColors.backgroundColor)
+            .presentationBackgroundInteraction(.enabled)
         }
         .editorSheet(
             isPresented: Binding(
