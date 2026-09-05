@@ -76,6 +76,7 @@ struct EditorPreviewPlayer: View {
 
             // Text overlays rendered on top of video/poster
             textOverlayLayer
+            EditorGraphicOverlayLayerView(vm: vm)
 
             if shouldShowLoading {
                 ProgressView()

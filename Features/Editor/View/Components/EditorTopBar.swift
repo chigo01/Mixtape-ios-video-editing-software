@@ -10,6 +10,7 @@ import SwiftUI
 struct EditorTopBar: View {
     var onBack: () -> Void
     var onExport: () -> Void = {}
+    var onCopilot: () -> Void = {}
 
     var body: some View {
         HStack {
@@ -23,6 +24,16 @@ struct EditorTopBar: View {
             .accessibilityLabel("Back")
 
             Spacer(minLength: 0)
+
+            Button(action: onCopilot) {
+                Label(EditorCopilotService.productName, systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.appColors.primaryColor)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open MixPilot")
 
             Button(action: onExport) {
                 Text("Export")

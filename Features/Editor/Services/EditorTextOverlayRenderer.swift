@@ -94,6 +94,65 @@ struct EditorTextOverlayExportView: View {
     }
 }
 
+struct EditorGraphicOverlayExportView: View {
+    let graphic: EditorGraphicOverlay
+    let renderSize: CGSize
+
+    private var screenWidth: CGFloat { EditorTextOverlayLayout.referenceWidth }
+    private var screenHeight: CGFloat { screenWidth * renderSize.height / renderSize.width }
+    private var renderScale: CGFloat { renderSize.width / screenWidth }
+
+    var body: some View {
+        ZStack {
+            Color.clear
+            content
+                .frame(width: graphic.size, height: graphic.size)
+                .scaleEffect(
+                    x: graphic.scale * (graphic.isFlippedHorizontally ? -1 : 1),
+                    y: graphic.scale * (graphic.isFlippedVertically ? -1 : 1)
+                )
+                .rotationEffect(.degrees(graphic.rotationDegrees))
+                .opacity(graphic.opacity)
+                .blendMode(graphic.blendMode.swiftUIValue)
+                .offset(x: graphic.xOffset, y: graphic.yOffset)
+        }
+        .frame(width: screenWidth, height: screenHeight)
+        .scaleEffect(renderScale)
+        .frame(width: renderSize.width, height: renderSize.height)
+    }
+
+    @ViewBuilder private var content: some View {
+        switch graphic.source {
+        case let .emoji(value):
+            Text(value).font(.system(size: graphic.size * 0.72)).minimumScaleFactor(0.1)
+        case let .symbol(name):
+            Image(systemName: name).resizable().scaledToFit().padding(10)
+                .foregroundStyle(graphic.tintRGB.map { rgb in
+                    Color(red: Double((rgb >> 16) & 0xff) / 255,
+                          green: Double((rgb >> 8) & 0xff) / 255,
+                          blue: Double(rgb & 0xff) / 255)
+                } ?? .white)
+        case let .image(path):
+            if let image = UIImage(contentsOfFile: path) {
+                Image(uiImage: image).resizable().scaledToFit()
+            }
+        }
+    }
+}
+
+@MainActor
+enum EditorGraphicOverlayRenderer {
+    static func render(graphic: EditorGraphicOverlay, renderSize: CGSize) -> UIImage? {
+        let view = EditorGraphicOverlayExportView(graphic: graphic, renderSize: renderSize)
+            .frame(width: renderSize.width, height: renderSize.height)
+        let renderer = ImageRenderer(content: view)
+        renderer.proposedSize = ProposedViewSize(renderSize)
+        renderer.isOpaque = false
+        renderer.scale = 1
+        return renderer.uiImage
+    }
+}
+
 @MainActor
 enum EditorTextOverlayRenderer {
     static func render(

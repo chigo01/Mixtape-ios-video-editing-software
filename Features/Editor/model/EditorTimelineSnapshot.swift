@@ -58,9 +58,11 @@ struct EditorTimelineSnapshot: Equatable {
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
     var selectedTextOverlayID: UUID?
+    var selectedGraphicOverlayID: UUID?
     var selectedAudioClipID: UUID?
     var selectedOverlayClipID: UUID?
     var textOverlays: [EditorTextOverlay]
+    var graphicOverlays: [EditorGraphicOverlay]
     var audioClips: [EditorAudioClip]
     var audioTrackSettings: [Int: EditorAudioTrackSettings]
     var masterVolume: Float

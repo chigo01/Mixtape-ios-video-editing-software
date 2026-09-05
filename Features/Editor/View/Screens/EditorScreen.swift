@@ -12,6 +12,7 @@ import UIKit
 
 struct EditorScreen: View {
     @State private var vm: EditorViewModel
+    @State private var isCopilotPresented = false
     @State private var isFullscreenPreview = false
     @State private var isMediaPickerPresented = false
     @State private var isAudioPickerPresented = false
@@ -47,7 +48,8 @@ struct EditorScreen: View {
                 VStack(spacing: 0) {
                     EditorTopBar(
                         onBack: { close() },
-                        onExport: { showExportScreen = true }
+                        onExport: { showExportScreen = true },
+                        onCopilot: { isCopilotPresented = true }
                     )
 
                     if usesWideIPadLayout(in: geo) {
@@ -66,6 +68,14 @@ struct EditorScreen: View {
                 )
                 .transition(.opacity)
             }
+        }
+        .sheet(isPresented: $isCopilotPresented) {
+            EditorCopilotPanel(vm: vm)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: isCopilotPresented) { _, presented in
+            if !presented { vm.revealPlayheadInTimeline() }
         }
         .background(EditorNavigationPopGestureLock())
         .navigationBarBackButtonHidden(true)
@@ -322,6 +332,45 @@ struct EditorScreen: View {
 
     private var visualToolSheetsView: some View {
         textAndAudioToolSheetsView
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .templates },
+                set: { if !$0 && vm.selectedTool == .templates { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fraction(0.78)
+        ) {
+            EditorTemplatesPanel(vm: vm)
+                .presentationDetents([.fraction(0.78), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .performance },
+                set: { if !$0 && vm.selectedTool == .performance { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fraction(0.72)
+        ) {
+            ProxyRenderCachePanel(vm: vm)
+                .presentationDetents([.fraction(0.72), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .graphics },
+                set: { if !$0 && vm.selectedTool == .graphics { vm.commitGraphicEdit(); vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fraction(0.78)
+        ) {
+            EditorGraphicsPanel(vm: vm)
+                .presentationDetents([.fraction(0.78), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
+        }
         .editorSheet(
             isPresented: Binding(
                 get: {
@@ -1078,6 +1127,7 @@ private struct EditorFullscreenPreviewSheet: View {
 
             // Text overlays rendered on top of video/poster
             EditorTextOverlayLayerView(vm: vm)
+            EditorGraphicOverlayLayerView(vm: vm)
 
             EditorOverlaySelectionLayer(vm: vm)
         }

@@ -1225,8 +1225,8 @@ attribution anywhere at export time (currently only shown at insert time).
 |----------|---------|--------------------|
 | 25 | **Text animation — complete** | Persisted In/Out/Loop presets, adjustable timing/intensity, per-character typewriter timing, bounce, pop, zoom, directional slide, fade, blur, pulse, and wiggle. Presets compose with manual keyframes and render identically in live preview and offline export. |
 | 26 | **Captions and transcript editing — core workflow shipped** | Timeline-mix speech transcription, editable timed words/segments, per-word highlighting, caption styles and safe-zone placement, transcript search/tap-to-seek, Smart Review for fillers/low-confidence words/pauses, and SRT import/export ship with persistence, undo, and preview/export parity. An explicit transcript approval UI remains to connect range deletion to the shipped precision-edit commands. |
-| 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
-| 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
+| 27 | **Stickers and graphics — core shipped** | Persisted image/emoji/SF Symbol layers, searchable library, project-safe imports, trim/move/transform, animation presets, blend modes, reusable favorites, undo, and preview/export parity. |
+| 28 | **Templates — core shipped** | Versioned local template packages, ordered primary/overlay media slots, preserved fonts/transitions/audio/canvas, preview thumbnails, validation, isolated bundled assets, undoable application, and editable results. Explicit safe-zone editing and portable import/export remain. |
 | 29 | **Effects architecture — core complete** | Ordered per-clip, overlay, and time-ranged adjustment-layer effects; bypass, parameters, presets, amount keyframes, cached render plans, undo/persistence, and shared preview/export rendering. |
 
 #### Priority 29 — Effects stack and adjustment layers (core complete)
@@ -1236,6 +1236,37 @@ attribution anywhere at export time (currently only shown at insert time).
 - **Animation:** every effect owns an `EditorKeyframeTrack` for Amount, using the same hold/linear/eased cubic sampler as the rest of the editor. The diamond control writes at the current item-local time.
 - **Rendering and caching:** `EditorVisualEffectRenderer` evaluates the ordered stack inside `EditorTransitionCompositor`. Immutable enabled-stack plans are cached, and the compositor's long-lived `CIContext` caches Core Image intermediates. Preview and export pass the same clip, overlay, and adjustment-layer instructions.
 - **Project integrity:** effects and adjustment layers are Codable with safe empty defaults for older projects, included in composition fingerprints and snapshot undo/redo, inherited by split/freeze/duplicate/replace operations, and autosaved.
+
+#### Priority 27 — Stickers and reusable graphics (core shipped)
+
+- **Library:** the Graphics tool provides searchable emoji and SF Symbol collections, app-wide favorites, and photo/PNG import. Imported artwork is normalized to PNG and atomically copied into Mixtape Application Support, preserving transparency and avoiding temporary picker URLs.
+- **Timeline behavior:** every `EditorGraphicOverlay` owns a visible start/end range and a dedicated purple graphics lane with draggable trim handles and whole-item movement. Selection, duplicate, delete, transform changes, and timeline edits participate in snapshot undo and autosave.
+- **Canvas controls:** graphics can be positioned directly on the preview and inspected for size, scale, rotation, opacity, horizontal flip, six blend modes, and Pop/Pulse/Float/Bounce/Spin/Wiggle animation presets.
+- **Rendering:** the live SwiftUI overlay and offline Core Animation export share the same reference canvas, timing sampler, transforms, visibility and asset sources. Fullscreen and export-preview surfaces use the same graphic layer as the main editor.
+- **Compatibility:** project decoding defaults missing graphic collections and selections to empty values, so older saved projects continue to open unchanged.
+
+#### Priority 28 — Templates (core workflow shipped)
+
+The **TEMPLATES** workspace can capture the current edit as a named, versioned
+`EditorProjectTemplate`. Its manifest keeps the authoritative `EditorProject` edit graph plus ordered
+primary/overlay `EditorTemplateMediaSlot` records, expected media kinds, target durations, required
+font families, and normalized action/title safe-area metadata. Applying a template therefore produces
+ordinary editable clips, text, captions, graphics, audio lanes, effects, adjustment layers,
+transitions, keyframes, canvas settings, markers, and sequence structure—not a flattened render.
+
+Templates are stored as packages under Application Support. Audio files, imported graphic images,
+and canvas artwork are copied into the package; paths are rebased when packages move within the app
+container. Applying a template materializes another private asset copy scoped to the destination
+project, so deleting the source template cannot break an applied edit. PhotoKit video/image slots keep
+stable source identifiers while the current project's primary and overlay media fill matching slots in
+timeline order. Short replacements preserve the template's target timeline duration with a safe speed
+fallback and remove incompatible reverse, tracking, stabilization, or speed-curve state as needed.
+
+The library shows generated preview thumbnails, duration, canvas format, font count, media/overlay
+slot counts, and missing-reference diagnostics. Application is one undoable timeline transaction,
+keeps the destination project's identity and performance settings, invalidates preview/render caches,
+autosaves, and returns the user to the normal editor. Future-schema templates are rejected safely.
+Explicit guide editing and portable template import/export remain follow-up work.
 
 #### Priority 25 — Text animation (complete)
 
@@ -1284,9 +1315,45 @@ silence gaps without mutating media.
 
 ### Phase 5 — reliability, performance, and project portability
 
+#### Priority 30 — Proxy and render cache (core workflow shipped)
+
+The editor now has a persistent **CACHE** workspace for performance media. Each project stores its
+playback policy (`EditorProxySettings`) independently: proxies on/off, automatic generation, 540p or
+720p profile, background render cache, and a bounded disk budget. Missing fields decode to safe
+defaults, so existing project documents open without migration work.
+
+`EditorMediaCache` writes disposable files beneath the app's Caches directory using atomic temporary
+exports. A proxy key includes the PhotoKit local identifier, asset modification date, pixel dimensions,
+duration, and encoding profile. Replaced or edited source media therefore cannot accidentally reuse an
+older proxy. Cache hits update recency, and the combined proxy/render store uses least-recently-used
+eviction against the user-selected budget. Generated files are excluded from backup. New work pauses
+below a 512 MB free-space floor, and editor teardown cancels active proxy and render exports.
+
+Preview composition asks for a matching proxy only for ordinary forward playback. Missing proxies,
+reverse playback, stills, and any failed lookup fall back to the original asset. Offline export passes
+`isOfflineRender: true`, which bypasses proxy selection entirely; project documents continue to retain
+the original Photos identity as their source of truth.
+
+The background render cache is keyed by the complete composited edit fingerprint: primary/overlay
+timing and transforms, speed, reverse state, effects, adjustment layers, transitions, canvas, audio
+lanes, gain/mute/solo, and master volume. Edits debounce for three seconds before utility-priority
+rendering, while **Render current cut now** is user-initiated. Preview uses a cached render only on an
+exact fingerprint match. Text and reusable graphics remain live SwiftUI layers over that render, so
+their selection handles and interaction stay immediate; offline export still burns them in through the
+authoritative full-resolution composition path.
+
+The CACHE sheet reports separate proxy/render counts and total bytes, offers 540p/720p generation,
+shows batch progress and low-storage/failure messages, and can clear proxies or preview renders
+independently. Clearing either cache never deletes, rewrites, or unlinks original media.
+
+Physical-device QA should cover: iCloud-only source download; proxy generation cancellation; 540p ↔
+720p switching; forward/reverse clips; video overlays; adjustment layers; edit invalidation after trim,
+speed, effect, canvas, and mix changes; playback after clearing each cache; low-storage messaging; save
+and reopen; and confirmation that final export resolution/detail comes from the original assets.
+
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 30 | **Proxy and render cache** | Background proxy generation, cache invalidation by edit fingerprint, low-storage controls, and full-resolution export. |
+| 30 | **Proxy and render cache — core shipped** | Background proxy generation, exact edit-fingerprint render reuse, LRU/low-storage controls, and original-only full-resolution export are implemented. Remaining work is device stress/performance telemetry. |
 | 31 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
 | 32 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
 | 33 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |

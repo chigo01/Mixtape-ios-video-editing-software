@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Speech
 import SwiftUI
 import UniformTypeIdentifiers
@@ -12,9 +13,12 @@ enum EditorCaptionError: LocalizedError {
     case recognitionFailed(String)
     case audioRenderFailed
     case invalidSRT
+    case onDeviceUnavailable
 
     var errorDescription: String? {
         switch self {
+        case .onDeviceUnavailable:
+            return "On-device speech recognition is unavailable for this language. MixPilot will not upload audio. Choose another supported language or install its speech resources."
         case .permissionDenied:
             return "Speech Recognition access is required to create captions."
         case .recognizerUnavailable:
@@ -76,10 +80,16 @@ enum EditorCaptionService {
         audioTrackSettings: [Int: EditorAudioTrackSettings],
         masterVolume: Float,
         requestedLocaleIdentifier: String?,
-        source: EditorCaptionAudioSource
+        source: EditorCaptionAudioSource,
+        requiresOnDeviceRecognition: Bool = false,
+        timeRange: ClosedRange<TimeInterval>? = nil,
+        highlightSampleTarget: TimeInterval? = nil,
+        onProgress: @MainActor (String) -> Void = { _ in }
     ) async throws -> EditorCaptionTranscriptResult {
         let authorization = await requestAuthorization()
         guard authorization == .authorized else { throw EditorCaptionError.permissionDenied }
+        try Task.checkCancellation()
+        onProgress("Preparing timeline audio…")
 
         let recognitionClips = source == .video ? clipsForSpeechRecognition(clips) : clips
         guard let built = await EditorCompositionBuilder.build(
@@ -89,9 +99,11 @@ enum EditorCaptionService {
             audioTrackSettings: source == .timelineMix ? audioTrackSettings : [:],
             masterVolume: source == .timelineMix ? masterVolume : 1
         ) else {
+            try Task.checkCancellation()
             throw EditorCaptionError.audioRenderFailed
         }
 
+        try Task.checkCancellation()
         let compositionAudioTracks = try await built.composition.loadTracks(withMediaType: .audio)
         var hasTimedAudio = false
         for track in compositionAudioTracks {
@@ -103,10 +115,196 @@ enum EditorCaptionService {
         }
         guard hasTimedAudio else { throw EditorCaptionError.noAudioTrack }
 
-        let audioURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Mixtape-Caption-Audio-\(UUID().uuidString).m4a")
-        defer { try? FileManager.default.removeItem(at: audioURL) }
+        let totalDuration = built.duration.seconds
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Mixtape-Caption-Chunks-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
 
+        let shouldSample = highlightSampleTarget.map { $0 > 0 && totalDuration > 8 * 60 } ?? false
+        let chunks: [AudioChunk]
+        if shouldSample, let target = highlightSampleTarget {
+            onProgress(totalDuration >= 3600
+                ? String(format: "Scanning %.1f hours for speech…", totalDuration / 3600)
+                : String(format: "Scanning %.0f minutes for speech…", totalDuration / 60))
+            chunks = try await sampleSpeechChunks(
+                composition: built.composition,
+                duration: totalDuration,
+                targetDuration: target,
+                directory: directory,
+                onProgress: onProgress
+            )
+        } else if let timeRange {
+            onProgress("Preparing selected audio…")
+            chunks = try await extractRangeChunks(
+                composition: built.composition,
+                range: timeRange,
+                duration: totalDuration,
+                directory: directory
+            )
+        } else {
+            let audioURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Mixtape-Caption-Audio-\(UUID().uuidString).m4a")
+            defer { try? FileManager.default.removeItem(at: audioURL) }
+            try await exportAudio(from: built, to: audioURL, timeRange: nil)
+            onProgress("Preparing speech sections…")
+            let preparation = Task.detached(priority: .userInitiated) {
+                try prepareChunks(audioURL: audioURL, directory: directory)
+            }
+            chunks = try await withTaskCancellationHandler {
+                try await preparation.value
+            } onCancel: { preparation.cancel() }
+        }
+        guard chunks.contains(where: \.isAudible) else { throw EditorCaptionError.silentAudio }
+        let candidates = recognitionLocaleCandidates(requestedIdentifier: requestedLocaleIdentifier)
+
+        var allWords: [EditorCaptionWord] = []
+        var preferredLocale: Locale?
+        var preferredMode: Bool?
+        for (index, chunk) in chunks.enumerated() {
+            try Task.checkCancellation()
+            onProgress("Recognizing section \(index + 1) of \(chunks.count)…")
+            guard chunk.isAudible else { continue }
+            // Once a language/mode works, reuse it instead of repeating language
+            // discovery for every section. Requests remain serial to avoid Speech throttling.
+            let locales = preferredLocale.map { [$0] } ?? candidates
+            var recognized: [EditorCaptionWord]?
+            var lastError: Error?
+            for locale in locales {
+                guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
+                    lastError = EditorCaptionError.recognizerUnavailable
+                    continue
+                }
+                if requiresOnDeviceRecognition && !recognizer.supportsOnDeviceRecognition {
+                    lastError = EditorCaptionError.onDeviceUnavailable
+                    continue
+                }
+                var modes = requiresOnDeviceRecognition ? [true] : (recognizer.supportsOnDeviceRecognition ? [true, false] : [false])
+                if let preferredMode, modes.contains(preferredMode) {
+                    modes = [preferredMode] + modes.filter { $0 != preferredMode }
+                }
+                for onDevice in modes {
+                    try Task.checkCancellation()
+                    let request = SFSpeechURLRecognitionRequest(url: chunk.url)
+                    request.shouldReportPartialResults = false
+                    request.addsPunctuation = true
+                    request.taskHint = .dictation
+                    request.requiresOnDeviceRecognition = onDevice
+                    do {
+                        let transcription = try await recognize(request: request, with: recognizer)
+                        let words = captionWords(from: transcription, fallbackDuration: chunk.duration)
+                        if !words.isEmpty {
+                            recognized = words
+                            preferredLocale = locale
+                            preferredMode = onDevice
+                            break
+                        }
+                        // An explicit empty final result is valid for music/non-speech.
+                        recognized = []
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        if isBenignNoSpeech(error) {
+                            recognized = []
+                            break
+                        }
+                        lastError = error
+                    }
+                }
+                if let recognized, !recognized.isEmpty { break }
+            }
+            guard let recognized else {
+                if requiresOnDeviceRecognition {
+                    throw EditorCopilotError.message(
+                        "On-device transcription could not finish. No audio was uploaded. "
+                        + (lastError?.localizedDescription ?? "Try another spoken language.")
+                    )
+                }
+                throw EditorCaptionError.recognitionFailed(
+                    "Section \(index + 1) of \(chunks.count) could not finish. Existing captions were kept. "
+                    + (lastError?.localizedDescription ?? "Try selecting the spoken language.")
+                )
+            }
+            for var word in recognized {
+                let midpoint = chunk.start + (word.startTime + word.endTime) / 2
+                // Overlapping context belongs to exactly one section, preventing
+                // duplicated boundary words while retaining the original timeline clock.
+                guard midpoint >= chunk.ownedStart, midpoint < chunk.ownedEnd else { continue }
+                word.startTime = max(chunk.ownedStart, chunk.start + word.startTime)
+                word.endTime = min(chunk.ownedEnd, chunk.start + word.endTime)
+                guard word.endTime > word.startTime else { continue }
+                allWords.append(word)
+            }
+        }
+        guard !allWords.isEmpty else {
+            throw EditorCaptionError.noSpeech(attemptedLanguages: candidates.map(\.identifier))
+        }
+        return EditorCaptionTranscriptResult(
+            words: allWords.sorted { $0.startTime < $1.startTime },
+            localeIdentifier: preferredLocale?.identifier ?? Locale.current.identifier
+        )
+    }
+
+    private struct AudioChunk: Sendable {
+        let url: URL
+        let start: TimeInterval
+        let duration: TimeInterval
+        let ownedStart: TimeInterval
+        let ownedEnd: TimeInterval
+        let isAudible: Bool
+    }
+
+    /// Decode once, then write bounded PCM files without an AAC export per section.
+    private static func prepareChunks(audioURL: URL, directory: URL) throws -> [AudioChunk] {
+        let input = try AVAudioFile(forReading: audioURL)
+        let format = input.processingFormat
+        let sampleRate = format.sampleRate
+        guard sampleRate.isFinite, sampleRate > 0 else { throw EditorCaptionError.audioRenderFailed }
+        let duration = Double(input.length) / sampleRate
+        let sectionDuration = 30.0
+        let context = 0.5
+        var chunks: [AudioChunk] = []
+        var ownedStart = 0.0
+        while ownedStart < duration {
+            try Task.checkCancellation()
+            let ownedEnd = min(duration, ownedStart + sectionDuration)
+            let start = max(0, ownedStart - context)
+            let end = min(duration, ownedEnd + context)
+            let url = directory.appendingPathComponent("section-\(chunks.count).caf")
+            let output = try AVAudioFile(forWriting: url, settings: format.settings)
+            input.framePosition = AVAudioFramePosition((start * sampleRate).rounded(.down))
+            let endFrame = min(input.length, AVAudioFramePosition((end * sampleRate).rounded(.down)))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_192) else {
+                throw EditorCaptionError.audioRenderFailed
+            }
+            var audible = false
+            while input.framePosition < endFrame {
+                try Task.checkCancellation()
+                let count = AVAudioFrameCount(min(8_192, endFrame - input.framePosition))
+                try input.read(into: buffer, frameCount: count)
+                guard buffer.frameLength > 0 else { throw EditorCaptionError.audioRenderFailed }
+                if !audible, let channels = buffer.floatChannelData {
+                    for channel in 0..<Int(format.channelCount) {
+                        for frame in 0..<Int(buffer.frameLength) where abs(channels[channel][frame]) > 0.000_5 {
+                            audible = true
+                            break
+                        }
+                    }
+                }
+                try output.write(from: buffer)
+            }
+            chunks.append(AudioChunk(url: url, start: start, duration: end - start,
+                                     ownedStart: ownedStart, ownedEnd: ownedEnd, isAudible: audible))
+            ownedStart = ownedEnd
+        }
+        return chunks
+    }
+
+    private static func exportAudio(
+        from built: EditorCompositionBuildResult,
+        to audioURL: URL,
+        timeRange: ClosedRange<TimeInterval>?
+    ) async throws {
         guard let exporter = AVAssetExportSession(
             asset: built.composition,
             presetName: AVAssetExportPresetAppleM4A
@@ -114,6 +312,14 @@ enum EditorCaptionService {
             throw EditorCaptionError.audioRenderFailed
         }
         exporter.audioMix = built.audioMix
+        if let timeRange {
+            let start = CMTime(seconds: max(0, timeRange.lowerBound), preferredTimescale: 600)
+            let duration = CMTime(
+                seconds: max(0.1, timeRange.upperBound - timeRange.lowerBound),
+                preferredTimescale: 600
+            )
+            exporter.timeRange = CMTimeRange(start: start, duration: duration)
+        }
         let exportBox = ExportSessionBox(exporter)
         do {
             try await withTaskCancellationHandler {
@@ -125,65 +331,263 @@ enum EditorCaptionService {
             exporter.cancelExport()
             throw CancellationError()
         } catch {
+            try Task.checkCancellation()
             throw EditorCaptionError.audioRenderFailed
         }
+    }
 
-        let renderedAudioIsAudible = try await Task.detached(priority: .userInitiated) {
-            try hasAudibleSamples(at: audioURL)
-        }.value
-        guard renderedAudioIsAudible else { throw EditorCaptionError.silentAudio }
-
-        let candidates = recognitionLocaleCandidates(requestedIdentifier: requestedLocaleIdentifier)
-        var attemptedLanguages: [String] = []
-        var lastRecognitionError: Error?
-        var receivedEmptyResult = false
-
-        for locale in candidates {
+    @MainActor
+    private static func sampleSpeechChunks(
+        composition: AVMutableComposition,
+        duration: TimeInterval,
+        targetDuration: TimeInterval,
+        directory: URL,
+        onProgress: @MainActor (String) -> Void
+    ) async throws -> [AudioChunk] {
+        let budget = EditorCopilotPlan.recognitionBudget(
+            timelineDuration: duration, targetDuration: targetDuration
+        )
+        let scan = Task.detached(priority: .userInitiated) {
+            try energyBins(from: composition, duration: duration)
+        }
+        let bins: [(time: Double, rms: Double)]
+        do {
+            bins = try await withTaskCancellationHandler {
+                try await scan.value
+            } onCancel: { scan.cancel() }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            bins = []
+        }
+        try Task.checkCancellation()
+        var windows = EditorCopilotPlan.sampleSpeechWindows(
+            bins: bins, duration: duration, budget: budget
+        )
+        if windows.isEmpty {
+            let count = max(4, Int((budget / 30).rounded(.up)))
+            let step = duration / Double(count)
+            windows = (0..<count).map { index in
+                let start = Double(index) * step
+                return .init(start: start, end: min(duration, start + 30))
+            }
+        }
+        windows = Array(windows.prefix(12))
+        onProgress("Transcribing \(windows.count) spoken sections…")
+        var chunks: [AudioChunk] = []
+        for (index, window) in windows.enumerated() {
             try Task.checkCancellation()
-            guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
+            onProgress("Preparing sampled section \(index + 1) of \(windows.count)…")
+            let url = directory.appendingPathComponent("sample-\(index).caf")
+            do {
+                let extracted = Task.detached(priority: .userInitiated) {
+                    try extractPCMChunk(
+                        from: composition, start: window.start, end: window.end, url: url
+                    )
+                }
+                let chunk = try await withTaskCancellationHandler {
+                    try await extracted.value
+                } onCancel: { extracted.cancel() }
+                if chunk.isAudible { chunks.append(chunk) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
                 continue
             }
-            attemptedLanguages.append(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+        }
+        return chunks
+    }
 
-            // Server-assisted recognition is substantially more tolerant of music,
-            // accents, and compressed social-video audio. If it returns no words,
-            // retry on-device when that language supports it.
-            let recognitionModes = recognizer.supportsOnDeviceRecognition ? [false, true] : [false]
-            for requiresOnDevice in recognitionModes {
-                let request = SFSpeechURLRecognitionRequest(url: audioURL)
-                request.shouldReportPartialResults = true
-                request.addsPunctuation = true
-                request.taskHint = .dictation
-                request.requiresOnDeviceRecognition = requiresOnDevice
+    private static func extractRangeChunks(
+        composition: AVMutableComposition,
+        range: ClosedRange<TimeInterval>,
+        duration: TimeInterval,
+        directory: URL
+    ) async throws -> [AudioChunk] {
+        let start = min(max(0, range.lowerBound), duration)
+        let end = min(max(start + 0.3, range.upperBound), duration)
+        let url = directory.appendingPathComponent("range.caf")
+        let extracted = Task.detached(priority: .userInitiated) {
+            try extractPCMChunk(from: composition, start: start, end: end, url: url)
+        }
+        let chunk = try await withTaskCancellationHandler {
+            try await extracted.value
+        } onCancel: { extracted.cancel() }
+        if chunk.duration <= 32 {
+            return [chunk]
+        }
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Mixtape-Caption-Range-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        try FileManager.default.copyItem(at: chunk.url, to: audioURL)
+        return try prepareChunks(audioURL: audioURL, directory: directory).map { section in
+            AudioChunk(
+                url: section.url,
+                start: start + section.start,
+                duration: section.duration,
+                ownedStart: start + section.ownedStart,
+                ownedEnd: start + section.ownedEnd,
+                isAudible: section.isAudible
+            )
+        }
+    }
 
-                do {
-                    let transcription = try await recognize(request: request, with: recognizer)
-                    let words = captionWords(
-                        from: transcription,
-                        fallbackDuration: built.duration.seconds
-                    )
-                    if !words.isEmpty {
-                        return EditorCaptionTranscriptResult(
-                            words: words,
-                            localeIdentifier: locale.identifier
-                        )
-                    }
-                    receivedEmptyResult = true
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    lastRecognitionError = error
+    nonisolated private static func energyBins(
+        from composition: AVMutableComposition,
+        duration: TimeInterval
+    ) throws -> [(time: Double, rms: Double)] {
+        let hop = 0.5
+        guard let track = composition.tracks(withMediaType: .audio).first else {
+            throw EditorCaptionError.noAudioTrack
+        }
+        let reader = try AVAssetReader(asset: composition)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+            AVSampleRateKey: 8_000,
+            AVNumberOfChannelsKey: 1
+        ])
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw EditorCaptionError.audioRenderFailed }
+        reader.add(output)
+        guard reader.startReading() else { throw EditorCaptionError.audioRenderFailed }
+        var bins: [(time: Double, rms: Double)] = []
+        var samples: [Float] = []
+        samples.reserveCapacity(4_000)
+        var time = 0.0
+        while let buffer = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            defer { CMSampleBufferInvalidate(buffer) }
+            guard let data = CMSampleBufferGetDataBuffer(buffer) else { continue }
+            let length = CMBlockBufferGetDataLength(data)
+            var bytes = [Int16](repeating: 0, count: length / MemoryLayout<Int16>.size)
+            CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: length, destination: &bytes)
+            for sample in bytes {
+                samples.append(Float(sample) / Float(Int16.max))
+                if samples.count >= 4_000 {
+                    bins.append((time, rms(samples)))
+                    time += hop
+                    samples.removeAll(keepingCapacity: true)
                 }
             }
         }
+        if !samples.isEmpty {
+            bins.append((time, rms(samples)))
+        }
+        if bins.isEmpty, duration > 0 {
+            throw EditorCaptionError.audioRenderFailed
+        }
+        return bins
+    }
 
-        if attemptedLanguages.isEmpty {
-            throw EditorCaptionError.recognizerUnavailable
+    nonisolated private static func extractPCMChunk(
+        from composition: AVMutableComposition,
+        start: TimeInterval,
+        end: TimeInterval,
+        url: URL
+    ) throws -> AudioChunk {
+        guard let track = composition.tracks(withMediaType: .audio).first else {
+            throw EditorCaptionError.noAudioTrack
         }
-        if !receivedEmptyResult, let lastRecognitionError {
-            throw EditorCaptionError.recognitionFailed(lastRecognitionError.localizedDescription)
+        let reader = try AVAssetReader(asset: composition)
+        reader.timeRange = CMTimeRange(
+            start: CMTime(seconds: max(0, start), preferredTimescale: 600),
+            duration: CMTime(seconds: max(0.2, end - start), preferredTimescale: 600)
+        )
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1
+        ])
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw EditorCaptionError.audioRenderFailed }
+        reader.add(output)
+        guard reader.startReading() else { throw EditorCaptionError.audioRenderFailed }
+
+        var samples: [Float] = []
+        samples.reserveCapacity(Int(max(0.2, end - start) * 16_000))
+        var audible = false
+        while let buffer = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            defer { CMSampleBufferInvalidate(buffer) }
+            guard let data = CMSampleBufferGetDataBuffer(buffer) else { continue }
+            let length = CMBlockBufferGetDataLength(data)
+            let frames = length / MemoryLayout<Float>.size
+            guard frames > 0 else { continue }
+            var packet = [Float](repeating: 0, count: frames)
+            CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: length, destination: &packet)
+            if !audible, packet.contains(where: { abs($0) > 0.003 }) { audible = true }
+            samples.append(contentsOf: packet)
         }
-        throw EditorCaptionError.noSpeech(attemptedLanguages: attemptedLanguages)
+        guard !samples.isEmpty else {
+            return AudioChunk(
+                url: url, start: start, duration: max(0.2, end - start),
+                ownedStart: start, ownedEnd: end, isAudible: false
+            )
+        }
+
+        guard let sourceFormat = AVAudioFormat(
+            standardFormatWithSampleRate: 16_000, channels: 1
+        ) else {
+            throw EditorCaptionError.audioRenderFailed
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let file = try AVAudioFile(forWriting: url, settings: sourceFormat.settings)
+        let processing = file.processingFormat
+        var offset = 0
+        let packetFrames = 16_384
+        while offset < samples.count {
+            try Task.checkCancellation()
+            let count = min(packetFrames, samples.count - offset)
+            guard let pcm = AVAudioPCMBuffer(
+                pcmFormat: processing,
+                frameCapacity: AVAudioFrameCount(count)
+            ) else {
+                throw EditorCaptionError.audioRenderFailed
+            }
+            pcm.frameLength = AVAudioFrameCount(count)
+            if let channels = pcm.floatChannelData {
+                for channel in 0..<Int(processing.channelCount) {
+                    for frame in 0..<count {
+                        channels[channel][frame] = samples[offset + frame]
+                    }
+                }
+            }
+            try file.write(from: pcm)
+            offset += count
+        }
+        return AudioChunk(
+            url: url, start: start, duration: max(0.2, end - start),
+            ownedStart: start, ownedEnd: end, isAudible: audible
+        )
+    }
+
+    nonisolated private static func rms(_ samples: [Float]) -> Double {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples { sum += sample * sample }
+        return Double((sum / Float(samples.count)).squareRoot())
+    }
+
+    nonisolated private static func isBenignNoSpeech(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        let ns = error as NSError
+        let text = ns.localizedDescription.lowercased()
+        if text.contains("no speech") || text.contains("no match") { return true }
+        // Apple Speech uses 1110 / 216 for empty audio in several OS versions.
+        if ns.domain == "kAFAssistantErrorDomain" && [1110, 216, 203].contains(ns.code) {
+            return true
+        }
+        return false
     }
 
     static func supportedLanguageOptions() -> [(identifier: String, title: String)] {
@@ -330,31 +734,6 @@ enum EditorCaptionService {
         }
     }
 
-    private static func hasAudibleSamples(at url: URL) throws -> Bool {
-        let file = try AVAudioFile(forReading: url)
-        guard file.length > 0 else { return false }
-        let format = file.processingFormat
-        let capacity: AVAudioFrameCount = 8_192
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
-            return false
-        }
-
-        while file.framePosition < file.length {
-            try Task.checkCancellation()
-            try file.read(into: buffer, frameCount: capacity)
-            let frames = Int(buffer.frameLength)
-            guard frames > 0 else { break }
-            if let channels = buffer.floatChannelData {
-                for channel in 0..<Int(format.channelCount) {
-                    for frame in 0..<frames where abs(channels[channel][frame]) > 0.000_5 {
-                        return true
-                    }
-                }
-            }
-        }
-        return false
-    }
-
     private static func recognize(
         request: SFSpeechRecognitionRequest,
         with recognizer: SFSpeechRecognizer
@@ -362,15 +741,12 @@ enum EditorCaptionService {
         let box = SpeechTaskBox()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                var completed = false
+                box.install(continuation)
                 let task = recognizer.recognitionTask(with: request) { result, error in
-                    guard !completed else { return }
-                    if let error {
-                        completed = true
-                        continuation.resume(throwing: error)
-                    } else if let result, result.isFinal {
-                        completed = true
-                        continuation.resume(returning: result.bestTranscription)
+                    if let result, result.isFinal {
+                        box.finish(.success(result.bestTranscription))
+                    } else if let error {
+                        box.finish(.failure(error))
                     }
                 }
                 box.store(task)
@@ -384,22 +760,52 @@ enum EditorCaptionService {
 private final class SpeechTaskBox: @unchecked Sendable {
     private let lock = NSLock()
     private var task: SFSpeechRecognitionTask?
-    private var isCancelled = false
+    private var continuation: CheckedContinuation<SFTranscription, Error>?
+    private var terminalResult: Result<SFTranscription, Error>?
+    private var timeout: DispatchWorkItem?
+
+    func install(_ continuation: CheckedContinuation<SFTranscription, Error>) {
+        lock.lock()
+        if let result = terminalResult {
+            lock.unlock()
+            continuation.resume(with: result)
+            return
+        }
+        self.continuation = continuation
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.finish(.failure(EditorCaptionError.recognitionFailed("Speech recognition timed out.")))
+        }
+        self.timeout = timeout
+        lock.unlock()
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 60, execute: timeout)
+    }
 
     func store(_ task: SFSpeechRecognitionTask) {
         lock.lock()
-        self.task = task
-        let shouldCancel = isCancelled
+        let shouldCancel = terminalResult != nil
+        if !shouldCancel { self.task = task }
         lock.unlock()
         if shouldCancel { task.cancel() }
     }
 
     func cancel() {
+        finish(.failure(CancellationError()))
+    }
+
+    func finish(_ result: Result<SFTranscription, Error>) {
         lock.lock()
-        isCancelled = true
+        guard terminalResult == nil else { lock.unlock(); return }
+        terminalResult = result
         let task = task
+        let continuation = continuation
+        let timeout = timeout
+        self.task = nil
+        self.continuation = nil
+        self.timeout = nil
         lock.unlock()
+        timeout?.cancel()
         task?.cancel()
+        continuation?.resume(with: result)
     }
 }
 

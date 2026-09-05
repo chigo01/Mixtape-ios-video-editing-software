@@ -14,6 +14,29 @@ import Photos
 @Observable
 final class EditorViewModel {
 
+    // MARK: On-device editing copilot
+
+    private(set) var copilotStatus: String?
+    var copilotError: String?
+    private(set) var isCopilotWorking = false
+    private(set) var copilotPlan: EditorCopilotPlan?
+    private(set) var copilotEditPlan: EditorCopilotEditPlan?
+    private(set) var copilotPreview: EditorViewModel?
+    @ObservationIgnored private var copilotTask: Task<Void, Never>?
+    @ObservationIgnored private var copilotJobID: UUID?
+    @ObservationIgnored private var copilotSource: EditorTimelineSnapshot?
+    @ObservationIgnored private var copilotDraft: EditorTimelineSnapshot?
+    @ObservationIgnored private var copilotTranscript: EditorCaptionTranscriptResult?
+    @ObservationIgnored private var copilotTranscriptSource: EditorTimelineSnapshot?
+    @ObservationIgnored private var copilotTranscriptLocale: String?
+    @ObservationIgnored private var isCopilotPreview = false
+    @ObservationIgnored private var isCopilotPreviewDiscarded = false
+    /// Playhead at MixPilot generate time. Comparable snapshots zero this, so Apply
+    /// must restore it instead of seeking to the first operation (captions start at 0).
+    @ObservationIgnored private var copilotRestoreTime: TimeInterval = 0
+    /// Bumped after MixPilot apply so the timeline scroller recenters on the playhead.
+    private(set) var timelineRevealNonce = 0
+
     // MARK: Timeline state
 
     private(set) var clips: [EditorClip]
@@ -23,6 +46,7 @@ final class EditorViewModel {
     private(set) var closingTransitionDuration: TimeInterval
     var selectedClipID: UUID?
     var textOverlays: [EditorTextOverlay]
+    var graphicOverlays: [EditorGraphicOverlay]
     var audioClips: [EditorAudioClip]
     /// Per-lane gain/mute (Priority 13 gain staging), keyed by `EditorAudioClip.laneIndex`.
     var audioTrackSettings: [Int: EditorAudioTrackSettings] = [:]
@@ -72,11 +96,13 @@ final class EditorViewModel {
     // MARK: Text overlay editing
 
     var selectedTextOverlayID: UUID?
+    var selectedGraphicOverlayID: UUID?
     var isTextEditorPresented: Bool = false
     private(set) var isTranscribingCaptions = false
     private(set) var captionStatusMessage: String?
     var captionErrorMessage: String?
     @ObservationIgnored private var captionTask: Task<Void, Never>?
+    @ObservationIgnored private var captionJobID: UUID?
 
     // MARK: Audio editing
 
@@ -112,6 +138,17 @@ final class EditorViewModel {
     private(set) var projectID: UUID
     private let projectCreatedAt: Date
     var projectTitle: String
+
+    // MARK: Proxy and render cache
+
+    private(set) var proxySettings: EditorProxySettings
+    private(set) var mediaCacheStats: EditorMediaCacheStats = .empty
+    private(set) var proxyGenerationProgress: Double?
+    private(set) var isBuildingRenderCache = false
+    private(set) var cacheStatusMessage: String?
+    @ObservationIgnored private var proxyGenerationTask: Task<Void, Never>?
+    @ObservationIgnored private var renderCacheTask: Task<Void, Never>?
+    private(set) var templateStatusMessage: String?
 
     // MARK: Export
 
@@ -194,6 +231,10 @@ final class EditorViewModel {
     @ObservationIgnored
     private var overlayTransformUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
+    private var graphicEditUndoSnapshot: EditorTimelineSnapshot?
+    @ObservationIgnored
+    private var graphicDragOrigin: (x: CGFloat, y: CGFloat)?
+    @ObservationIgnored
     private var overlayCompositingUndoSnapshot: EditorTimelineSnapshot?
     @ObservationIgnored
     private var overlayPositionDragOrigin: (x: CGFloat, y: CGFloat)?
@@ -210,6 +251,7 @@ final class EditorViewModel {
         self.projectID = project.id
         self.projectCreatedAt = project.createdAt
         self.projectTitle = project.title
+        self.proxySettings = project.proxySettings
         let clips = EditorProjectResolver.clips(from: project.clips)
         self.clips = clips
         self.openingTransitionKind = project.openingTransitionKind
@@ -220,6 +262,13 @@ final class EditorViewModel {
         self.timelinePosition = project.timelinePosition
         self.textOverlays = project.textOverlays.map { $0.toOverlay() }
         self.selectedTextOverlayID = project.selectedTextOverlayID
+        self.graphicOverlays = project.graphicOverlays.filter { overlay in
+            if case let .image(path) = overlay.source {
+                return FileManager.default.fileExists(atPath: path)
+            }
+            return true
+        }
+        self.selectedGraphicOverlayID = project.selectedGraphicOverlayID
         self.audioClips = project.audioClips.compactMap { $0.toAudioClip() }
         self.audioTrackSettings = project.audioTrackSettings
         self.masterVolume = project.masterVolume
@@ -269,6 +318,7 @@ final class EditorViewModel {
             self.selectedTool = .sequence
             self.selectedClipID = nil
             self.selectedTextOverlayID = nil
+            self.selectedGraphicOverlayID = nil
             self.selectedAudioClipID = nil
             self.selectedOverlayClipID = nil
         }
@@ -292,8 +342,9 @@ final class EditorViewModel {
         let video = clips.reduce(0) { $0 + $1.duration }
         let audioEnd = audioClips.map(\.timelineEnd).max() ?? 0
         let textEnd = textOverlays.map(\.endTime).max() ?? 0
+        let graphicEnd = graphicOverlays.map(\.endTime).max() ?? 0
         let overlayEnd = overlayClips.map(\.timelineEnd).max() ?? 0
-        return max(video, audioEnd, textEnd, overlayEnd)
+        return max(video, audioEnd, textEnd, graphicEnd, overlayEnd)
     }
 
     var videoDuration: TimeInterval {
@@ -381,6 +432,11 @@ final class EditorViewModel {
     var selectedTextOverlay: EditorTextOverlay? {
         guard let id = selectedTextOverlayID else { return nil }
         return textOverlays.first { $0.id == id }
+    }
+
+    var selectedGraphicOverlay: EditorGraphicOverlay? {
+        guard let id = selectedGraphicOverlayID else { return nil }
+        return graphicOverlays.first { $0.id == id }
     }
 
     var captionOverlays: [EditorTextOverlay] {
@@ -764,6 +820,7 @@ final class EditorViewModel {
         selectedClipID = id
         selectedAdjustmentLayerID = nil
         selectedTextOverlayID = nil
+        selectedGraphicOverlayID = nil
         selectedAudioClipID = nil
         selectedOverlayClipID = nil
         isTextEditorPresented = false
@@ -794,6 +851,7 @@ final class EditorViewModel {
         selectedAdjustmentLayerID = nil
         selectedClipID = nil
         selectedTextOverlayID = nil
+        selectedGraphicOverlayID = nil
         selectedOverlayClipID = nil
         isTextEditorPresented = false
         selectedTool = nil
@@ -865,6 +923,7 @@ final class EditorViewModel {
         selectedAdjustmentLayerID = nil
         selectedClipID = nil
         selectedTextOverlayID = nil
+        selectedGraphicOverlayID = nil
         selectedAudioClipID = nil
         isTextEditorPresented = false
         selectedTool = nil
@@ -1453,6 +1512,8 @@ final class EditorViewModel {
             } else {
                 addTextOverlay()
             }
+        case .graphics:
+            selectTool(.graphics)
         case .captions:
             selectTool(.captions)
         case .sequence:
@@ -3781,6 +3842,9 @@ final class EditorViewModel {
     ) {
         guard !isTranscribingCaptions else { return }
         captionTask?.cancel()
+        let jobID = UUID()
+        captionJobID = jobID
+        isTranscribingCaptions = true
         captionErrorMessage = nil
         captionStatusMessage = source == .video
             ? "Preparing video dialogue…"
@@ -3792,13 +3856,15 @@ final class EditorViewModel {
         let masterSnapshot = masterVolume
 
         captionTask = Task {
-            isTranscribingCaptions = true
             defer {
-                isTranscribingCaptions = false
-                captionStatusMessage = nil
+                if captionJobID == jobID {
+                    isTranscribingCaptions = false
+                    captionStatusMessage = nil
+                    captionJobID = nil
+                    captionTask = nil
+                }
             }
             do {
-                captionStatusMessage = "Recognizing speech…"
                 let result = try await EditorCaptionService.transcribe(
                     clips: clipsSnapshot,
                     audioClips: audioSnapshot,
@@ -3806,9 +3872,14 @@ final class EditorViewModel {
                     audioTrackSettings: trackSettingsSnapshot,
                     masterVolume: masterSnapshot,
                     requestedLocaleIdentifier: localeIdentifier,
-                    source: source
+                    source: source,
+                    onProgress: { [weak self] message in
+                        guard self?.captionJobID == jobID else { return }
+                        self?.captionStatusMessage = message
+                    }
                 )
                 try Task.checkCancellation()
+                guard captionJobID == jobID else { return }
                 let captions = EditorCaptionService.makeCaptionOverlays(from: result)
                 replaceAllCaptions(with: captions)
                 captionStatusMessage = "Created \(captions.count) caption segments"
@@ -3816,6 +3887,7 @@ final class EditorViewModel {
             } catch is CancellationError {
                 return
             } catch {
+                guard captionJobID == jobID, !Task.isCancelled else { return }
                 captionErrorMessage = error.localizedDescription
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
@@ -3824,6 +3896,7 @@ final class EditorViewModel {
 
     func cancelCaptionTranscription() {
         captionTask?.cancel()
+        captionJobID = nil
         captionTask = nil
         isTranscribingCaptions = false
         captionStatusMessage = nil
@@ -4064,6 +4137,136 @@ final class EditorViewModel {
         scheduleSave()
 
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    // MARK: Stickers and reusable graphics
+
+    func addGraphic(source: EditorGraphicSource, title: String? = nil) {
+        let start = min(max(0, timelinePosition), max(0, totalDuration - 0.12))
+        let end = min(totalDuration, start + 3)
+        guard end - start >= 0.1 else { return }
+        registerUndoIfNeeded()
+        let overlay = EditorGraphicOverlay(
+            source: source,
+            title: title ?? source.displayName,
+            startTime: start,
+            endTime: end
+        )
+        graphicOverlays.append(overlay)
+        selectedGraphicOverlayID = overlay.id
+        selectedTextOverlayID = nil
+        selectedClipID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        selectedAdjustmentLayerID = nil
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    func importGraphicImageData(_ data: Data) throws {
+        guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Mixtape/Graphics", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let url = base.appendingPathComponent("graphic-\(UUID().uuidString).png")
+        guard let normalized = image.pngData() else { throw CocoaError(.fileWriteUnknown) }
+        try normalized.write(to: url, options: .atomic)
+        addGraphic(source: .image(path: url.path), title: "Imported Graphic")
+    }
+
+    func selectGraphicOverlay(_ id: UUID) {
+        selectedGraphicOverlayID = id
+        selectedTextOverlayID = nil
+        selectedClipID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        selectedAdjustmentLayerID = nil
+        isTextEditorPresented = false
+        selectedTool = .graphics
+    }
+
+    func beginGraphicEdit() {
+        if graphicEditUndoSnapshot == nil { graphicEditUndoSnapshot = currentSnapshot() }
+    }
+
+    func updateSelectedGraphic(_ mutation: (inout EditorGraphicOverlay) -> Void) {
+        guard let id = selectedGraphicOverlayID,
+              let index = graphicOverlays.firstIndex(where: { $0.id == id }) else { return }
+        beginGraphicEdit()
+        mutation(&graphicOverlays[index])
+        graphicOverlays[index].size = min(max(graphicOverlays[index].size, 32), 420)
+        graphicOverlays[index].scale = min(max(graphicOverlays[index].scale, 0.15), 6)
+        graphicOverlays[index].opacity = min(max(graphicOverlays[index].opacity, 0), 1)
+    }
+
+    func commitGraphicEdit() {
+        guard let before = graphicEditUndoSnapshot else { return }
+        graphicEditUndoSnapshot = nil
+        graphicDragOrigin = nil
+        if before != currentSnapshot() {
+            undoManager.pushUndoState(before)
+            refreshUndoState()
+            scheduleSave()
+        }
+    }
+
+    func beginGraphicPositionDrag(id: UUID) {
+        guard let graphic = graphicOverlays.first(where: { $0.id == id }) else { return }
+        beginGraphicEdit()
+        graphicDragOrigin = (graphic.xOffset, graphic.yOffset)
+    }
+
+    func updateGraphicPositionDrag(id: UUID, translation: CGSize, canvasScale: CGFloat) {
+        guard canvasScale > 0, let origin = graphicDragOrigin,
+              let index = graphicOverlays.firstIndex(where: { $0.id == id }) else { return }
+        graphicOverlays[index].xOffset = origin.x + translation.width / canvasScale
+        graphicOverlays[index].yOffset = origin.y + translation.height / canvasScale
+    }
+
+    func duplicateSelectedGraphic() {
+        guard var copy = selectedGraphicOverlay else { return }
+        registerUndoIfNeeded()
+        copy.id = UUID()
+        copy.title += " Copy"
+        copy.xOffset += 18
+        copy.yOffset += 18
+        graphicOverlays.append(copy)
+        selectedGraphicOverlayID = copy.id
+        scheduleSave()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    func deleteSelectedGraphic() {
+        guard let id = selectedGraphicOverlayID else { return }
+        registerUndoIfNeeded()
+        let removed = graphicOverlays.first { $0.id == id }
+        graphicOverlays.removeAll { $0.id == id }
+        selectedGraphicOverlayID = nil
+        if case let .image(path)? = removed?.source,
+           !graphicOverlays.contains(where: { $0.source == .image(path: path) }),
+           !EditorGraphicFavoritesStore.ids.contains(EditorGraphicSource.image(path: path).catalogID) {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        scheduleSave()
+    }
+
+    func updateGraphicTimeRange(id: UUID, start: TimeInterval, end: TimeInterval) {
+        guard let index = graphicOverlays.firstIndex(where: { $0.id == id }) else { return }
+        beginGraphicEdit()
+        let minimum = 0.1
+        graphicOverlays[index].startTime = min(max(0, start), max(0, end - minimum))
+        graphicOverlays[index].endTime = min(totalDuration, max(end, start + minimum))
+    }
+
+    func moveGraphicOnTimeline(id: UUID, startTime: TimeInterval) {
+        guard let index = graphicOverlays.firstIndex(where: { $0.id == id }) else { return }
+        beginGraphicEdit()
+        let duration = graphicOverlays[index].duration
+        let start = min(max(0, startTime), max(0, totalDuration - duration))
+        graphicOverlays[index].startTime = start
+        graphicOverlays[index].endTime = start + duration
     }
 
     func updateTextOverlay(_ overlay: EditorTextOverlay) {
@@ -6295,6 +6498,7 @@ final class EditorViewModel {
             do {
                 let clipsSnapshot = clips
                 let textOverlaysSnapshot = textOverlays
+                let graphicOverlaysSnapshot = graphicOverlays
                 let audioClipsSnapshot = audioClips
                 let overlayClipsSnapshot = overlayClips
                 let adjustmentLayersSnapshot = adjustmentLayers
@@ -6310,6 +6514,7 @@ final class EditorViewModel {
                 let url = try await EditorExportService.export(
                     clips: clipsSnapshot,
                     textOverlays: textOverlaysSnapshot,
+                    graphicOverlays: graphicOverlaysSnapshot,
                     audioClips: audioClipsSnapshot,
                     overlayClips: overlayClipsSnapshot,
                     adjustmentLayers: adjustmentLayersSnapshot,
@@ -6382,6 +6587,7 @@ final class EditorViewModel {
             isPlaying = true
             Task {
                 await ensureCompositionPlayer(resumePlaying: true)
+                guard !isCopilotPreviewDiscarded else { return }
                 startPlaybackTicking()
             }
         }
@@ -6417,13 +6623,1019 @@ final class EditorViewModel {
         scheduleSave()
     }
 
+    // MARK: Proxy and render cache
+
+    func saveCurrentProjectAsTemplate(named name: String) async throws -> EditorProjectTemplate {
+        let template = try await EditorTemplateStore.shared.save(project: makeProject(), name: name)
+        templateStatusMessage = "Saved “\(template.name)” with \(template.slots.count) replaceable slots."
+        return template
+    }
+
+    func applyTemplate(_ template: EditorProjectTemplate) throws {
+        registerUndoIfNeeded()
+        pausePlaybackForEdit()
+        var project = try EditorTemplateStore.shared.materializedProject(
+            from: template,
+            destinationProjectID: projectID
+        )
+        let primaryAssets = clips.map(\.asset)
+        let overlayAssets = overlayClips.map(\.asset)
+        let primarySlots = template.slots.filter { $0.role == .primary }
+            .sorted { $0.order < $1.order }
+        let overlaySlots = template.slots.filter { $0.role == .overlay }
+            .sorted { $0.order < $1.order }
+
+        for index in project.clips.indices where primaryAssets.indices.contains(index) {
+            let targetDuration = primarySlots.first {
+                $0.itemID == project.clips[index].id
+            }?.targetDuration
+            rebindTemplatePrimary(
+                &project.clips[index],
+                to: primaryAssets[index],
+                targetDuration: targetDuration
+            )
+        }
+        for index in project.overlayClips.indices where overlayAssets.indices.contains(index) {
+            let targetDuration = overlaySlots.first {
+                $0.itemID == project.overlayClips[index].id
+            }?.targetDuration
+            rebindTemplateOverlay(
+                &project.overlayClips[index],
+                to: overlayAssets[index],
+                targetDuration: targetDuration
+            )
+        }
+
+        clips = EditorProjectResolver.clips(from: project.clips)
+        overlayClips = EditorProjectResolver.overlayClips(from: project.overlayClips)
+        textOverlays = project.textOverlays.map { $0.toOverlay() }
+        graphicOverlays = project.graphicOverlays.filter { overlay in
+            if case let .image(path) = overlay.source {
+                return FileManager.default.fileExists(atPath: path)
+            }
+            return true
+        }
+        audioClips = project.audioClips.compactMap { $0.toAudioClip() }
+        adjustmentLayers = project.adjustmentLayers
+        openingTransitionKind = project.openingTransitionKind
+        openingTransitionDuration = project.openingTransitionDuration
+        closingTransitionKind = project.closingTransitionKind
+        closingTransitionDuration = project.closingTransitionDuration
+        canvasSettings = project.canvasSettings
+        exportInPoint = project.exportInPoint
+        exportOutPoint = project.exportOutPoint
+        audioTrackSettings = project.audioTrackSettings
+        masterVolume = project.masterVolume
+        sequences = project.sequences
+        markers = project.markers
+        selectedTimelineItems = []
+        selectedSequenceID = nil
+        activeSequenceID = nil
+        isMultiSelectMode = false
+        selectedClipID = clips.first?.id
+        selectedTextOverlayID = nil
+        selectedGraphicOverlayID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        selectedAdjustmentLayerID = nil
+        selectedVisualEffectID = nil
+        timelinePosition = 0
+        selectedTool = nil
+        normalizeExportRange()
+        pruneSequenceStructure()
+        invalidateComposition()
+        scheduleSave()
+        refreshUndoState()
+        templateStatusMessage = "Applied “\(template.name)”. Your media filled slots in timeline order."
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task { await alignPlaybackToTimeline() }
+    }
+
+    private func rebindTemplatePrimary(
+        _ saved: inout SavedEditorClip,
+        to asset: PHAsset,
+        targetDuration: TimeInterval?
+    ) {
+        let oldSourceSpan = max(0.05, saved.trimEnd - saved.trimStart)
+        let target = max(0.05, targetDuration ?? oldSourceSpan / TimeInterval(max(saved.speed, 0.01)))
+        let rawDuration = asset.mediaType == .video ? asset.duration : EditorClip.photoDefaultDuration
+        let sourceSpan = min(rawDuration, oldSourceSpan)
+        saved.assetLocalIdentifier = asset.localIdentifier
+        saved.originalDuration = rawDuration
+        saved.trimStart = 0
+        saved.trimEnd = sourceSpan
+        if asset.mediaType != .video || sourceSpan + 0.001 < oldSourceSpan {
+            saved.speedRamp = nil
+            saved.playback = .forward
+            saved.speed = Float(max(0.05, sourceSpan / target))
+            saved.motionTracks = []
+            saved.stabilization = .disabled
+        }
+    }
+
+    private func rebindTemplateOverlay(
+        _ saved: inout SavedOverlayClip,
+        to asset: PHAsset,
+        targetDuration: TimeInterval?
+    ) {
+        let oldSourceSpan = max(0.05, saved.trimEnd - saved.trimStart)
+        let target = max(0.05, targetDuration ?? oldSourceSpan / TimeInterval(max(saved.speed, 0.01)))
+        let rawDuration = asset.mediaType == .video ? asset.duration : EditorClip.photoDefaultDuration
+        let sourceSpan = min(rawDuration, oldSourceSpan)
+        saved.assetLocalIdentifier = asset.localIdentifier
+        saved.originalDuration = rawDuration
+        saved.trimStart = 0
+        saved.trimEnd = sourceSpan
+        if asset.mediaType != .video || sourceSpan + 0.001 < oldSourceSpan {
+            saved.playback = .forward
+            saved.speed = Float(max(0.05, sourceSpan / target))
+            saved.motionTracks = []
+            saved.stabilization = .disabled
+        }
+    }
+
+    func setProxyEnabled(_ enabled: Bool) {
+        guard proxySettings.isEnabled != enabled else { return }
+        proxySettings.isEnabled = enabled
+        if !enabled {
+            proxyGenerationTask?.cancel()
+            Task { await EditorMediaCache.shared.cancelWork() }
+        }
+        compositionFingerprint = nil
+        scheduleSave()
+        if enabled && proxySettings.automaticallyGenerate { generateMissingProxies() }
+    }
+
+    func setAutomaticProxyGeneration(_ enabled: Bool) {
+        proxySettings.automaticallyGenerate = enabled
+        scheduleSave()
+        if enabled && proxySettings.isEnabled { generateMissingProxies() }
+    }
+
+    func setBackgroundRenderCache(_ enabled: Bool) {
+        proxySettings.backgroundRenderCache = enabled
+        renderCacheTask?.cancel()
+        compositionFingerprint = nil
+        scheduleSave()
+        if enabled { scheduleBackgroundRenderCache(delay: .milliseconds(250)) }
+    }
+
+    func setProxyQuality(_ quality: EditorProxyQuality) {
+        guard proxySettings.quality != quality else { return }
+        proxySettings.quality = quality
+        compositionFingerprint = nil
+        scheduleSave()
+        if proxySettings.isEnabled && proxySettings.automaticallyGenerate { generateMissingProxies() }
+    }
+
+    func setMediaCacheBudgetMB(_ megabytes: Int) {
+        proxySettings.cacheBudgetMB = min(max(megabytes, 256), 16_384)
+        scheduleSave()
+    }
+
+    func generateMissingProxies() {
+        proxyGenerationTask?.cancel()
+        let quality = proxySettings.quality
+        let budget = proxySettings.cacheBudgetMB
+        var assetsByIdentifier: [String: PHAsset] = [:]
+        for clip in clips where clip.isVideo {
+            assetsByIdentifier[clip.asset.localIdentifier] = clip.asset
+        }
+        for overlay in overlayClips where overlay.asset.mediaType == .video {
+            assetsByIdentifier[overlay.asset.localIdentifier] = overlay.asset
+        }
+        let assets = assetsByIdentifier.values.sorted {
+            $0.localIdentifier < $1.localIdentifier
+        }
+        guard !assets.isEmpty else {
+            cacheStatusMessage = "No video media needs a proxy."
+            return
+        }
+
+        proxyGenerationTask = Task {
+            proxyGenerationProgress = 0
+            cacheStatusMessage = "Preparing performance media…"
+            var completed = 0
+            var generated = 0
+            do {
+                for asset in assets {
+                    try Task.checkCancellation()
+                    if EditorMediaCache.cachedProxyURL(for: asset, quality: quality) == nil {
+                        _ = try await EditorMediaCache.shared.generateProxy(
+                            for: asset,
+                            quality: quality,
+                            budgetMB: budget
+                        )
+                        generated += 1
+                    }
+                    completed += 1
+                    proxyGenerationProgress = Double(completed) / Double(assets.count)
+                }
+                compositionFingerprint = nil
+                cacheStatusMessage = generated == 0
+                    ? "Performance media is already ready."
+                    : "Generated \(generated) \(generated == 1 ? "proxy" : "proxies")."
+                await refreshMediaCacheStats()
+                scheduleBackgroundRenderCache(delay: .milliseconds(250))
+            } catch is CancellationError {
+                cacheStatusMessage = "Proxy generation cancelled."
+            } catch {
+                cacheStatusMessage = error.localizedDescription
+            }
+            proxyGenerationProgress = nil
+        }
+    }
+
+    func buildRenderCacheNow() {
+        scheduleBackgroundRenderCache(delay: .zero, userInitiated: true)
+    }
+
+    func clearProxyCache() {
+        proxyGenerationTask?.cancel()
+        Task {
+            await EditorMediaCache.shared.clearProxies()
+            compositionFingerprint = nil
+            cacheStatusMessage = "Proxy cache cleared. Originals are untouched."
+            await refreshMediaCacheStats()
+        }
+    }
+
+    func clearRenderCache() {
+        renderCacheTask?.cancel()
+        Task {
+            await EditorMediaCache.shared.clearRenders()
+            compositionFingerprint = nil
+            isBuildingRenderCache = false
+            cacheStatusMessage = "Preview render cache cleared."
+            await refreshMediaCacheStats()
+        }
+    }
+
+    func refreshMediaCacheStats() async {
+        mediaCacheStats = await EditorMediaCache.shared.stats()
+    }
+
+    private func scheduleBackgroundRenderCache(
+        delay: Duration = .seconds(3),
+        userInitiated: Bool = false
+    ) {
+        guard !isCopilotPreview else { return }
+        renderCacheTask?.cancel()
+        guard proxySettings.backgroundRenderCache, !clips.isEmpty else { return }
+        let fingerprint = renderCacheFingerprint()
+        if EditorMediaCache.cachedRenderURL(for: fingerprint) != nil {
+            Task { await refreshMediaCacheStats() }
+            return
+        }
+        let settings = proxySettings
+        let clipsSnapshot = clips
+        let graphicOverlaysSnapshot = graphicOverlays
+        let audioClipsSnapshot = audioClips
+        let overlayClipsSnapshot = overlayClips
+        let adjustmentLayersSnapshot = adjustmentLayers
+        let openingKindSnapshot = openingTransitionKind
+        let openingDurationSnapshot = openingTransitionDuration
+        let closingKindSnapshot = closingTransitionKind
+        let closingDurationSnapshot = closingTransitionDuration
+        let canvasSnapshot = canvasSettings
+        let audioTrackSettingsSnapshot = audioTrackSettings
+        let masterVolumeSnapshot = masterVolume
+
+        renderCacheTask = Task(priority: userInitiated ? .userInitiated : .utility) {
+            do {
+                try await Task.sleep(for: delay)
+                try Task.checkCancellation()
+                guard fingerprint == renderCacheFingerprint() else { return }
+                isBuildingRenderCache = true
+                cacheStatusMessage = "Rendering smooth playback cache…"
+                guard let built = await EditorCompositionBuilder.build(
+                    from: clipsSnapshot,
+                    graphicOverlays: graphicOverlaysSnapshot,
+                    audioClips: audioClipsSnapshot,
+                    overlayClips: overlayClipsSnapshot,
+                    adjustmentLayers: adjustmentLayersSnapshot,
+                    openingTransitionKind: openingKindSnapshot,
+                    openingTransitionDuration: openingDurationSnapshot,
+                    closingTransitionKind: closingKindSnapshot,
+                    closingTransitionDuration: closingDurationSnapshot,
+                    canvasSettings: canvasSnapshot,
+                    canvasSize: canvasSnapshot.renderSize(longEdge: 960),
+                    proxySettings: settings,
+                    audioTrackSettings: audioTrackSettingsSnapshot,
+                    masterVolume: masterVolumeSnapshot
+                ) else { throw EditorMediaCacheError.cannotCreateExporter }
+                _ = try await EditorMediaCache.shared.generateRender(
+                    built: built,
+                    fingerprint: fingerprint,
+                    budgetMB: settings.cacheBudgetMB
+                )
+                guard fingerprint == renderCacheFingerprint() else { return }
+                compositionFingerprint = nil
+                cacheStatusMessage = "Smooth playback cache is ready."
+                await refreshMediaCacheStats()
+            } catch is CancellationError {
+                // Normal while edits are still arriving; the latest edit schedules a replacement.
+            } catch {
+                cacheStatusMessage = error.localizedDescription
+            }
+            isBuildingRenderCache = false
+        }
+    }
+
+    // MARK: Copilot transactions
+
+    var copilotRestriction: String? {
+        if let reason = EditorCopilotService.unavailableReason { return reason }
+        guard !clips.isEmpty else {
+            return "Add a clip before using MixPilot."
+        }
+        guard !isTranscribingCaptions, reverseGenerationProgress == nil, !isExporting,
+              !isTrackingSubject, colorMaskTrackingDirection == nil,
+              stabilizationAnalysisProgress == nil else {
+            return "Wait for the current editor operation to finish before using MixPilot."
+        }
+        return nil
+    }
+
+    var copilotHighlightRestriction: String? {
+        if let reason = copilotRestriction { return reason }
+        guard clips.allSatisfy({ $0.isVideo }) else {
+            return "Highlight reels need a spoken-video timeline. Photo montages can still use MixPilot for effects, keyframes, and text."
+        }
+        guard audioClips.isEmpty, overlayClips.isEmpty, graphicOverlays.isEmpty,
+              adjustmentLayers.isEmpty, sequences.isEmpty, markers.isEmpty,
+              textOverlays.allSatisfy({ $0.isCaption }) else {
+            return "Highlight reels currently work on primary video clips and captions. Apply them before adding music, overlays, graphics, adjustment layers, sequences, or markers — or ask MixPilot for a timeline edit instead."
+        }
+        guard openingTransitionKind == .none, closingTransitionKind == .none,
+              clips.allSatisfy({ $0.transitionKind == .none && $0.speedRamp == nil
+                && !$0.playback.isReverse && $0.isAudioLinked }) else {
+            return "Highlight reels currently need a simple spoken-video timeline. Use MixPilot for effects and keyframes on this project, or extract highlights before adding transitions, speed ramps, reverse playback, or unlinked dialogue."
+        }
+        return nil
+    }
+
+    var hasCopilotDraft: Bool { copilotPlan != nil || copilotEditPlan != nil }
+
+    func revealPlayheadInTimeline() {
+        timelineRevealNonce += 1
+    }
+
+    /// Ignore selection and playhead changes when checking whether a draft is stale.
+    private func copilotComparableSnapshot() -> EditorTimelineSnapshot {
+        var snapshot = currentSnapshot()
+        snapshot.timelinePosition = 0
+        snapshot.selectedClipID = nil
+        snapshot.selectedTextOverlayID = nil
+        snapshot.selectedGraphicOverlayID = nil
+        snapshot.selectedAudioClipID = nil
+        snapshot.selectedOverlayClipID = nil
+        snapshot.selectedTimelineItems = []
+        snapshot.selectedSequenceID = nil
+        snapshot.activeSequenceID = nil
+        return snapshot
+    }
+
+    func generateCopilot(prompt: String, target: Int, captions: Bool, locale: String?) {
+        cancelCopilot()
+        copilotError = nil
+        guard copilotRestriction == nil else { copilotError = copilotRestriction; return }
+        copilotRestoreTime = min(max(0, timelinePosition), max(totalDuration, 0))
+        let source = copilotComparableSnapshot()
+        let context = copilotTimelineContext(from: source)
+        pausePlaybackForEdit()
+        let jobID = UUID()
+        copilotJobID = jobID
+        isCopilotWorking = true
+        copilotStatus = "Preparing on-device analysis…"
+        copilotTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.copilotJobID == jobID {
+                    self.isCopilotWorking = false
+                    self.copilotTask = nil
+                }
+            }
+            do {
+                let kind = try await EditorCopilotService.interpret(
+                    prompt: prompt, target: target, captions: captions, context: context,
+                    progress: { [weak self] message in
+                        guard self?.copilotJobID == jobID else { return }
+                        self?.copilotStatus = message
+                    })
+                try Task.checkCancellation()
+                guard self.copilotJobID == jobID else { return }
+                switch kind {
+                case .highlights(let duration, let wantsCaptions):
+                    if let reason = self.copilotHighlightRestriction {
+                        throw EditorCopilotError.message(reason)
+                    }
+                    let duration = try EditorCopilotPlan.resolvedDuration(
+                        duration, sourceDuration: context.duration
+                    )
+                    let transcript = try await self.copilotTranscript(
+                        source: source, locale: locale, jobID: jobID,
+                        highlightSampleTarget: Double(duration)
+                    )
+                    let plan = try await EditorCopilotService.plan(
+                        prompt: prompt, target: duration, captions: wantsCaptions,
+                        transcript: transcript, duration: context.duration,
+                        progress: { [weak self] message in
+                            guard self?.copilotJobID == jobID else { return }
+                            self?.copilotStatus = message
+                        },
+                        skipIntent: true
+                    )
+                    try Task.checkCancellation()
+                    guard self.copilotJobID == jobID else { return }
+                    guard self.copilotComparableSnapshot() == source else {
+                        throw EditorCopilotError.message("The timeline changed during analysis. Generate a new draft.")
+                    }
+                    let draft = try self.makeCopilotDraft(source: source, plan: plan, transcript: transcript)
+                    try await self.publishCopilotDraft(
+                        source: source, draft: draft, plan: plan, editPlan: nil,
+                        seekTo: 0, jobID: jobID,
+                        readyMessage: "Draft ready. Review the cuts before applying."
+                    )
+                case .excerpt(let start, let end, let wantsCaptions):
+                    if let reason = self.copilotHighlightRestriction {
+                        throw EditorCopilotError.message(reason)
+                    }
+                    let plan = try EditorCopilotPlan.contiguousExcerpt(
+                        start: start, end: end, sourceDuration: context.duration,
+                        addsCaptions: wantsCaptions
+                    )
+                    var transcript = EditorCaptionTranscriptResult(words: [], localeIdentifier: locale ?? "")
+                    if wantsCaptions {
+                        transcript = try await self.copilotTranscript(
+                            source: source, locale: locale, jobID: jobID,
+                            timeRange: start...end
+                        )
+                    }
+                    let draft = try self.makeCopilotDraft(source: source, plan: plan, transcript: transcript)
+                    try await self.publishCopilotDraft(
+                        source: source, draft: draft, plan: plan, editPlan: nil,
+                        seekTo: 0, jobID: jobID,
+                        readyMessage: "Draft ready. Review the excerpt before applying."
+                    )
+                case .edits:
+                    let editPlan = try await EditorCopilotService.planEdits(
+                        prompt: prompt, context: context,
+                        progress: { [weak self] message in
+                            guard self?.copilotJobID == jobID else { return }
+                            self?.copilotStatus = message
+                        })
+                    try Task.checkCancellation()
+                    guard self.copilotJobID == jobID else { return }
+                    guard self.copilotComparableSnapshot() == source else {
+                        throw EditorCopilotError.message("The timeline changed during analysis. Generate a new draft.")
+                    }
+                    var transcript: EditorCaptionTranscriptResult?
+                    if editPlan.needsTranscript {
+                        transcript = try await self.copilotTranscript(
+                            source: source, locale: locale, jobID: jobID
+                        )
+                    }
+                    let draft = try self.makeCopilotEditDraft(
+                        source: source, plan: editPlan, transcript: transcript
+                    )
+                    try await self.publishCopilotDraft(
+                        source: source, draft: draft, plan: nil, editPlan: editPlan,
+                        seekTo: self.copilotRestoreTime,
+                        jobID: jobID,
+                        readyMessage: "Draft ready. Review the changes before applying."
+                    )
+                case .unsupported(let message):
+                    throw EditorCopilotError.message(message)
+                }
+            } catch is CancellationError {
+                if self.copilotJobID == jobID { self.discardCopilotDraft() }
+            } catch {
+                guard self.copilotJobID == jobID else { return }
+                self.discardCopilotDraft()
+                self.copilotStatus = nil
+                self.copilotError = error.localizedDescription
+            }
+        }
+    }
+
+    private func copilotTimelineContext(from source: EditorTimelineSnapshot) -> EditorCopilotTimelineContext {
+        let duration = max(source.clips.reduce(0) { $0 + $1.duration }, 0.001)
+        var offset = 0.0
+        var lines: [String] = []
+        for (index, clip) in source.clips.enumerated() {
+            let end = offset + clip.duration
+            lines.append(
+                "Clip \(index + 1): \(String(format: "%.2f", offset))–\(String(format: "%.2f", end))s \(clip.isVideo ? "video" : "photo")"
+            )
+            offset = end
+        }
+        let selected: String
+        if let id = selectedClipID, let index = source.clips.firstIndex(where: { $0.id == id }) {
+            let start = source.clips.prefix(index).reduce(0) { $0 + $1.duration }
+            selected = "primary clip \(index + 1) \(String(format: "%.2f", start))–\(String(format: "%.2f", start + source.clips[index].duration))s"
+        } else {
+            selected = "none"
+        }
+        return EditorCopilotTimelineContext(
+            duration: duration,
+            playhead: min(max(0, timelinePosition), duration),
+            clipSummary: lines.joined(separator: "\n"),
+            selectedRange: selected,
+            hasMusic: !source.audioClips.isEmpty,
+            hasCaptions: source.textOverlays.contains(where: \.isCaption)
+        )
+    }
+
+    private func copilotTranscript(
+        source: EditorTimelineSnapshot, locale: String?, jobID: UUID,
+        timeRange: ClosedRange<TimeInterval>? = nil,
+        highlightSampleTarget: TimeInterval? = nil
+    ) async throws -> EditorCaptionTranscriptResult {
+        let canReuseFullTranscript = timeRange == nil
+            && copilotTranscriptSource == source
+            && copilotTranscriptLocale == locale
+        if canReuseFullTranscript, let cached = copilotTranscript {
+            return cached
+        }
+        do {
+            let transcript = try await EditorCaptionService.transcribe(
+                clips: source.clips, audioClips: [], overlayClips: [],
+                audioTrackSettings: [:], masterVolume: 1,
+                requestedLocaleIdentifier: locale, source: .video,
+                requiresOnDeviceRecognition: true,
+                timeRange: timeRange,
+                highlightSampleTarget: highlightSampleTarget,
+                onProgress: { [weak self] message in
+                    guard self?.copilotJobID == jobID else { return }
+                    self?.copilotStatus = message
+                })
+            try Task.checkCancellation()
+            guard copilotJobID == jobID else {
+                throw CancellationError()
+            }
+            if timeRange == nil {
+                copilotTranscript = transcript
+                copilotTranscriptSource = source
+                copilotTranscriptLocale = locale
+            }
+            return transcript
+        } catch let error as EditorCaptionError {
+            switch error {
+            case .noSpeech:
+                throw EditorCopilotError.message(
+                    "No speech was recognized on this device. Choose the spoken language. For a long webinar, MixPilot samples spoken sections and does not upload audio."
+                )
+            case .silentAudio, .noAudioTrack:
+                throw EditorCopilotError.message(
+                    "No usable speech audio was found on the video track. Check that the webinar has embedded dialogue."
+                )
+            default:
+                throw EditorCopilotError.message(error.localizedDescription)
+            }
+        }
+    }
+
+    private func publishCopilotDraft(
+        source: EditorTimelineSnapshot,
+        draft: EditorTimelineSnapshot,
+        plan: EditorCopilotPlan?,
+        editPlan: EditorCopilotEditPlan?,
+        seekTo: TimeInterval,
+        jobID: UUID,
+        readyMessage: String
+    ) async throws {
+        let preview = EditorViewModel(project: makeProject())
+        preview.isCopilotPreview = true
+        preview.applySnapshot(draft)
+        preview.timelinePosition = min(max(0, seekTo), preview.totalDuration)
+        copilotPreview = preview
+        copilotSource = source
+        copilotDraft = draft
+        copilotPlan = plan
+        copilotEditPlan = editPlan
+        copilotStatus = "Preparing preview…"
+        await preview.alignPlaybackToTimeline()
+        try Task.checkCancellation()
+        guard copilotJobID == jobID else { throw CancellationError() }
+        guard preview.player?.currentItem != nil else {
+            throw EditorCopilotError.message("The preview could not load. Check that the source videos are available and try again.")
+        }
+        copilotStatus = readyMessage
+    }
+
+    private func makeCopilotDraft(source: EditorTimelineSnapshot, plan: EditorCopilotPlan,
+                                  transcript: EditorCaptionTranscriptResult) throws -> EditorTimelineSnapshot {
+        var draft = source
+        var assembled: [EditorClip] = []
+        var words: [EditorCaptionWord] = []
+        for slice in try plan.clipSlices(durations: source.clips.map(\.duration)) {
+            var piece = source.clips[slice.clipIndex]
+            if slice.end < piece.duration - 0.000_001 {
+                guard let split = piece.split(atTimelineTime: slice.end) else {
+                    throw EditorCopilotError.message("A cut is too close to a clip boundary. Try another selection.")
+                }
+                piece = split.left
+            }
+            if slice.start > 0.000_001 {
+                guard let split = piece.split(atTimelineTime: slice.start) else {
+                    throw EditorCopilotError.message("A selected section is too short to cut safely. Try another selection.")
+                }
+                piece = split.right
+            }
+            assembled.append(piece)
+        }
+        for word in transcript.words {
+            guard let range = plan.mappedWordRange(start: word.startTime, end: word.endTime) else { continue }
+            words.append(EditorCaptionWord(text: word.text, startTime: range.lowerBound,
+                endTime: range.upperBound, confidence: word.confidence))
+        }
+        guard !assembled.isEmpty, Set(assembled.map(\.id)).count == assembled.count,
+              abs(assembled.reduce(0) { $0 + $1.duration } - plan.duration) < 0.05 else {
+            throw EditorCopilotError.message("The selected ranges could not be assembled accurately. The timeline was not changed.")
+        }
+        draft.clips = assembled
+        draft.textOverlays = plan.addsCaptions ? EditorCaptionService.makeCaptionOverlays(
+            from: .init(words: words, localeIdentifier: transcript.localeIdentifier)) : []
+        draft.exportInPoint = nil
+        draft.exportOutPoint = nil
+        return draft
+    }
+
+    private func makeCopilotEditDraft(
+        source: EditorTimelineSnapshot,
+        plan: EditorCopilotEditPlan,
+        transcript: EditorCaptionTranscriptResult?
+    ) throws -> EditorTimelineSnapshot {
+        var draft = source
+        for operation in plan.operations {
+            try applyCopilotEdit(operation, to: &draft, transcript: transcript)
+        }
+        let restore = copilotRestoreTime
+        let timeline = draft.clips.reduce(0) { $0 + $1.duration }
+        draft.timelinePosition = min(max(0, restore), max(timeline, 0))
+        return draft
+    }
+
+    private func applyCopilotEdit(
+        _ operation: EditorCopilotEditOperation,
+        to draft: inout EditorTimelineSnapshot,
+        transcript: EditorCaptionTranscriptResult?
+    ) throws {
+        switch operation.kind {
+        case .addEffect:
+            guard let name = operation.effect,
+                  let kind = EditorVisualEffectKind(rawValue: name) else {
+                throw EditorCopilotError.message("That effect is not available. No changes were applied.")
+            }
+            var effect = EditorVisualEffect(kind: kind, amount: operation.amount)
+            effect.amountKeyframes = copilotAmountTrack(
+                duration: operation.duration,
+                amount: operation.amount,
+                fadeIn: operation.fadeIn,
+                fadeOut: operation.fadeOut
+            )
+            let layer = EditorAdjustmentLayer(
+                title: kind.title,
+                startTime: operation.start,
+                endTime: operation.end,
+                zIndex: (draft.adjustmentLayers.map(\.zIndex).max() ?? -1) + 1,
+                effects: [effect]
+            )
+            draft.adjustmentLayers.append(layer)
+        case .addKeyframe:
+            guard let name = operation.property,
+                  let property = EditorKeyframeProperty(rawValue: name) else {
+                throw EditorCopilotError.message("That keyframe property is not available. No changes were applied.")
+            }
+            try upsertCopilotClipKeyframes(
+                property: property,
+                start: operation.start,
+                end: operation.end,
+                amount: operation.amount,
+                fadeIn: operation.fadeIn,
+                fadeOut: operation.fadeOut,
+                in: &draft.clips
+            )
+        case .setVolume:
+            if operation.fadeIn || operation.fadeOut {
+                try upsertCopilotClipKeyframes(
+                    property: .volume,
+                    start: operation.start,
+                    end: max(operation.end, operation.start + 1),
+                    amount: operation.amount,
+                    fadeIn: operation.fadeIn,
+                    fadeOut: operation.fadeOut,
+                    in: &draft.clips
+                )
+            } else if let index = copilotClipIndex(at: operation.start, clips: draft.clips)?.index {
+                draft.clips[index].volume = Float(min(max(operation.amount, 0), 1))
+            } else {
+                throw EditorCopilotError.message("No clip is available at that time to change volume.")
+            }
+        case .addText:
+            let overlay = EditorTextOverlay(
+                text: operation.text ?? "Text",
+                startTime: operation.start,
+                endTime: operation.end,
+                opacity: operation.amount
+            )
+            draft.textOverlays.append(overlay)
+        case .addMarker:
+            let name = operation.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var number = 1
+            let existing = Set(draft.markers.map(\.name))
+            var resolved = (name?.isEmpty == false) ? name! : "MixPilot"
+            if existing.contains(resolved) {
+                while existing.contains("\(resolved) \(number)") { number += 1 }
+                resolved = "\(resolved) \(number)"
+            }
+            draft.markers.append(EditorTimelineMarker(name: resolved, time: operation.start))
+            draft.markers.sort { $0.time < $1.time }
+        case .addCaptions:
+            guard let transcript else {
+                throw EditorCopilotError.message("Captions need an on-device transcript. Choose a spoken language and try again.")
+            }
+            let captions = EditorCaptionService.makeCaptionOverlays(from: transcript)
+            draft.textOverlays = draft.textOverlays.filter { !$0.isCaption } + captions
+        case .addTransition:
+            try applyCopilotTransition(
+                at: operation.start,
+                kindName: operation.effect ?? "fade",
+                duration: operation.amount,
+                to: &draft
+            )
+        case .split:
+            try applyCopilotSplit(at: operation.start, to: &draft)
+        case .setSpeed:
+            try mutateCopilotClip(at: operation.start, in: &draft) { clip in
+                clip.speed = Float(min(max(operation.amount, 0.25), 3))
+                clip.speedRamp = nil
+            }
+        case .crop:
+            let aspect = EditorCropAspect(rawValue: operation.effect ?? "vertical") ?? .vertical
+            try mutateCopilotClip(at: operation.start, in: &draft) { clip in
+                clip.cropAspect = aspect
+            }
+        case .rotate:
+            let turns = Int(operation.amount)
+            try mutateCopilotClip(at: operation.start, in: &draft) { clip in
+                clip.rotationQuarterTurns = (clip.rotationQuarterTurns + turns) % 4
+            }
+        case .flip:
+            let vertical = operation.text == "vertical"
+            try mutateCopilotClip(at: operation.start, in: &draft) { clip in
+                if vertical { clip.isFlippedVertically.toggle() }
+                else { clip.isFlippedHorizontally.toggle() }
+            }
+        case .setFilter:
+            let preset = EditorFilterPreset(rawValue: operation.effect ?? "cinematic") ?? .cinematic
+            try mutateCopilotClip(at: operation.start, in: &draft) { clip in
+                clip.colorAdjustment.preset = preset
+                clip.colorAdjustment.presetIntensity = min(max(operation.amount, 0.1), 1)
+            }
+        }
+    }
+
+    private func mutateCopilotClip(
+        at time: Double,
+        in draft: inout EditorTimelineSnapshot,
+        _ body: (inout EditorClip) -> Void
+    ) throws {
+        guard let hit = copilotClipIndex(at: time, clips: draft.clips) else {
+            throw EditorCopilotError.message("No clip is available at the playhead for that edit.")
+        }
+        body(&draft.clips[hit.index])
+    }
+
+    private func applyCopilotSplit(at time: Double, to draft: inout EditorTimelineSnapshot) throws {
+        guard let hit = copilotClipIndex(at: time, clips: draft.clips) else {
+            throw EditorCopilotError.message("No clip is available at the playhead to split.")
+        }
+        let atStart = hit.local <= 0.12
+        let atEnd = hit.duration - hit.local <= 0.12
+        if atStart || atEnd {
+            let alreadyCut = (atStart && hit.index > 0)
+                || (atEnd && hit.index < draft.clips.count - 1)
+            if alreadyCut { return }
+            throw EditorCopilotError.message("The playhead is too close to a clip edge to split. Nudge it and try again.")
+        }
+        guard let parts = draft.clips[hit.index].split(atTimelineTime: hit.local) else {
+            throw EditorCopilotError.message("That cut is too close to a clip boundary to split safely.")
+        }
+        draft.clips.replaceSubrange(hit.index...hit.index, with: [parts.left, parts.right])
+    }
+
+    private func applyCopilotTransition(
+        at time: Double,
+        kindName: String,
+        duration: Double,
+        to draft: inout EditorTimelineSnapshot
+    ) throws {
+        let kind = EditorTransitionKind(rawValue: kindName) ?? .fade
+        let fade = min(max(duration, 0.1), 2)
+        let timeline = draft.clips.reduce(0) { $0 + $1.duration }
+        if time <= 0.12 || draft.clips.count == 1 && time < 0.25 {
+            guard let first = draft.clips.first, first.duration > 0.3 else {
+                throw EditorCopilotError.message("There is not enough footage for an opening fade.")
+            }
+            draft.openingTransitionKind = kind
+            draft.openingTransitionDuration = min(fade, min(2, first.duration))
+            return
+        }
+        if time >= timeline - 0.12 {
+            guard let last = draft.clips.last, last.duration > 0.3 else {
+                throw EditorCopilotError.message("There is not enough footage for a closing fade.")
+            }
+            draft.closingTransitionKind = kind
+            draft.closingTransitionDuration = min(fade, min(2, last.duration))
+            return
+        }
+        guard let hit = copilotClipIndex(at: time, clips: draft.clips) else {
+            throw EditorCopilotError.message("No clip is available at the playhead for a transition.")
+        }
+        let boundaryIndex: Int
+        if hit.local <= 0.12, hit.index > 0 {
+            boundaryIndex = hit.index - 1
+        } else if hit.duration - hit.local <= 0.12, hit.index < draft.clips.count - 1 {
+            boundaryIndex = hit.index
+        } else {
+            guard let parts = draft.clips[hit.index].split(atTimelineTime: hit.local) else {
+                throw EditorCopilotError.message("The playhead is too close to a clip edge to add a fade. Nudge it and try again.")
+            }
+            var left = parts.left
+            let right = parts.right
+            let maxDuration = min(2, min(left.duration, right.duration))
+            guard maxDuration >= 0.1 else {
+                throw EditorCopilotError.message("There is not enough clip on both sides of the playhead for a fade.")
+            }
+            left.transitionKind = kind
+            left.transitionDuration = min(fade, maxDuration)
+            draft.clips.replaceSubrange(hit.index...hit.index, with: [left, right])
+            return
+        }
+        let maxDuration = min(
+            2,
+            min(draft.clips[boundaryIndex].duration, draft.clips[boundaryIndex + 1].duration)
+        )
+        guard maxDuration >= 0.1 else {
+            throw EditorCopilotError.message("There is not enough clip on both sides of that cut for a fade.")
+        }
+        draft.clips[boundaryIndex].transitionKind = kind
+        draft.clips[boundaryIndex].transitionDuration = min(fade, maxDuration)
+    }
+
+    private func upsertCopilotClipKeyframes(
+        property: EditorKeyframeProperty,
+        start: Double,
+        end: Double,
+        amount: Double,
+        fadeIn: Bool,
+        fadeOut: Bool,
+        in clips: inout [EditorClip]
+    ) throws {
+        guard let hit = copilotClipIndex(at: start, clips: clips) else {
+            throw EditorCopilotError.message("No clip is available at that time to keyframe.")
+        }
+        var tracks = clips[hit.index].keyframes
+        var track = tracks.track(for: property)
+        let localStart = hit.local
+        let localEnd = min(hit.duration, localStart + max(0, end - start))
+        let rest = copilotFadeRestValue(for: property)
+        let span = max(localEnd - localStart, 0)
+        let window = min(0.4, max(0.12, span / 3))
+        if fadeIn || fadeOut, span >= 0.2 {
+            if fadeIn {
+                _ = track.upsert(at: localStart, value: rest, curve: .init(preset: .easeInOut))
+                _ = track.upsert(at: min(localStart + window, localEnd), value: amount, curve: .init(preset: .easeInOut))
+            } else {
+                _ = track.upsert(at: localStart, value: amount, curve: .init(preset: .easeInOut))
+            }
+            if fadeOut {
+                _ = track.upsert(at: max(localEnd - window, localStart), value: amount, curve: .init(preset: .easeInOut))
+                _ = track.upsert(at: localEnd, value: rest, curve: .init(preset: .easeInOut))
+            } else if localEnd > localStart + 0.05 {
+                _ = track.upsert(at: localEnd, value: amount, curve: .init(preset: .easeInOut))
+            }
+        } else {
+            _ = track.upsert(at: localStart, value: amount, curve: .init(preset: .easeInOut))
+        }
+        tracks.replace(track)
+        clips[hit.index].keyframes = tracks
+    }
+
+    private func copilotAmountTrack(
+        duration: Double, amount: Double, fadeIn: Bool, fadeOut: Bool
+    ) -> EditorKeyframeTrack {
+        var track = EditorKeyframeTrack(property: .effectAmount)
+        let duration = max(duration, 0.45)
+        let window = min(0.4, max(0.12, duration / 3))
+        if fadeIn {
+            _ = track.upsert(at: 0, value: 0, curve: .init(preset: .easeInOut))
+            _ = track.upsert(at: window, value: amount, curve: .init(preset: .easeInOut))
+        } else {
+            _ = track.upsert(at: 0, value: amount, curve: .init(preset: .easeInOut))
+        }
+        if fadeOut {
+            _ = track.upsert(at: max(duration - window, 0), value: amount, curve: .init(preset: .easeInOut))
+            _ = track.upsert(at: duration, value: 0, curve: .init(preset: .easeInOut))
+        } else {
+            _ = track.upsert(at: duration, value: amount, curve: .init(preset: .easeInOut))
+        }
+        return track
+    }
+
+    private func copilotFadeRestValue(for property: EditorKeyframeProperty) -> Double {
+        switch property {
+        case .scale, .cropScale, .textScale: return 1
+        default: return 0
+        }
+    }
+
+    private func copilotClipIndex(
+        at time: Double, clips: [EditorClip]
+    ) -> (index: Int, local: Double, duration: Double)? {
+        guard !clips.isEmpty else { return nil }
+        var offset = 0.0
+        let clamped = max(0, time)
+        for (index, clip) in clips.enumerated() {
+            let duration = clip.duration
+            if duration <= 0 { continue }
+            if clamped < offset + duration - 0.000_001 || index == clips.count - 1 {
+                return (index, min(max(0, clamped - offset), duration), duration)
+            }
+            offset += duration
+        }
+        return nil
+    }
+
+    @discardableResult
+    func applyCopilotDraft() -> Bool {
+        guard !isCopilotWorking, let source = copilotSource, let draft = copilotDraft else { return false }
+        let highlightApply = copilotPlan != nil
+        guard copilotComparableSnapshot() == source, copilotRestriction == nil else {
+            copilotError = "The timeline changed after this preview. Generate a new draft before applying."
+            return false
+        }
+        if highlightApply, copilotHighlightRestriction != nil {
+            copilotError = copilotHighlightRestriction
+            return false
+        }
+        pausePlaybackForEdit()
+        registerUndoIfNeeded()
+        let restoreTime = highlightApply ? 0 : copilotRestoreTime
+        applySnapshot(draft)
+        timelinePosition = min(max(0, restoreTime), totalDuration)
+        revealPlayheadInTimeline()
+        selectedTool = nil
+        isMultiSelectMode = false
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+        let appliedEdits = copilotEditPlan != nil
+        discardCopilotDraft()
+        copilotStatus = appliedEdits
+            ? "Edits applied. Undo restores the previous timeline."
+            : "Highlights applied. Undo restores the complete previous timeline."
+        return true
+    }
+
+    func cancelCopilot() {
+        copilotJobID = nil
+        copilotTask?.cancel()
+        copilotTask = nil
+        isCopilotWorking = false
+        copilotStatus = nil
+        discardCopilotDraft()
+    }
+
+    private func discardCopilotDraft() {
+        if let preview = copilotPreview {
+            preview.isCopilotPreviewDiscarded = true
+            preview.stopPlaybackTicking()
+            preview.removeEndObserver()
+            preview.player?.pause()
+            preview.player = nil
+            preview.isPlaying = false
+        }
+        copilotPreview = nil
+        copilotPlan = nil
+        copilotEditPlan = nil
+        copilotSource = nil
+        copilotDraft = nil
+    }
+
     // MARK: Lifecycle
 
     func setupPlayer() async {
+        await refreshMediaCacheStats()
         await alignPlaybackToTimeline()
+        if proxySettings.isEnabled && proxySettings.automaticallyGenerate {
+            generateMissingProxies()
+        }
     }
 
     func teardownPlayer() {
+        cancelCopilot()
         stopPlaybackTicking()
         removeEndObserver()
         player?.pause()
@@ -6431,6 +7643,9 @@ final class EditorViewModel {
         compositionFingerprint = nil
         saveTask?.cancel()
         exportTask?.cancel()
+        proxyGenerationTask?.cancel()
+        renderCacheTask?.cancel()
+        Task { await EditorMediaCache.shared.cancelWork() }
         cancelReverseGeneration()
         cancelCaptionTranscription()
         cancelMotionTracking()
@@ -6441,6 +7656,7 @@ final class EditorViewModel {
     }
 
     func saveNow() {
+        guard !isCopilotPreview else { return }
         saveTask?.cancel()
         try? ProjectStore.shared.save(makeProject())
     }
@@ -6457,9 +7673,11 @@ final class EditorViewModel {
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
             selectedTextOverlayID: selectedTextOverlayID,
+            selectedGraphicOverlayID: selectedGraphicOverlayID,
             selectedAudioClipID: selectedAudioClipID,
             selectedOverlayClipID: selectedOverlayClipID,
             textOverlays: textOverlays,
+            graphicOverlays: graphicOverlays,
             audioClips: audioClips,
             audioTrackSettings: audioTrackSettings,
             masterVolume: masterVolume,
@@ -6485,9 +7703,11 @@ final class EditorViewModel {
         timelinePosition = min(snapshot.timelinePosition, totalDuration)
         selectedClipID = snapshot.selectedClipID
         selectedTextOverlayID = snapshot.selectedTextOverlayID
+        selectedGraphicOverlayID = snapshot.selectedGraphicOverlayID
         selectedAudioClipID = snapshot.selectedAudioClipID
         selectedOverlayClipID = snapshot.selectedOverlayClipID
         textOverlays = snapshot.textOverlays
+        graphicOverlays = snapshot.graphicOverlays
         audioClips = snapshot.audioClips
         audioTrackSettings = snapshot.audioTrackSettings
         masterVolume = snapshot.masterVolume
@@ -6506,6 +7726,7 @@ final class EditorViewModel {
             selectedTool = .sequence
             selectedClipID = nil
             selectedTextOverlayID = nil
+            selectedGraphicOverlayID = nil
             selectedAudioClipID = nil
             selectedOverlayClipID = nil
         } else if selectedTool == .sequence {
@@ -6532,6 +7753,7 @@ final class EditorViewModel {
             modifiedAt: Date(),
             clips: clips.map { SavedEditorClip(from: $0) },
             textOverlays: textOverlays.map { SavedTextOverlay(from: $0) },
+            graphicOverlays: graphicOverlays,
             audioClips: audioClips.map { SavedAudioClip(from: $0) },
             overlayClips: overlayClips.map { SavedOverlayClip(from: $0) },
             adjustmentLayers: adjustmentLayers,
@@ -6542,6 +7764,7 @@ final class EditorViewModel {
             timelinePosition: timelinePosition,
             selectedClipID: selectedClipID,
             selectedTextOverlayID: selectedTextOverlayID,
+            selectedGraphicOverlayID: selectedGraphicOverlayID,
             selectedAudioClipID: selectedAudioClipID,
             selectedOverlayClipID: selectedOverlayClipID,
             sequences: sequences,
@@ -6553,11 +7776,13 @@ final class EditorViewModel {
             exportInPoint: exportInPoint,
             exportOutPoint: exportOutPoint,
             audioTrackSettings: audioTrackSettings,
-            masterVolume: masterVolume
+            masterVolume: masterVolume,
+            proxySettings: proxySettings
         )
     }
 
     private func scheduleSave() {
+        guard !isCopilotPreview else { return }
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(700))
@@ -6585,6 +7810,9 @@ final class EditorViewModel {
             candidates.append(contentsOf: [clip.timelineStart, clip.timelineEnd])
         }
         for overlay in textOverlays where overlay.id != excludedID {
+            candidates.append(contentsOf: [overlay.startTime, overlay.endTime])
+        }
+        for overlay in graphicOverlays where overlay.id != excludedID {
             candidates.append(contentsOf: [overlay.startTime, overlay.endTime])
         }
         for clip in overlayClips where clip.id != excludedID {
@@ -6633,8 +7861,25 @@ final class EditorViewModel {
         return clipsHash + "|||" + audioHash + "|||" + overlayHash + "|||" + adjustmentHash + "|||" + openingHash + "|||" + closingHash + "|||\(canvasSettings)" + "|||" + mixHash
     }
 
+    /// Extends the edit identity with source revisions and cache format. This keeps
+    /// an exact edit from reusing a render made from an older Photos revision or a
+    /// different proxy profile after the user switches performance quality.
+    private func renderCacheFingerprint() -> String {
+        let assets = (clips.map(\.asset) + overlayClips.map(\.asset))
+            .map { asset in
+                let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
+                return "\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)|\(asset.duration)"
+            }
+            .sorted()
+            .joined(separator: ";")
+        return clipsFingerprint()
+            + "|||preview-render-v1|\(proxySettings.quality.rawValue)|||"
+            + assets
+    }
+
     private func invalidateComposition() {
         compositionFingerprint = nil
+        scheduleBackgroundRenderCache()
     }
 
     private func pausePlaybackForEdit() {
@@ -6646,11 +7891,13 @@ final class EditorViewModel {
     }
 
     private func ensureCompositionPlayer(resumePlaying: Bool = false) async {
+        guard !isCopilotPreviewDiscarded else { return }
         let fingerprint = clipsFingerprint()
         let needsRebuild = fingerprint != compositionFingerprint || player?.currentItem == nil
 
         if !needsRebuild {
             await seekPlayerToTimeline(exact: !isPlaying)
+            guard !isCopilotPreviewDiscarded else { return }
             if resumePlaying || isPlaying { player?.play() }
             return
         }
@@ -6658,6 +7905,7 @@ final class EditorViewModel {
         let savedTime = timelinePosition
         let wasPlaying = isPlaying
         let clipsSnapshot = clips
+        let graphicOverlaysSnapshot = graphicOverlays
         let audioClipsSnapshot = audioClips
         let overlayClipsSnapshot = overlayClips
         let adjustmentLayersSnapshot = adjustmentLayers
@@ -6668,9 +7916,14 @@ final class EditorViewModel {
         let canvasSnapshot = canvasSettings
         let audioTrackSettingsSnapshot = audioTrackSettings
         let masterVolumeSnapshot = masterVolume
+        let proxySettingsSnapshot = proxySettings
+        let renderCacheFingerprintSnapshot = renderCacheFingerprint()
 
         let item: AVPlayerItem?
-        if audioClipsSnapshot.isEmpty,
+        if !proxySettingsSnapshot.isEnabled,
+           !proxySettingsSnapshot.backgroundRenderCache,
+           graphicOverlaysSnapshot.isEmpty,
+           audioClipsSnapshot.isEmpty,
            overlayClipsSnapshot.isEmpty,
            adjustmentLayersSnapshot.isEmpty,
            openingKindSnapshot == .none,
@@ -6683,6 +7936,7 @@ final class EditorViewModel {
             item = await Task.detached(priority: .userInitiated) {
                 await EditorCompositionBuilder.makePlayerItem(
                     from: clipsSnapshot,
+                    graphicOverlays: graphicOverlaysSnapshot,
                     audioClips: audioClipsSnapshot,
                     overlayClips: overlayClipsSnapshot,
                     adjustmentLayers: adjustmentLayersSnapshot,
@@ -6692,12 +7946,14 @@ final class EditorViewModel {
                     closingTransitionDuration: closingDurationSnapshot,
                     canvasSettings: canvasSnapshot,
                     audioTrackSettings: audioTrackSettingsSnapshot,
-                    masterVolume: masterVolumeSnapshot
+                    masterVolume: masterVolumeSnapshot,
+                    proxySettings: proxySettingsSnapshot,
+                    renderCacheFingerprint: renderCacheFingerprintSnapshot
                 )
             }.value
         }
 
-        guard let item else { return }
+        guard let item, !isCopilotPreviewDiscarded else { return }
 
         if player == nil {
             AudioSessionConfigurator.configureForVideoPlayback()
@@ -6714,6 +7970,7 @@ final class EditorViewModel {
         timelinePosition = min(savedTime, totalDuration)
         await seekPlayerToTimeline(exact: true)
 
+        guard !isCopilotPreviewDiscarded else { return }
         if wasPlaying || resumePlaying {
             player?.play()
         }

@@ -41,6 +41,7 @@ enum EditorExportService {
     static func export(
         clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
+        graphicOverlays: [EditorGraphicOverlay] = [],
         audioClips: [EditorAudioClip] = [],
         overlayClips: [EditorOverlayClip] = [],
         adjustmentLayers: [EditorAdjustmentLayer] = [],
@@ -59,6 +60,7 @@ enum EditorExportService {
         guard let built = await EditorCompositionBuilder.build(
             from: clips,
             textOverlays: textOverlays,
+            graphicOverlays: graphicOverlays,
             audioClips: audioClips,
             overlayClips: overlayClips,
             adjustmentLayers: adjustmentLayers,

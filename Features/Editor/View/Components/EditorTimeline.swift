@@ -60,12 +60,16 @@ struct EditorTimeline: View {
     @State private var isAudioMoving = false
     @State private var isTextTrimming = false
     @State private var isTextMoving = false
+    @State private var isGraphicTrimming = false
+    @State private var isGraphicMoving = false
     @State private var isOverlayTrimming = false
     @State private var isOverlayMoving = false
     @State private var playheadDragBaselineContentX: CGFloat?
     @State private var reorderState = ClipReorderState()
+    fileprivate static let playheadScrollID = "timeline-playhead"
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 36 }
+    private var graphicOverlayLaneHeight: CGFloat { vm.graphicOverlays.isEmpty ? 0 : 36 }
     private var adjustmentLaneHeight: CGFloat { vm.adjustmentLayers.isEmpty ? 0 : 32 }
     private let sequenceBandHeight: CGFloat = 26
     private let sequenceBandSpacing: CGFloat = 4
@@ -168,6 +172,7 @@ struct EditorTimeline: View {
         4 + rulerLabelHeight + scrubRailHeight
             + (sequenceLaneHeight > 0 ? 8 + sequenceLaneHeight : 0)
             + (adjustmentLaneHeight > 0 ? 8 + adjustmentLaneHeight : 0)
+            + (isOverlayTracksExpanded || graphicOverlayLaneHeight == 0 ? 0 : 8 + graphicOverlayLaneHeight)
             + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
             + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
             + (isOverlayTracksExpanded ? 0 : 8 + audioViewportHeight)
@@ -190,6 +195,7 @@ struct EditorTimeline: View {
             /// Inset for `ZStack` vertical padding (4pt top + bottom).
             let paddedMinHeight = max(1, geo.size.height - 8)
 
+            ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -209,6 +215,11 @@ struct EditorTimeline: View {
                         if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
                             textOverlayRow(totalWidth: totalWidth, layout: layout)
                                 .frame(height: textOverlayLaneHeight, alignment: .leading)
+                        }
+
+                        if !isOverlayTracksExpanded, !vm.graphicOverlays.isEmpty {
+                            graphicOverlayRow(totalWidth: totalWidth, layout: layout)
+                                .frame(height: graphicOverlayLaneHeight, alignment: .leading)
                         }
 
                         clipsRow(layout: layout)
@@ -273,6 +284,20 @@ struct EditorTimeline: View {
                     || isTextMoving || isOverlayTrimming || isOverlayMoving || reorderState.isDragging
             )
             .frame(width: geo.size.width, height: geo.size.height)
+            .onAppear { revealPlayhead(using: proxy) }
+            .onChange(of: vm.timelineRevealNonce) { _, _ in
+                revealPlayhead(using: proxy)
+            }
+            }
+        }
+    }
+
+    private func revealPlayhead(using proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(Self.playheadScrollID, anchor: .center)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            proxy.scrollTo(Self.playheadScrollID, anchor: .center)
         }
     }
 
@@ -588,6 +613,27 @@ struct EditorTimeline: View {
                 )
                 .opacity(vm.isItemInActiveSequence(.text(overlay.id)) ? 1 : 0.18)
                 .allowsHitTesting(vm.isItemInActiveSequence(.text(overlay.id)))
+            }
+        }
+        .frame(width: totalWidth, alignment: .leading)
+    }
+
+    private func graphicOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(vm.graphicOverlays) { graphic in
+                GraphicOverlayThumb(
+                    graphic: graphic,
+                    layout: layout,
+                    isSelected: vm.selectedGraphicOverlayID == graphic.id,
+                    isTrimming: $isGraphicTrimming,
+                    isMoving: $isGraphicMoving,
+                    onSelect: { vm.selectGraphicOverlay(graphic.id) },
+                    onTrimChanged: { start, end in
+                        vm.updateGraphicTimeRange(id: graphic.id, start: start, end: end)
+                    },
+                    onEditEnded: { vm.commitGraphicEdit() },
+                    onMove: { vm.moveGraphicOnTimeline(id: graphic.id, startTime: $0) }
+                )
             }
         }
         .frame(width: totalWidth, alignment: .leading)
@@ -1324,6 +1370,94 @@ private struct TextOverlayThumb: View {
     }
 }
 
+private struct GraphicOverlayThumb: View {
+    let graphic: EditorGraphicOverlay
+    let layout: TimelineLayout
+    let isSelected: Bool
+    @Binding var isTrimming: Bool
+    @Binding var isMoving: Bool
+    let onSelect: () -> Void
+    let onTrimChanged: (TimeInterval, TimeInterval) -> Void
+    let onEditEnded: () -> Void
+    let onMove: (TimeInterval) -> Void
+
+    @State private var trimBaseline: (time: TimeInterval, x: CGFloat)?
+    @State private var moveBaseline: TimeInterval?
+
+    private var startX: CGFloat {
+        if let trimBaseline {
+            return trimBaseline.x + layout.contentX(forTime: graphic.startTime)
+                - layout.contentX(forTime: trimBaseline.time)
+        }
+        return layout.contentX(forTime: graphic.startTime)
+    }
+    private var width: CGFloat { max(44, layout.contentX(forTime: graphic.endTime) - startX) }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "face.smiling.inverse")
+            Text(graphic.title).lineLimit(1)
+            if graphic.animation != .none { Image(systemName: "waveform.path") }
+        }
+        .font(.system(size: 9, weight: .bold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .frame(width: width, height: 32, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.purple.opacity(isSelected ? 0.72 : 0.38))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(
+                    isSelected ? Color.appColors.primaryColor : Color.purple.opacity(0.75),
+                    lineWidth: isSelected ? 2 : 1
+                ))
+        )
+        .overlay {
+            if isSelected {
+                ClipTrimHandleRepresentable(
+                    clipID: graphic.id,
+                    trimStart: graphic.startTime,
+                    trimEnd: graphic.endTime,
+                    originalDuration: max(layout.timelineExtent, 1),
+                    allowsDurationExtension: false,
+                    speed: 1,
+                    pixelsPerSecond: layout.pixelsPerSecond,
+                    onTrimChanged: { _, start, end in
+                        if trimBaseline == nil { trimBaseline = (graphic.startTime, layout.contentX(forTime: graphic.startTime)) }
+                        isTrimming = true
+                        onTrimChanged(start, end)
+                    },
+                    onTrimEnded: {
+                        isTrimming = false
+                        trimBaseline = nil
+                        onEditEnded()
+                    }
+                )
+                .frame(width: width, height: 32)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if !isTrimming && !isMoving { onSelect() } }
+        .gesture(moveGesture)
+        .offset(x: startX)
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                guard !isTrimming else { return }
+                if moveBaseline == nil { moveBaseline = graphic.startTime }
+                isMoving = true
+                let baseX = layout.contentX(forTime: moveBaseline ?? graphic.startTime)
+                onMove(layout.time(atContentX: max(0, baseX + value.translation.width)))
+            }
+            .onEnded { _ in
+                isMoving = false
+                moveBaseline = nil
+                onEditEnded()
+            }
+    }
+}
+
 // MARK: - Timeline layout (clip widths + insert gaps)
 
 private struct TimelineLayout {
@@ -1755,11 +1889,25 @@ private struct TimelinePlayheadLine: View {
 
     var body: some View {
         let x = layout.contentX(forTime: vm.timelinePosition)
-        PlayheadShape()
-            .stroke(Color.white.opacity(0.95), lineWidth: 1)
-            .frame(width: 18, height: stackHeight)
-            .offset(x: x - 9, y: 0)
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                Color.clear.frame(width: max(0, x), height: 1)
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .id(EditorTimeline.playheadScrollID)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 1)
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
+
+            PlayheadShape()
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+                .frame(width: 18, height: stackHeight)
+                .offset(x: x - 9, y: 0)
+        }
+        .frame(width: layout.contentWidth, height: stackHeight, alignment: .leading)
+        .allowsHitTesting(false)
     }
 }
 

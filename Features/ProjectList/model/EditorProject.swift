@@ -5,13 +5,14 @@
 
 import Foundation
 import Photos
+import AVFoundation
 
 // MARK: - Persisted DTOs (Codable — no PHAsset)
 
 struct SavedEditorClip: Codable, Identifiable, Hashable {
     let id: UUID
-    let assetLocalIdentifier: String
-    let originalDuration: TimeInterval
+    var assetLocalIdentifier: String
+    var originalDuration: TimeInterval
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var speed: Float
@@ -308,8 +309,8 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
 
 struct SavedOverlayClip: Codable, Identifiable, Hashable {
     let id: UUID
-    let assetLocalIdentifier: String
-    let originalDuration: TimeInterval
+    var assetLocalIdentifier: String
+    var originalDuration: TimeInterval
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
@@ -450,6 +451,71 @@ struct SavedAudioTrack: Codable, Identifiable, Hashable {
 
 // MARK: - Project document
 
+enum EditorProxyQuality: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    case p540, p720
+    var id: String { rawValue }
+    var title: String { self == .p540 ? "540p · Faster" : "720p · Sharper" }
+    var exportPreset: String {
+        self == .p540 ? AVAssetExportPreset960x540 : AVAssetExportPreset1280x720
+    }
+}
+
+struct EditorProxySettings: Codable, Hashable, Sendable {
+    var isEnabled = true
+    var automaticallyGenerate = true
+    var backgroundRenderCache = true
+    var quality: EditorProxyQuality = .p540
+    var cacheBudgetMB = 2_048
+
+    static let `default` = EditorProxySettings()
+}
+
+// MARK: - Reusable project templates
+
+enum EditorTemplateSlotRole: String, Codable, Hashable, Sendable {
+    case primary
+    case overlay
+}
+
+enum EditorTemplateMediaKind: String, Codable, Hashable, Sendable {
+    case video
+    case image
+    case either
+}
+
+struct EditorTemplateMediaSlot: Codable, Identifiable, Hashable, Sendable {
+    let id: UUID
+    var role: EditorTemplateSlotRole
+    var itemID: UUID
+    var order: Int
+    var title: String
+    var mediaKind: EditorTemplateMediaKind
+    var targetDuration: TimeInterval
+}
+
+struct EditorTemplateSafeArea: Codable, Hashable, Sendable {
+    /// Normalized inset from each canvas edge.
+    var actionInset: Double = 0.05
+    var titleInset: Double = 0.10
+}
+
+struct EditorProjectTemplate: Codable, Identifiable, Hashable {
+    static let currentSchemaVersion = 1
+
+    let id: UUID
+    var schemaVersion: Int
+    var name: String
+    var createdAt: Date
+    var modifiedAt: Date
+    var project: EditorProject
+    var slots: [EditorTemplateMediaSlot]
+    var requiredFontFamilies: [String]
+    var safeArea: EditorTemplateSafeArea
+
+    var primarySlotCount: Int { slots.filter { $0.role == .primary }.count }
+    var overlaySlotCount: Int { slots.filter { $0.role == .overlay }.count }
+}
+
 struct EditorProject: Codable, Identifiable, Hashable {
     let id: UUID
     var title: String
@@ -457,6 +523,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var modifiedAt: Date
     var clips: [SavedEditorClip]
     var textOverlays: [SavedTextOverlay]
+    var graphicOverlays: [EditorGraphicOverlay]
     var audioClips: [SavedAudioClip]
     var overlayClips: [SavedOverlayClip]
     var adjustmentLayers: [EditorAdjustmentLayer]
@@ -467,6 +534,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var timelinePosition: TimeInterval
     var selectedClipID: UUID?
     var selectedTextOverlayID: UUID?
+    var selectedGraphicOverlayID: UUID?
     var selectedAudioClipID: UUID?
     var selectedOverlayClipID: UUID?
     var sequences: [EditorSequence]
@@ -479,16 +547,19 @@ struct EditorProject: Codable, Identifiable, Hashable {
     var exportOutPoint: TimeInterval?
     var audioTrackSettings: [Int: EditorAudioTrackSettings]
     var masterVolume: Float
+    var proxySettings: EditorProxySettings
 
     enum CodingKeys: String, CodingKey {
-        case id, title, createdAt, modifiedAt, clips, textOverlays
+        case id, title, createdAt, modifiedAt, clips, textOverlays, graphicOverlays
         case audioClips, audioTrack, overlayClips, adjustmentLayers, timelinePosition
-        case selectedClipID, selectedTextOverlayID, selectedAudioClipID, selectedOverlayClipID
+        case selectedClipID, selectedTextOverlayID, selectedGraphicOverlayID
+        case selectedAudioClipID, selectedOverlayClipID
         case sequences, markers, selectedTimelineItems, selectedSequenceID, activeSequenceID
         case openingTransitionKind, openingTransitionDuration
         case closingTransitionKind, closingTransitionDuration
         case canvasSettings, exportInPoint, exportOutPoint
         case audioTrackSettings, masterVolume
+        case proxySettings
     }
 
     init(
@@ -498,6 +569,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         modifiedAt: Date,
         clips: [SavedEditorClip],
         textOverlays: [SavedTextOverlay],
+        graphicOverlays: [EditorGraphicOverlay] = [],
         audioClips: [SavedAudioClip],
         overlayClips: [SavedOverlayClip] = [],
         adjustmentLayers: [EditorAdjustmentLayer] = [],
@@ -508,6 +580,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         timelinePosition: TimeInterval,
         selectedClipID: UUID?,
         selectedTextOverlayID: UUID? = nil,
+        selectedGraphicOverlayID: UUID? = nil,
         selectedAudioClipID: UUID? = nil,
         selectedOverlayClipID: UUID? = nil,
         sequences: [EditorSequence] = [],
@@ -519,7 +592,8 @@ struct EditorProject: Codable, Identifiable, Hashable {
         exportInPoint: TimeInterval? = nil,
         exportOutPoint: TimeInterval? = nil,
         audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
-        masterVolume: Float = 1.0
+        masterVolume: Float = 1.0,
+        proxySettings: EditorProxySettings = .default
     ) {
         self.id = id
         self.title = title
@@ -527,6 +601,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.modifiedAt = modifiedAt
         self.clips = clips
         self.textOverlays = textOverlays
+        self.graphicOverlays = graphicOverlays
         self.audioClips = audioClips
         self.overlayClips = overlayClips
         self.adjustmentLayers = adjustmentLayers
@@ -541,6 +616,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.timelinePosition = timelinePosition
         self.selectedClipID = selectedClipID
         self.selectedTextOverlayID = selectedTextOverlayID
+        self.selectedGraphicOverlayID = selectedGraphicOverlayID
         self.selectedAudioClipID = selectedAudioClipID
         self.selectedOverlayClipID = selectedOverlayClipID
         self.sequences = sequences
@@ -553,6 +629,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         self.exportOutPoint = exportOutPoint
         self.audioTrackSettings = audioTrackSettings
         self.masterVolume = masterVolume
+        self.proxySettings = proxySettings
     }
 
     init(from decoder: Decoder) throws {
@@ -563,6 +640,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
         clips = try c.decode([SavedEditorClip].self, forKey: .clips)
         textOverlays = try c.decodeIfPresent([SavedTextOverlay].self, forKey: .textOverlays) ?? []
+        graphicOverlays = try c.decodeIfPresent([EditorGraphicOverlay].self, forKey: .graphicOverlays) ?? []
         let openingRawValue = try c.decodeIfPresent(
             String.self,
             forKey: .openingTransitionKind
@@ -598,6 +676,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         timelinePosition = try c.decodeIfPresent(TimeInterval.self, forKey: .timelinePosition) ?? 0
         selectedClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedClipID)
         selectedTextOverlayID = try c.decodeIfPresent(UUID.self, forKey: .selectedTextOverlayID)
+        selectedGraphicOverlayID = try c.decodeIfPresent(UUID.self, forKey: .selectedGraphicOverlayID)
         selectedAudioClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedAudioClipID)
         selectedOverlayClipID = try c.decodeIfPresent(UUID.self, forKey: .selectedOverlayClipID)
         sequences = try c.decodeIfPresent([EditorSequence].self, forKey: .sequences) ?? []
@@ -621,6 +700,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
             forKey: .audioTrackSettings
         ) ?? [:]
         masterVolume = try c.decodeIfPresent(Float.self, forKey: .masterVolume) ?? 1.0
+        proxySettings = try c.decodeIfPresent(EditorProxySettings.self, forKey: .proxySettings) ?? .default
 
         if let saved = try c.decodeIfPresent([SavedAudioClip].self, forKey: .audioClips) {
             audioClips = saved
@@ -640,6 +720,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(modifiedAt, forKey: .modifiedAt)
         try c.encode(clips, forKey: .clips)
         try c.encode(textOverlays, forKey: .textOverlays)
+        try c.encode(graphicOverlays, forKey: .graphicOverlays)
         try c.encode(audioClips, forKey: .audioClips)
         try c.encode(overlayClips, forKey: .overlayClips)
         try c.encode(adjustmentLayers, forKey: .adjustmentLayers)
@@ -650,6 +731,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encode(timelinePosition, forKey: .timelinePosition)
         try c.encodeIfPresent(selectedClipID, forKey: .selectedClipID)
         try c.encodeIfPresent(selectedTextOverlayID, forKey: .selectedTextOverlayID)
+        try c.encodeIfPresent(selectedGraphicOverlayID, forKey: .selectedGraphicOverlayID)
         try c.encodeIfPresent(selectedAudioClipID, forKey: .selectedAudioClipID)
         try c.encodeIfPresent(selectedOverlayClipID, forKey: .selectedOverlayClipID)
         try c.encode(sequences, forKey: .sequences)
@@ -662,6 +744,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
         try c.encodeIfPresent(exportOutPoint, forKey: .exportOutPoint)
         try c.encode(audioTrackSettings, forKey: .audioTrackSettings)
         try c.encode(masterVolume, forKey: .masterVolume)
+        try c.encode(proxySettings, forKey: .proxySettings)
     }
 
     var formattedDuration: String {
@@ -684,6 +767,7 @@ struct EditorProject: Codable, Identifiable, Hashable {
             modifiedAt: now,
             clips: savedClips,
             textOverlays: [],
+            graphicOverlays: [],
             audioClips: [],
             overlayClips: [],
             adjustmentLayers: [],

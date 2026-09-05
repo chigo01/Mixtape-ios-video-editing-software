@@ -7,6 +7,151 @@
 
 import SwiftUI
 
+// MARK: - Stickers and reusable graphics
+
+/// A portable graphic source. Imported images are copied into Mixtape's Application Support
+/// folder before this path is stored, so projects never depend on a temporary Photos picker URL.
+enum EditorGraphicSource: Codable, Hashable {
+    case emoji(String)
+    case symbol(String)
+    case image(path: String)
+
+    var catalogID: String {
+        switch self {
+        case let .emoji(value): return "emoji:\(value)"
+        case let .symbol(name): return "symbol:\(name)"
+        case let .image(path): return "image:\(path)"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case let .emoji(value): return value
+        case let .symbol(name): return name.replacingOccurrences(of: ".", with: " ").capitalized
+        case let .image(path): return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        }
+    }
+
+    init?(catalogID: String) {
+        if catalogID.hasPrefix("emoji:") {
+            self = .emoji(String(catalogID.dropFirst("emoji:".count)))
+        } else if catalogID.hasPrefix("symbol:") {
+            self = .symbol(String(catalogID.dropFirst("symbol:".count)))
+        } else if catalogID.hasPrefix("image:") {
+            let path = String(catalogID.dropFirst("image:".count))
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            self = .image(path: path)
+        } else {
+            return nil
+        }
+    }
+}
+
+enum EditorGraphicBlendMode: String, Codable, CaseIterable, Identifiable, Hashable {
+    case normal, multiply, screen, overlay, softLight, difference
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .normal: return "Normal"
+        case .multiply: return "Multiply"
+        case .screen: return "Screen"
+        case .overlay: return "Overlay"
+        case .softLight: return "Soft Light"
+        case .difference: return "Difference"
+        }
+    }
+    var swiftUIValue: BlendMode {
+        switch self {
+        case .normal: return .normal
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .softLight: return .softLight
+        case .difference: return .difference
+        }
+    }
+    var coreAnimationFilterName: String? {
+        self == .normal ? nil : "\(rawValue)BlendMode"
+    }
+}
+
+enum EditorGraphicAnimation: String, Codable, CaseIterable, Identifiable, Hashable {
+    case none, pop, pulse, float, bounce, spin, wiggle
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+
+    /// Deterministic sampling shared by interactive preview and offline export.
+    func sample(localTime: TimeInterval, duration: TimeInterval) -> (scale: Double, rotation: Double, y: Double, opacity: Double) {
+        let t = max(0, localTime)
+        let entrance = min(1, t / 0.22)
+        let exit = min(1, max(0, duration - t) / 0.18)
+        let visibility = min(entrance, exit)
+        switch self {
+        case .none: return (1, 0, 0, visibility)
+        case .pop:
+            let overshoot = entrance < 1 ? 1 + sin(entrance * .pi) * 0.16 : 1
+            return (max(0.05, entrance) * overshoot, 0, 0, exit)
+        case .pulse: return (1 + sin(t * .pi * 2.4) * 0.08, 0, 0, visibility)
+        case .float: return (1, 0, sin(t * .pi * 1.3) * 10, visibility)
+        case .bounce: return (1, 0, -abs(sin(t * .pi * 2.1)) * 16, visibility)
+        case .spin: return (1, t * 90, 0, visibility)
+        case .wiggle: return (1, sin(t * .pi * 5) * 7, 0, visibility)
+        }
+    }
+}
+
+struct EditorGraphicOverlay: Codable, Hashable, Identifiable {
+    var id: UUID = UUID()
+    var source: EditorGraphicSource
+    var title: String
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+    /// Offsets and size use the same 390pt reference canvas as text overlays.
+    var xOffset: CGFloat = 0
+    var yOffset: CGFloat = 0
+    var size: CGFloat = 132
+    var scale: CGFloat = 1
+    var rotationDegrees: Double = 0
+    var opacity: Double = 1
+    var tintRGB: UInt32? = nil
+    var blendMode: EditorGraphicBlendMode = .normal
+    var animation: EditorGraphicAnimation = .pop
+    var isFlippedHorizontally = false
+    var isFlippedVertically = false
+
+    var duration: TimeInterval { max(0, endTime - startTime) }
+    func isVisible(at time: TimeInterval) -> Bool { time >= startTime && time < endTime }
+}
+
+enum EditorGraphicCatalog {
+    static let emojis = [
+        "🔥", "✨", "💫", "⭐️", "❤️", "💔", "😂", "😭", "😎", "🤯", "🥶", "😈",
+        "💯", "💥", "⚡️", "🎵", "🎧", "🎤", "🎬", "📸", "🏆", "👑", "💎", "🚀",
+        "🌈", "🌙", "☀️", "🌸", "🦋", "👀", "👍", "🫶", "✅", "❌", "‼️", "❓"
+    ]
+    static let symbols = [
+        "star.fill", "heart.fill", "bolt.fill", "flame.fill", "sparkles", "crown.fill",
+        "music.note", "headphones", "mic.fill", "play.fill", "camera.fill", "film.fill",
+        "quote.bubble.fill", "message.fill", "location.fill", "paperplane.fill", "bell.fill",
+        "checkmark.seal.fill", "exclamationmark.triangle.fill", "arrow.up.right", "scribble",
+        "circle.hexagongrid.fill", "waveform", "scope", "viewfinder", "burst.fill"
+    ]
+}
+
+enum EditorGraphicFavoritesStore {
+    private static let key = "editor.graphic.favorite.catalogIDs.v1"
+    static var ids: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: key) }
+    }
+    static func toggle(_ source: EditorGraphicSource) {
+        var value = ids
+        if value.contains(source.catalogID) { value.remove(source.catalogID) }
+        else { value.insert(source.catalogID) }
+        ids = value
+    }
+}
+
 /// A single recognized word in a caption segment. Times are absolute timeline
 /// seconds so seeking, highlighting, SRT conversion, and future transcript
 /// edits all share one deterministic clock.

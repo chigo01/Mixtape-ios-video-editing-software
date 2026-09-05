@@ -19,6 +19,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
     case volume
     case filter
     case effects
+    case graphics
+    case templates
+    case performance
     case text
     case captions
     case overlay
@@ -55,6 +58,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .volume: return "VOLUME"
         case .filter: return "COLOR"
         case .effects: return "EFFECTS"
+        case .graphics: return "GRAPHICS"
+        case .templates: return "TEMPLATES"
+        case .performance: return "CACHE"
         case .text: return "TEXT"
         case .captions: return "CAPTIONS"
         case .overlay: return "OVERLAY"
@@ -82,6 +88,9 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .volume: return "speaker.wave.2.fill"
         case .filter: return "slider.horizontal.3"
         case .effects: return "wand.and.stars"
+        case .graphics: return "face.smiling.inverse"
+        case .templates: return "rectangle.3.group.bubble.left.fill"
+        case .performance: return "gauge.with.dots.needle.67percent"
         case .text: return "textformat"
         case .captions: return "captions.bubble.fill"
         case .overlay: return "rectangle.on.rectangle"

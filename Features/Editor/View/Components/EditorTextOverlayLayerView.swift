@@ -236,3 +236,93 @@ struct EditorTextOverlayLayerView: View {
         return String(text.prefix(count))
     }
 }
+
+/// Interactive WYSIWYG layer for emoji, SF Symbols and imported transparent artwork.
+/// Geometry is expressed in the same reference canvas used by offline export.
+struct EditorGraphicOverlayLayerView: View {
+    let vm: EditorViewModel
+    @State private var draggingID: UUID?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let canvasScale = EditorTextOverlayLayout.canvasScale(for: geometry.size)
+            ZStack {
+                ForEach(vm.graphicOverlays.filter { $0.isVisible(at: vm.timelinePosition) }) { item in
+                    graphic(item, canvasScale: canvasScale)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .coordinateSpace(name: "editor.graphic.canvas")
+        }
+    }
+
+    private func graphic(_ item: EditorGraphicOverlay, canvasScale: CGFloat) -> some View {
+        let selected = vm.selectedGraphicOverlayID == item.id
+        let sample = item.animation.sample(
+            localTime: vm.timelinePosition - item.startTime,
+            duration: item.duration
+        )
+        return graphicContent(item)
+            .frame(width: item.size * canvasScale, height: item.size * canvasScale)
+            .scaleEffect(
+                x: item.scale * (item.isFlippedHorizontally ? -1 : 1) * sample.scale,
+                y: item.scale * (item.isFlippedVertically ? -1 : 1) * sample.scale
+            )
+            .rotationEffect(.degrees(item.rotationDegrees + sample.rotation))
+            .opacity(item.opacity * sample.opacity)
+            .blendMode(item.blendMode.swiftUIValue)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(selected ? Color.appColors.primaryColor : .clear, lineWidth: 1.5)
+                    .padding(-7)
+            }
+            .contentShape(Rectangle().inset(by: -18))
+            .offset(
+                x: item.xOffset * canvasScale,
+                y: (item.yOffset + sample.y) * canvasScale
+            )
+            .onTapGesture { vm.selectGraphicOverlay(item.id) }
+            .highPriorityGesture(dragGesture(item, canvasScale: canvasScale))
+            .accessibilityLabel("\(item.title) graphic")
+            .accessibilityHint("Drag to reposition")
+    }
+
+    @ViewBuilder
+    private func graphicContent(_ item: EditorGraphicOverlay) -> some View {
+        switch item.source {
+        case let .emoji(value):
+            Text(value).font(.system(size: item.size * 0.72)).minimumScaleFactor(0.1)
+        case let .symbol(name):
+            Image(systemName: name)
+                .resizable().scaledToFit().padding(10)
+                .foregroundStyle(item.tintRGB.map(Color.init(rgb:)) ?? .white)
+        case let .image(path):
+            if let image = UIImage(contentsOfFile: path) {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .resizable().scaledToFit().foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func dragGesture(_ item: EditorGraphicOverlay, canvasScale: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .named("editor.graphic.canvas"))
+            .onChanged { value in
+                if draggingID != item.id {
+                    draggingID = item.id
+                    vm.selectGraphicOverlay(item.id)
+                    vm.beginGraphicPositionDrag(id: item.id)
+                }
+                vm.updateGraphicPositionDrag(
+                    id: item.id,
+                    translation: value.translation,
+                    canvasScale: canvasScale
+                )
+            }
+            .onEnded { _ in
+                draggingID = nil
+                vm.commitGraphicEdit()
+            }
+    }
+}

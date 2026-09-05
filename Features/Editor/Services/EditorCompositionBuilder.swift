@@ -236,6 +236,248 @@ actor EditorReverseMediaService {
     }
 }
 
+// MARK: - Proxy and preview render cache
+
+struct EditorMediaCacheStats: Equatable, Sendable {
+    var proxyBytes: Int64 = 0
+    var renderBytes: Int64 = 0
+    var proxyCount = 0
+    var renderCount = 0
+
+    static let empty = EditorMediaCacheStats()
+    var totalBytes: Int64 { proxyBytes + renderBytes }
+}
+
+enum EditorMediaCacheError: LocalizedError {
+    case sourceUnavailable
+    case cannotCreateExporter
+    case lowStorage
+    case exportFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sourceUnavailable: return "The original media is not available from Photos."
+        case .cannotCreateExporter: return "This media cannot be encoded on this device."
+        case .lowStorage: return "Proxy generation paused because device storage is low."
+        case let .exportFailed(message): return message
+        }
+    }
+}
+
+/// Owns disposable performance media. Files are deterministic and versioned by
+/// source identity, source metadata, and proxy profile. Project documents retain
+/// only Photos identifiers; originals therefore remain authoritative and cache
+/// eviction can never make a project unexportable.
+actor EditorMediaCache {
+    static let shared = EditorMediaCache()
+
+    private static let proxyFolder = "MixtapeProxies-v1"
+    private static let renderFolder = "MixtapePreviewRenders-v1"
+    private var activeProxyExports: [String: AVAssetExportSession] = [:]
+    private var activeRenderExport: AVAssetExportSession?
+
+    static func cachedProxyURL(for asset: PHAsset, quality: EditorProxyQuality) -> URL? {
+        let url = directory(named: proxyFolder)
+            .appendingPathComponent("\(proxyKey(for: asset, quality: quality)).mp4")
+        guard usable(url) else { return nil }
+        touch(url)
+        return url
+    }
+
+    static func cachedRenderURL(for fingerprint: String) -> URL? {
+        let url = directory(named: renderFolder)
+            .appendingPathComponent("\(stableHash(fingerprint)).mp4")
+        guard usable(url) else { return nil }
+        touch(url)
+        return url
+    }
+
+    func generateProxy(
+        for asset: PHAsset,
+        quality: EditorProxyQuality,
+        budgetMB: Int
+    ) async throws -> URL {
+        if let cached = Self.cachedProxyURL(for: asset, quality: quality) {
+            Self.touch(cached)
+            return cached
+        }
+        try Self.requireWorkingStorage()
+        let source = try await Self.requestOriginalAsset(for: asset)
+        guard let exporter = AVAssetExportSession(asset: source, presetName: quality.exportPreset) else {
+            throw EditorMediaCacheError.cannotCreateExporter
+        }
+        let key = Self.proxyKey(for: asset, quality: quality)
+        let output = Self.directory(named: Self.proxyFolder).appendingPathComponent("\(key).mp4")
+        let temporary = output.deletingLastPathComponent()
+            .appendingPathComponent(".\(key)-\(UUID().uuidString).tmp.mp4")
+        try? FileManager.default.removeItem(at: temporary)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        exporter.shouldOptimizeForNetworkUse = true
+        activeProxyExports[asset.localIdentifier] = exporter
+        defer { activeProxyExports[asset.localIdentifier] = nil }
+
+        try await exporter.export(to: temporary, as: .mp4)
+        try Task.checkCancellation()
+        try? FileManager.default.removeItem(at: output)
+        try FileManager.default.moveItem(at: temporary, to: output)
+        Self.excludeFromBackup(output)
+        await enforceBudget(megabytes: budgetMB, protecting: output)
+        return output
+    }
+
+    func generateRender(
+        built: EditorCompositionBuildResult,
+        fingerprint: String,
+        budgetMB: Int
+    ) async throws -> URL {
+        if let cached = Self.cachedRenderURL(for: fingerprint) {
+            Self.touch(cached)
+            return cached
+        }
+        try Self.requireWorkingStorage()
+        guard let exporter = AVAssetExportSession(
+            asset: built.composition,
+            presetName: AVAssetExportPreset960x540
+        ) else { throw EditorMediaCacheError.cannotCreateExporter }
+        exporter.videoComposition = built.videoComposition
+        exporter.audioMix = built.audioMix
+        exporter.shouldOptimizeForNetworkUse = false
+        let key = Self.stableHash(fingerprint)
+        let output = Self.directory(named: Self.renderFolder).appendingPathComponent("\(key).mp4")
+        let temporary = output.deletingLastPathComponent()
+            .appendingPathComponent(".\(key)-\(UUID().uuidString).tmp.mp4")
+        try? FileManager.default.removeItem(at: temporary)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        activeRenderExport?.cancelExport()
+        activeRenderExport = exporter
+        defer { if activeRenderExport === exporter { activeRenderExport = nil } }
+
+        try await exporter.export(to: temporary, as: .mp4)
+        try Task.checkCancellation()
+        try? FileManager.default.removeItem(at: output)
+        try FileManager.default.moveItem(at: temporary, to: output)
+        Self.excludeFromBackup(output)
+        await enforceBudget(megabytes: budgetMB, protecting: output)
+        return output
+    }
+
+    func cancelWork() {
+        activeProxyExports.values.forEach { $0.cancelExport() }
+        activeProxyExports.removeAll()
+        activeRenderExport?.cancelExport()
+        activeRenderExport = nil
+    }
+
+    func clearProxies() { Self.clear(directoryNamed: Self.proxyFolder) }
+    func clearRenders() { Self.clear(directoryNamed: Self.renderFolder) }
+
+    func stats() -> EditorMediaCacheStats {
+        let proxies = Self.files(in: Self.directory(named: Self.proxyFolder))
+        let renders = Self.files(in: Self.directory(named: Self.renderFolder))
+        return EditorMediaCacheStats(
+            proxyBytes: proxies.reduce(0) { $0 + Self.fileSize($1) },
+            renderBytes: renders.reduce(0) { $0 + Self.fileSize($1) },
+            proxyCount: proxies.count,
+            renderCount: renders.count
+        )
+    }
+
+    private func enforceBudget(megabytes: Int, protecting protectedURL: URL) async {
+        let byteLimit = Int64(min(max(megabytes, 256), 16_384)) * 1_024 * 1_024
+        var candidates = Self.files(in: Self.directory(named: Self.proxyFolder))
+            + Self.files(in: Self.directory(named: Self.renderFolder))
+        var total = candidates.reduce(Int64(0)) { $0 + Self.fileSize($1) }
+        candidates.sort { Self.modifiedDate($0) < Self.modifiedDate($1) }
+        for url in candidates where total > byteLimit && url != protectedURL {
+            let bytes = Self.fileSize(url)
+            try? FileManager.default.removeItem(at: url)
+            total -= bytes
+        }
+    }
+
+    private static func requestOriginalAsset(for asset: PHAsset) async throws -> AVAsset {
+        let options = PHVideoRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.version = .original
+        options.isNetworkAccessAllowed = true
+        return try await withCheckedThrowingContinuation { continuation in
+            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { result, _, info in
+                if let result {
+                    continuation.resume(returning: result)
+                } else {
+                    let error = (info?[PHImageErrorKey] as? Error) ?? EditorMediaCacheError.sourceUnavailable
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func proxyKey(for asset: PHAsset, quality: EditorProxyQuality) -> String {
+        let modified = asset.modificationDate?.timeIntervalSince1970 ?? 0
+        return stableHash(
+            "\(asset.localIdentifier)|\(modified)|\(asset.pixelWidth)x\(asset.pixelHeight)|\(asset.duration)|\(quality.rawValue)"
+        )
+    }
+
+    private static func stableHash(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private static func directory(named name: String) -> URL {
+        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let directory = root.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private static func requireWorkingStorage() throws {
+        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let capacity = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage
+        if let capacity, capacity < 512 * 1_024 * 1_024 { throw EditorMediaCacheError.lowStorage }
+    }
+
+    private static func files(in directory: URL) -> [URL] {
+        (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+    }
+
+    private static func fileSize(_ url: URL) -> Int64 {
+        Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+    }
+
+    private static func modifiedDate(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+    }
+
+    private static func usable(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path) && fileSize(url) > 0
+    }
+
+    private static func touch(_ url: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
+    private static func excludeFromBackup(_ url: URL) {
+        var mutable = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
+    }
+
+    private static func clear(directoryNamed name: String) {
+        for url in files(in: directory(named: name)) { try? FileManager.default.removeItem(at: url) }
+    }
+}
+
 enum EditorCompositionBuilder {
 
     private static let timescale: CMTimeScale = 600
@@ -321,6 +563,7 @@ enum EditorCompositionBuilder {
     static func build(
         from clips: [EditorClip],
         textOverlays: [EditorTextOverlay] = [],
+        graphicOverlays: [EditorGraphicOverlay] = [],
         audioClips: [EditorAudioClip] = [],
         overlayClips: [EditorOverlayClip] = [],
         adjustmentLayers: [EditorAdjustmentLayer] = [],
@@ -332,6 +575,7 @@ enum EditorCompositionBuilder {
         frameRate: Int32 = 30,
         canvasSize: CGSize? = nil,
         isOfflineRender: Bool = false,
+        proxySettings: EditorProxySettings = .default,
         audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
         masterVolume: Float = 1.0
     ) async -> EditorCompositionBuildResult? {
@@ -363,7 +607,11 @@ enum EditorCompositionBuilder {
             let segmentRange = CMTimeRange(start: cursor, duration: segmentDuration)
 
             if clip.isVideo {
-                guard let originalAsset = await loadVideoAsset(for: clip.asset) else {
+                guard let originalAsset = await loadVideoAsset(
+                    for: clip.asset,
+                    proxySettings: proxySettings,
+                    allowProxy: !isOfflineRender && clip.playback == .forward
+                ) else {
                     cursor = cursor + segmentDuration
                     continue
                 }
@@ -572,6 +820,9 @@ enum EditorCompositionBuilder {
         for overlay in textOverlays {
             timelineExtent = max(timelineExtent, overlay.endTime)
         }
+        for overlay in graphicOverlays {
+            timelineExtent = max(timelineExtent, overlay.endTime)
+        }
         for overlay in overlayClips {
             timelineExtent = max(timelineExtent, overlay.timelineEnd)
         }
@@ -587,7 +838,11 @@ enum EditorCompositionBuilder {
 
             let originalAsset: AVAsset
             if overlay.asset.mediaType == .video {
-                guard let videoAsset = await loadVideoAsset(for: overlay.asset) else { continue }
+                guard let videoAsset = await loadVideoAsset(
+                    for: overlay.asset,
+                    proxySettings: proxySettings,
+                    allowProxy: !isOfflineRender && overlay.playback == .forward
+                ) else { continue }
                 originalAsset = videoAsset
             } else {
                 // Reuse the same still-image conversion as primary photo clips so
@@ -734,7 +989,7 @@ enum EditorCompositionBuilder {
         // Assigning one to an AVPlayerItem raises an Objective-C exception on device.
         // Playback gets its opaque canvas from each video-composition instruction below.
         let animationTool: AVVideoCompositionCoreAnimationTool? = {
-            guard isOfflineRender, !textOverlays.isEmpty else { return nil }
+            guard isOfflineRender, !textOverlays.isEmpty || !graphicOverlays.isEmpty else { return nil }
 
             let parentLayer = CALayer()
             parentLayer.frame = CGRect(origin: .zero, size: renderSize)
@@ -849,6 +1104,26 @@ enum EditorCompositionBuilder {
                         parentLayer.addSublayer(textLayer)
                     }
                 }
+            }
+
+            for graphic in graphicOverlays {
+                guard let image = EditorGraphicOverlayRenderer.render(
+                    graphic: graphic,
+                    renderSize: renderSize
+                ) else { continue }
+                let layer = CALayer()
+                layer.contents = image.cgImage
+                layer.contentsScale = 1
+                layer.frame = CGRect(origin: .zero, size: renderSize)
+                layer.opacity = 0
+                layer.compositingFilter = graphic.blendMode.coreAnimationFilterName
+                addGraphicAnimations(
+                    to: layer,
+                    graphic: graphic,
+                    totalDuration: totalDuration,
+                    renderSize: renderSize
+                )
+                parentLayer.addSublayer(layer)
             }
 
             return AVVideoCompositionCoreAnimationTool(
@@ -1170,6 +1445,47 @@ enum EditorCompositionBuilder {
         layer.add(transformAnimation, forKey: "keyframedTransform")
     }
 
+    private static func addGraphicAnimations(
+        to layer: CALayer,
+        graphic: EditorGraphicOverlay,
+        totalDuration: TimeInterval,
+        renderSize: CGSize
+    ) {
+        guard totalDuration > 0 else { return }
+        let sampleCount = min(1_800, max(2, Int(ceil(totalDuration * 30))))
+        var keyTimes: [NSNumber] = []
+        var opacities: [NSNumber] = []
+        var transforms: [NSValue] = []
+        let renderScale = renderSize.width / EditorTextOverlayLayout.referenceWidth
+
+        for index in 0...sampleCount {
+            let globalTime = totalDuration * Double(index) / Double(sampleCount)
+            let local = min(max(0, globalTime - graphic.startTime), graphic.duration)
+            let visible = globalTime >= graphic.startTime && globalTime < graphic.endTime
+            let sample = graphic.animation.sample(localTime: local, duration: graphic.duration)
+            var transform = CATransform3DMakeTranslation(0, CGFloat(sample.y) * renderScale, 0)
+            transform = CATransform3DScale(transform, CGFloat(sample.scale), CGFloat(sample.scale), 1)
+            transform = CATransform3DRotate(transform, CGFloat(sample.rotation * .pi / 180), 0, 0, 1)
+            keyTimes.append(NSNumber(value: Double(index) / Double(sampleCount)))
+            opacities.append(NSNumber(value: visible ? sample.opacity : 0))
+            transforms.append(NSValue(caTransform3D: transform))
+        }
+
+        let opacity = CAKeyframeAnimation(keyPath: "opacity")
+        opacity.values = opacities
+        opacity.keyTimes = keyTimes
+        opacity.calculationMode = .linear
+        configureTextAnimation(opacity, duration: totalDuration)
+        layer.add(opacity, forKey: "graphicOpacity")
+
+        let transform = CAKeyframeAnimation(keyPath: "transform")
+        transform.values = transforms
+        transform.keyTimes = keyTimes
+        transform.calculationMode = .linear
+        configureTextAnimation(transform, duration: totalDuration)
+        layer.add(transform, forKey: "graphicTransform")
+    }
+
     private static func configureTextAnimation(
         _ animation: CAPropertyAnimation,
         duration: TimeInterval
@@ -1183,6 +1499,7 @@ enum EditorCompositionBuilder {
     /// Builds one continuous composition for the whole timeline (CapCut-style seamless preview).
     static func makePlayerItem(
         from clips: [EditorClip],
+        graphicOverlays: [EditorGraphicOverlay] = [],
         audioClips: [EditorAudioClip] = [],
         overlayClips: [EditorOverlayClip] = [],
         adjustmentLayers: [EditorAdjustmentLayer] = [],
@@ -1192,10 +1509,20 @@ enum EditorCompositionBuilder {
         closingTransitionDuration: TimeInterval = 0,
         canvasSettings: EditorCanvasSettings = .default,
         audioTrackSettings: [Int: EditorAudioTrackSettings] = [:],
-        masterVolume: Float = 1.0
+        masterVolume: Float = 1.0,
+        proxySettings: EditorProxySettings = .default,
+        renderCacheFingerprint: String? = nil
     ) async -> AVPlayerItem? {
+        if proxySettings.backgroundRenderCache,
+           let renderCacheFingerprint,
+           let cached = EditorMediaCache.cachedRenderURL(for: renderCacheFingerprint) {
+            let item = AVPlayerItem(url: cached)
+            item.audioTimePitchAlgorithm = .spectral
+            return item
+        }
         guard let built = await build(
             from: clips,
+            graphicOverlays: graphicOverlays,
             audioClips: audioClips,
             overlayClips: overlayClips,
             adjustmentLayers: adjustmentLayers,
@@ -1205,6 +1532,7 @@ enum EditorCompositionBuilder {
             closingTransitionDuration: closingTransitionDuration,
             canvasSettings: canvasSettings,
             canvasSize: canvasSettings.renderSize(longEdge: 1920),
+            proxySettings: proxySettings,
             audioTrackSettings: audioTrackSettings,
             masterVolume: masterVolume
         ) else { return nil }
@@ -2425,7 +2753,16 @@ enum EditorCompositionBuilder {
 
     // MARK: - Asset loading
 
-    private static func loadVideoAsset(for asset: PHAsset) async -> AVAsset? {
+    private static func loadVideoAsset(
+        for asset: PHAsset,
+        proxySettings: EditorProxySettings = .default,
+        allowProxy: Bool = false
+    ) async -> AVAsset? {
+        if allowProxy,
+           proxySettings.isEnabled,
+           let proxyURL = EditorMediaCache.cachedProxyURL(for: asset, quality: proxySettings.quality) {
+            return AVURLAsset(url: proxyURL)
+        }
         if let cached = assetCache[asset.localIdentifier] { return cached }
 
         let options = PHVideoRequestOptions()

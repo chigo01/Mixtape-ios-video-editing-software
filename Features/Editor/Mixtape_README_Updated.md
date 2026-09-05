@@ -469,7 +469,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 |------|------|
 | `View/Screens/EditorScreen.swift` | Editor layout, speed panel, volume sheet, contextual toolbars, text/audio sheets, export navigation. |
 | `View/Screens/EditorExportScreen.swift` | Export UI: live preview + scrubber, project name, settings, progress, share. |
-| `ViewModel/EditorViewModel.swift` | Timeline, playback, video/text/audio overlays, `projectTitle`, undo, export, auto-save. |
+| `ViewModel/EditorViewModel.swift` | Timeline, playback, video/text/audio overlays, `projectTitle`, undo, export, auto-save, MixPilot draft/apply. |
 | `Model/EditorExportSettings.swift` | Resolution, frame rate, format enums + size estimate. |
 | `Model/EditorSpeedRamp.swift` | Persisted curve points, presets, interpolation, source/timeline mapping, split logic, and deterministic render segments. |
 | `Model/EditorOverlayCompositing.swift` | Backward-compatible blend-mode, visibility-mask, and chroma-key settings for overlay layers. |
@@ -509,7 +509,11 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/TextOverlayEditorSheet.swift` | Bottom sheet for text content + style controls. |
 | `View/Components/EditorClipActionBar.swift` | Contextual primary-clip and video-overlay action bars. |
 | `View/Components/EditorTextActionBar.swift` | Contextual toolbar when a text overlay is selected. |
-| `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export + main editing tools. |
+| `View/Components/EditorTopBar.swift` / `EditorBottomToolbar.swift` | Undo/redo/export, **MixPilot**, and main editing tools. |
+| `Model/EditorCopilotPlan.swift` | MixPilot highlight ranking, excerpt duration, and ordinary-edit plan validation. |
+| `Services/EditorCopilotService.swift` | On-device MixPilot routing (highlights vs timeline edits) via Foundation Models, with a local brief parser for common verbs. |
+| `View/Components/EditorCopilotPanel.swift` | MixPilot sheet: brief, excerpt controls, draft review, Apply. |
+| `Tests/Copilot/` | Deterministic MixPilot plan tests and the device acceptance matrix. |
 | `Model/EditorClip.swift` | Primary and overlay clip models; trim/split, color grade, overlay timing/transform, preview aspect. |
 | `Model/EditorColorGrade.swift` | Codable filter catalog, primary controls, eight-band HSL, master/R/G/B curves, and lift/gamma/gain/offset values. |
 | `Model/EditorTransition.swift` | Single transition catalog: 105 stable identifiers plus picker title, icon, category, renderer routing, and opening/cut/closing targets. |
@@ -582,6 +586,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 13. Tap **Export** → preview/scrub on **`EditorExportScreen`** → set project name → configure settings → export → confirm Photos + Share (filename = sanitized project title).
 14. Add background music → trim/move/split → adjust volume/fades → confirm playback past video end if music is longer.
 15. Edit → leave editor → reopen from **`ProjectCardView`** on home — confirm `ProjectStore` round-trip (clips, transitions, text, audio, fades, title).
+16. Park the playhead mid-clip → open **MixPilot** → ask for a split, fade, or effect at the playhead → review the draft → Apply → confirm the playhead stays on the edit and one Undo restores the previous timeline.
 
 ---
 
@@ -636,6 +641,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 | **Motion tracking** | CapCut-style tracking box, smoothing, tracked text/overlays, and clip stabilization crop | `EditorMotionTracking`, `EditorMotionTracker`, `MotionTrackingToolPanel` | Vision object tracking, image registration, inverse camera path |
 | **Green-frame prevention** | Encoded black/white backing tracks initialize every exported pixel | `EditorCompositionBuilder` | YUV surfaces, alpha, letterboxing, export parity |
 | **Opening and closing edges** | Project-level entrance/exit transitions stay on true timeline endpoints | `EditorTransitionTarget`, `EditorViewModel`, `EditorTimeline` | Endpoint state, undo, backward-compatible Codable |
+| **MixPilot** | On-device editor assistant: spoken highlight reels plus ordinary playhead edits (split, fade, speed, crop, effects, keyframes, text, captions). Review a draft, then Apply as one undo step. | `EditorCopilotPlan`, `EditorCopilotService`, `EditorCopilotPanel`, `EditorViewModel` | Foundation Models on device, Speech sampling, validated edit plans, isolated preview |
 
 ---
 
@@ -779,6 +785,15 @@ Use this as a map of **what we built** and **why**, in learning order:
 - Selecting a style rebuilds and plays the relevant edge/cut preview. Duration is adjustable up to 2 s (clamped to available clip lengths), and **Apply to all cuts** can update every internal boundary in one operation.
 - Cancel restores the endpoint/cut state; Done creates one undo step and persists the transition kind/duration. Preview and export use the same `AVVideoComposition` opacity/transform ramps over cached, encoded black/white backing-video tracks, so letterboxing and transformed or faded frames always contain initialized pixels instead of a green YUV surface. The closing effect finishes at the last video frame; any audio-only tail continues over the initialized black canvas. The Core Animation text-overlay tool is attached only during offline export because AVPlayer does not support it.
 
+### 12.11 MixPilot
+
+- Tap **MixPilot** in `EditorTopBar` to open the on-device assistant. No AI API key or cloud backend is used. Apple Intelligence on iOS 26+ is required; otherwise the sheet explains why MixPilot is unavailable and manual editing continues.
+- Describe an ordinary edit (“split at this playhead and add a fade”, “vignette here and keyframe it”, “slow motion here”) or a spoken highlight/excerpt (“2-minute excerpt of the most useful moments”). Common verbs are parsed locally; the on-device model is used when the brief is not a known pattern.
+- Highlight reels stay a first-class path: 10 seconds to 30 minutes, any spoken clip (not only webinars), captions and language controls, on-device Speech only. Long recordings are sampled instead of fully transcribed. Extra lanes, graphics, adjustment layers, sequences, markers, reverse, speed ramps, and unlinked dialogue still block highlight assembly — they do not block general edits.
+- General edits resolve against the current playhead and existing editor tools: split, speed, crop, rotate, flip, filter, catalog transitions, adjustment-layer effects with amount keyframes, clip keyframes, text, volume, markers, and captions. A fade at the playhead uses the transition catalog (not fade-only). “Split and add a fade” is one cut, not a split that then fails on the new edge.
+- The current timeline is unchanged until **Apply**. Apply records one undo transaction. After an ordinary MixPilot edit, the playhead stays on that edit and the timeline scrolls there. Highlight Apply still opens the new cut at `0`.
+- Mixed “cut a reel and add effects” requests are rejected rather than partially applied. Reverse, freeze, tracking, stabilization, and generated music remain manual. Original media is never deleted.
+
 ---
 
 ## 13. Professional editor roadmap
@@ -802,6 +817,7 @@ through project save/reopen, and has reasonable device-performance coverage.
 | **Rendering safety** | Orientation normalization, SDR GPU working space, and encoded black/white backing tracks that prevent green or uninitialized export frames. |
 | **Keyframes** | Reusable local-time scalar tracks with hold, linear, easing, and custom cubic Bézier curves; contextual graph editing for clip, overlay, audio, and text animation; undo, persistence, split handling, and shared preview/export sampling. |
 | **Motion** | CapCut-style tracking box (drag onto a subject → Start tracking → auto-attaches the selected text/overlay), transform smoothing, and adjustable clip stabilization crop with GPU preview/export parity. |
+| **MixPilot** | On-device editor assistant in the header. Spoken highlight reels and ordinary playhead edits (split, transitions, speed, crop, effects, keyframes, text, captions) preview as a draft, then Apply through existing `EditorViewModel` commands as one undo transaction. |
 
 ### Phase 1 — complete the core editing toolkit
 
@@ -1219,9 +1235,32 @@ attribution anywhere at export time (currently only shown at insert time).
 |----------|---------|--------------------|
 | 25 | **Text animation — complete** | Persisted In/Out/Loop presets, adjustable timing/intensity, per-character typewriter timing, bounce, pop, zoom, directional slide, fade, blur, pulse, and wiggle. Presets compose with manual keyframes and render identically in live preview and offline export. |
 | 26 | **Captions and transcript editing — core workflow shipped** | Timeline-mix speech transcription, editable timed words/segments, per-word highlighting, caption styles and safe-zone placement, transcript search/tap-to-seek, Smart Review for fillers/low-confidence words/pauses, and SRT import/export ship with persistence, undo, and preview/export parity. An explicit transcript approval UI remains to connect range deletion to the shipped precision-edit commands. |
-| 27 | **Stickers and graphics** | Image/emoji/SF Symbol overlays, animated assets, trim/move/transform, blend modes, and reusable favorites. |
-| 28 | **Templates** | Versioned project templates with replaceable media slots, fonts, transitions, audio, safe zones, and preview thumbnails. |
+| 27 | **Stickers and graphics — core shipped** | Persisted image/emoji/SF Symbol layers, searchable library, project-safe imports, trim/move/transform, animation presets, blend modes, reusable favorites, undo, and preview/export parity. |
+| 28 | **Templates — core shipped** | Versioned local template packages, ordered primary/overlay media slots, preserved fonts/transitions/audio/canvas, preview thumbnails, validation, isolated bundled assets, undoable application, and editable results. Explicit safe-zone editing and portable import/export remain. |
 | 29 | **Effects architecture — core complete** | Ordered per-clip, overlay, and time-ranged adjustment-layer effects; bypass, parameters, presets, amount keyframes, cached render plans, undo/persistence, and shared preview/export rendering. |
+
+#### Priority 28 — Templates (core workflow shipped)
+
+The **TEMPLATES** workspace can capture the current edit as a named, versioned
+`EditorProjectTemplate`. Its manifest keeps the authoritative `EditorProject` edit graph plus ordered
+primary/overlay `EditorTemplateMediaSlot` records, expected media kinds, target durations, required
+font families, and normalized action/title safe-area metadata. Applying a template therefore produces
+ordinary editable clips, text, captions, graphics, audio lanes, effects, adjustment layers,
+transitions, keyframes, canvas settings, markers, and sequence structure—not a flattened render.
+
+Templates are stored as packages under Application Support. Audio files, imported graphic images,
+and canvas artwork are copied into the package; paths are rebased when packages move within the app
+container. Applying a template materializes another private asset copy scoped to the destination
+project, so deleting the source template cannot break an applied edit. PhotoKit video/image slots keep
+stable source identifiers while the current project's primary and overlay media fill matching slots in
+timeline order. Short replacements preserve the template's target timeline duration with a safe speed
+fallback and remove incompatible reverse, tracking, stabilization, or speed-curve state as needed.
+
+The library shows generated preview thumbnails, duration, canvas format, font count, media/overlay
+slot counts, and missing-reference diagnostics. Application is one undoable timeline transaction,
+keeps the destination project's identity and performance settings, invalidates preview/render caches,
+autosaves, and returns the user to the normal editor. Future-schema templates are rejected safely.
+Explicit guide editing and portable template import/export remain follow-up work.
 
 #### Priority 25 — Text animation (complete)
 
@@ -1248,6 +1287,14 @@ groups these into short caption segments stored as ordinary `EditorTextOverlay` 
 metadata. Regeneration is cancellable and only replaces the existing captions after recognition
 finishes successfully.
 
+Long recordings are recognized in 30-second sections with 0.5 seconds of context at each
+boundary. Section timestamps are mapped back to the edited timeline and overlap words are
+assigned by midpoint. Preparation decodes audio into bounded PCM buffers, skips silent sections,
+and reuses the successful language and recognition mode. On-device recognition is attempted first
+where supported, with server fallback. The UI reports section progress; each recognition attempt
+has a 60-second timeout and cancellation resumes the waiting task. A failed section aborts replacement
+and preserves existing captions. Device testing is still required for recognition quality and speed.
+
 The Captions tool provides language selection, editable/searchable transcript segments, tap-to-seek,
 style presets, per-word highlight color, bottom safe-zone placement, and SRT import/export. SRT timing
 is millisecond based; imported untimed words receive deterministic timing distributed inside their
@@ -1270,9 +1317,45 @@ silence gaps without mutating media.
 
 ### Phase 5 — reliability, performance, and project portability
 
+#### Priority 30 — Proxy and render cache (core workflow shipped)
+
+The editor now has a persistent **CACHE** workspace for performance media. Each project stores its
+playback policy (`EditorProxySettings`) independently: proxies on/off, automatic generation, 540p or
+720p profile, background render cache, and a bounded disk budget. Missing fields decode to safe
+defaults, so existing project documents open without migration work.
+
+`EditorMediaCache` writes disposable files beneath the app's Caches directory using atomic temporary
+exports. A proxy key includes the PhotoKit local identifier, asset modification date, pixel dimensions,
+duration, and encoding profile. Replaced or edited source media therefore cannot accidentally reuse an
+older proxy. Cache hits update recency, and the combined proxy/render store uses least-recently-used
+eviction against the user-selected budget. Generated files are excluded from backup. New work pauses
+below a 512 MB free-space floor, and editor teardown cancels active proxy and render exports.
+
+Preview composition asks for a matching proxy only for ordinary forward playback. Missing proxies,
+reverse playback, stills, and any failed lookup fall back to the original asset. Offline export passes
+`isOfflineRender: true`, which bypasses proxy selection entirely; project documents continue to retain
+the original Photos identity as their source of truth.
+
+The background render cache is keyed by the complete composited edit fingerprint: primary/overlay
+timing and transforms, speed, reverse state, effects, adjustment layers, transitions, canvas, audio
+lanes, gain/mute/solo, and master volume. Edits debounce for three seconds before utility-priority
+rendering, while **Render current cut now** is user-initiated. Preview uses a cached render only on an
+exact fingerprint match. Text and reusable graphics remain live SwiftUI layers over that render, so
+their selection handles and interaction stay immediate; offline export still burns them in through the
+authoritative full-resolution composition path.
+
+The CACHE sheet reports separate proxy/render counts and total bytes, offers 540p/720p generation,
+shows batch progress and low-storage/failure messages, and can clear proxies or preview renders
+independently. Clearing either cache never deletes, rewrites, or unlinks original media.
+
+Physical-device QA should cover: iCloud-only source download; proxy generation cancellation; 540p ↔
+720p switching; forward/reverse clips; video overlays; adjustment layers; edit invalidation after trim,
+speed, effect, canvas, and mix changes; playback after clearing each cache; low-storage messaging; save
+and reopen; and confirmation that final export resolution/detail comes from the original assets.
+
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
-| 30 | **Proxy and render cache** | Background proxy generation, cache invalidation by edit fingerprint, low-storage controls, and full-resolution export. |
+| 30 | **Proxy and render cache — core shipped** | Background proxy generation, exact edit-fingerprint render reuse, LRU/low-storage controls, and original-only full-resolution export are implemented. Remaining work is device stress/performance telemetry. |
 | 31 | **Project packages and relinking** | Optional copied media, missing-media UI, relink by asset/file identity, portable packages, and cleanup policies. |
 | 32 | **Schema migration and recovery** | Versioned project documents, migrations, atomic saves, crash recovery snapshots, corruption diagnostics, and backup restore. |
 | 33 | **Background export queue** | Multiple cancellable jobs, app lifecycle recovery, notifications, thermal/storage checks, and resumable UI state. |
@@ -1291,8 +1374,56 @@ accepted timeline mutation and rendered frame.
 | Priority | Feature | Definition of done |
 |----------|---------|--------------------|
 | 38 | **Smart ingest and rough cut** | Index PhotoKit and Files/iCloud sources into bins with tags and semantic search; detect shots, duplicates, blur, poor exposure, speakers, actions, and likely highlights; then propose a reviewable first assembly from a duration, format, and text brief. Confidence is visible, source media is never silently discarded, and analysis is cached by asset fingerprint. |
-| 39 | **Editing copilot** | Convert requests such as “make a 30-second vertical cut, keep every product mention, add captions, and duck the music” into a validated, structured edit plan. Show the proposed operations and preview/diff before applying them through existing `EditorViewModel` commands as one undoable transaction. |
+| 39 | **MixPilot — core shipped** | On-device assistant that turns a brief into a reviewed draft, then applies validated highlight reels or ordinary timeline edits through existing `EditorViewModel` commands as one undo transaction. Remaining: conversation memory, auto-reframe, music ducking, and generated media. |
 | 40 | **Generative finishing and provenance** | Offer optional object removal, background replacement, frame extension, B-roll, thumbnail, and sound suggestions through cancellable on-device or disclosed cloud jobs. Generated results are labelled and imported as normal relinkable assets with model, prompt, license, consent, and attribution metadata. |
+
+#### Priority 39 — MixPilot (core shipped)
+
+The editor header opens **MixPilot** (Mixtape + Pilot). On compatible iOS 26+
+devices it uses Apple Foundation Models to interpret a brief. MixPilot is a
+general editor assistant that speeds up ordinary editing; spoken **highlight
+reels** remain a first-class path. The user reviews a draft before anything is
+applied. No AI API key or cloud backend is used. Speech for MixPilot stays
+on-device.
+
+Highlight reels keep the original contract: target duration (10 seconds–30 minutes,
+named in the brief or chosen with the excerpt control), captions, spoken language,
+on-device speech only, and a simple primary-video timeline. The length is not
+fixed at 45 seconds or 2 minutes — 5, 10, or any allowed length up to 30 minutes
+or the source clip, whichever is shorter. Extra lanes, graphics, adjustment
+layers, sequences, markers, transitions, reverse playback, speed ramps, and
+unlinked dialogue still block highlight assembly — they do not block general
+edits. Canvas/framing stays unchanged. Mixed “cut a reel and add effects”
+requests are rejected rather than partially applied.
+
+Long spoken recordings (webinars, talks) are **sampled** instead of fully
+transcribed. Intro music or silent stretches do not abort with “No speech
+detected.” Ranking fills toward the requested duration instead of stopping at
+eight short sections. PCM for sampled windows is written in the audio file’s
+processing format so long prepares do not crash.
+
+General edits resolve against the current playhead and existing editor tools:
+split, speed, crop, rotate, flip, color filter, catalog transitions (fade is the
+default, not the only cut), adjustment-layer effects with amount keyframes, clip
+keyframes, text, volume, markers, and captions. Common briefs are parsed locally
+without a model round-trip. “Split and add a fade at this playhead” is one cut;
+a redundant second split is not applied on the new edge. Unknown effects, empty
+text, invalid times, and more than eight operations are rejected before preview.
+
+The current timeline is unchanged until Apply. Apply records one undo
+transaction. After an ordinary MixPilot edit, the playhead stays on that edit
+and the timeline scroller recenters there. Highlight Apply still opens the new
+cut at `0`. Tapping outside the brief field dismisses the keyboard. Original
+media is never deleted.
+
+Unavailable-device/language states, cancellation, stale draft rejection, and
+preview isolation are implemented. The deterministic test runner and the required
+real-device acceptance matrix are in `Tests/Copilot/README.md`. Hardware highlight
+quality, offline speech resource availability, thermal behavior, and complete
+preview/export acceptance still require device validation. Follow-up conversation
+memory, per-section selection controls, semantic asset caching, automatic vertical
+reframing, music ducking, reverse/freeze/track via MixPilot, and generated media
+remain future work.
 
 #### Where AI fits into existing priorities
 
@@ -1377,10 +1508,11 @@ The roadmap priorities above remain the detailed source of truth. When choosing 
 | **P0** | **Reverse and freeze frame — shipped** | Primary clips and video overlays support non-destructive cached reverse generation, cancellable progress, appropriate embedded-audio policy, playhead-accurate ripple freeze insertion, held animation state, relinking/regeneration, persistence, undo, and shared preview/export rendering. |
 | **P0** | **Effects stack + adjustment layers — core shipped** | Primary clips and media overlays own ordered effect stacks. A time-ranged adjustment layer applies one shared color grade and effect stack to every clip and overlay underneath it, with bypass, parameters, amount keyframes, cached render plans, undo/persistence, and identical preview/export composition. The searchable library ships 36 curated recipes across eight categories, backed by 30 GPU-accelerated primitives including temporal motion, RGB/glitch, screen, pixel, blur, light, and distortion treatments. New layers cover the In/Out range or, when none is marked, the full project. Each effect has a large keyframe timeline with project timecode/frame labels and tap-to-seek editing. |
 | **P1** | **Text animation — shipped** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability now make the text system creator-ready. |
-| **P1** | **Stickers and reusable graphics** | Adds fast creator-oriented composition without weakening the professional timeline model. Assets should behave like ordinary timeline elements. |
+| **P1** | **Stickers and reusable graphics — core shipped** | Searchable emoji/SF Symbol library, project-safe image/PNG import, app-wide favorites, a dedicated trim/move timeline lane, direct preview positioning, transforms, blend modes, animation presets, undo/persistence, and offline export parity. |
 | **P1** | **Proxy and render cache** | Critical for long projects, high-resolution media, thermal limits, and older supported devices. Full-resolution originals remain authoritative for export. |
 | **P1** | **Project packages, missing-media recovery, and relinking** | Professional users must be able to trust projects across storage changes, imported Files media, cleanup, and device lifecycle events. |
-| **P1** | **Templates** | Templates improve creative speed once the underlying timeline, captions, effects, text, and asset replacement semantics are stable. |
+| **P1** | **Templates — core shipped** | Versioned local packages now preserve the editable project graph, bundled creative assets, ordered replacement slots, validation, thumbnails, and one-step undo application. Portable sharing and explicit safe-zone editing remain. |
+| **P1** | **MixPilot — core shipped** | On-device assistant that operates the real editor: spoken highlight/excerpt cuts plus ordinary playhead edits, reviewed as a draft, applied as one undo step. Conversation memory, auto-reframe, ducking, and generated media remain. |
 | **P2** | **Explicit SDR/HDR and wide-gamut color management** | Needed for trustworthy high-end HDR workflows after performance budgets and representative-device testing are in place. |
 | **P2** | **Professional iPad workspace** | Adaptive layout, keyboard shortcuts, trackpad/pointer behavior, and external-display preview should make Mixtape feel native to larger screens rather than merely scaled up. |
 
@@ -1520,7 +1652,7 @@ The goal is not to duplicate all three. Mixtape's differentiation should come fr
 
 ### 14.8 Differentiator 1 — AI that operates the real editor
 
-AI should never become a second hidden editor. It should analyze media and propose normal Mixtape operations.
+AI should never become a second hidden editor. It should analyze media and propose normal Mixtape operations. **MixPilot** is the shipped first slice of that contract: on-device briefs become ordinary timeline commands, reviewed before Apply, undone as one transaction.
 
 Example request:
 

@@ -55,6 +55,447 @@ struct EditorBottomToolbar: View {
     }
 }
 
+struct EditorTemplatesPanel: View {
+    let vm: EditorViewModel
+    @State private var templates: [EditorProjectTemplate] = []
+    @State private var templateName = ""
+    @State private var isSaving = false
+    @State private var localMessage: String?
+    @State private var pendingTemplate: EditorProjectTemplate?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    creationCard
+                    libraryHeader
+                    if templates.isEmpty { emptyState }
+                    else {
+                        LazyVStack(spacing: 14) {
+                            ForEach(templates) { template in templateCard(template) }
+                        }
+                    }
+                    if let message = localMessage ?? vm.templateStatusMessage {
+                        Label(message, systemImage: "checkmark.circle")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.appColors.backgroundColor)
+        .task { reload() }
+        .alert(
+            "Apply template?",
+            isPresented: Binding(
+                get: { pendingTemplate != nil },
+                set: { if !$0 { pendingTemplate = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { pendingTemplate = nil }
+            Button("Apply", role: .destructive) {
+                guard let template = pendingTemplate else { return }
+                apply(template)
+                pendingTemplate = nil
+            }
+        } message: {
+            Text("This replaces the current timeline structure and fills its media slots in order. You can undo the entire application in one step.")
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            VStack(spacing: 2) {
+                Text("Templates").font(.headline)
+                Text("Reusable, fully editable projects").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { vm.selectedTool = nil }
+                    .font(.subheadline.bold())
+                    .foregroundStyle(Color.appColors.primaryColor)
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 58)
+    }
+
+    private var creationCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("SAVE CURRENT EDIT", systemImage: "square.and.arrow.down.fill")
+                .font(.caption.bold()).foregroundStyle(.secondary)
+            Text("Turn this timeline into a reusable template. Primary clips and video overlays become replaceable slots; timing and creative work stay intact.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                TextField("Template name", text: $templateName)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .frame(height: 44)
+                    .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 11))
+                Button {
+                    saveTemplate()
+                } label: {
+                    if isSaving { ProgressView().controlSize(.small).frame(width: 48) }
+                    else { Text("Save").fontWeight(.bold).frame(width: 48) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.appColors.primaryColor)
+                .disabled(templateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var libraryHeader: some View {
+        HStack {
+            Text("MY TEMPLATES").font(.caption.bold()).foregroundStyle(.secondary)
+            Spacer()
+            Text("\(templates.count)").font(.caption.bold()).foregroundStyle(Color.appColors.primaryColor)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rectangle.3.group.bubble.left")
+                .font(.system(size: 34)).foregroundStyle(Color.appColors.primaryColor)
+            Text("Your template library is empty").font(.subheadline.bold())
+            Text("Name the current edit above to save its structure, styling, audio, graphics, and replaceable media slots.")
+                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 34)
+    }
+
+    private func templateCard(_ template: EditorProjectTemplate) -> some View {
+        let validation = EditorTemplateStore.shared.validation(for: template)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 14) {
+                templatePreview(template)
+                    .frame(width: 92, height: 92)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(template.name).font(.headline).lineLimit(1)
+                    Label(
+                        "\(template.primarySlotCount) media · \(template.overlaySlotCount) overlay slots",
+                        systemImage: "rectangle.on.rectangle.angled"
+                    )
+                    Label(
+                        "\(template.project.formattedDuration) · \(template.project.canvasSettings.format.title)",
+                        systemImage: "clock"
+                    )
+                    if !template.requiredFontFamilies.isEmpty {
+                        Label("\(template.requiredFontFamilies.count) font styles", systemImage: "textformat")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+
+            if !validation.isReady {
+                Label(
+                    "\(validation.issueCount) original references unavailable. Current timeline media can still fill matching slots.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption).foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 10) {
+                Button(role: .destructive) {
+                    delete(template)
+                } label: {
+                    Image(systemName: "trash").frame(width: 36, height: 24)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    pendingTemplate = template
+                } label: {
+                    Label("Apply to current media", systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.appColors.primaryColor)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private func templatePreview(_ template: EditorProjectTemplate) -> some View {
+        if let url = EditorTemplateStore.shared.thumbnailURL(for: template),
+           let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            ZStack {
+                LinearGradient(
+                    colors: [Color.appColors.primaryColor.opacity(0.55), .purple.opacity(0.35)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(systemName: "film.stack.fill").font(.title).foregroundStyle(.white.opacity(0.9))
+            }
+        }
+    }
+
+    private func saveTemplate() {
+        let name = templateName
+        isSaving = true
+        localMessage = nil
+        Task {
+            do {
+                _ = try await vm.saveCurrentProjectAsTemplate(named: name)
+                templateName = ""
+                reload()
+            } catch {
+                localMessage = error.localizedDescription
+            }
+            isSaving = false
+        }
+    }
+
+    private func apply(_ template: EditorProjectTemplate) {
+        do {
+            try vm.applyTemplate(template)
+            localMessage = nil
+        } catch {
+            localMessage = error.localizedDescription
+        }
+    }
+
+    private func delete(_ template: EditorProjectTemplate) {
+        do {
+            try EditorTemplateStore.shared.delete(template)
+            localMessage = "Deleted “\(template.name)”. Applied projects keep private copies of its assets."
+            reload()
+        } catch {
+            localMessage = error.localizedDescription
+        }
+    }
+
+    private func reload() {
+        templates = EditorTemplateStore.shared.loadAll()
+    }
+}
+
+struct ProxyRenderCachePanel: View {
+    let vm: EditorViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(spacing: 16) {
+                    originalMediaBanner
+                    proxyCard
+                    renderCard
+                    storageCard
+                    if let message = vm.cacheStatusMessage {
+                        Label(message, systemImage: statusIcon)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.appColors.backgroundColor)
+        .task { await vm.refreshMediaCacheStats() }
+    }
+
+    private var header: some View {
+        ZStack {
+            VStack(spacing: 2) {
+                Text("Performance Media").font(.headline)
+                Text("Proxy & render cache").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { vm.selectedTool = nil }
+                    .font(.subheadline.bold())
+                    .foregroundStyle(Color.appColors.primaryColor)
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 58)
+    }
+
+    private var originalMediaBanner: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Originals stay authoritative")
+                    .font(.subheadline.bold())
+                Text("Performance files are used only while editing. Every export reads the full-quality original media.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(Color.green.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var proxyCard: some View {
+        cacheCard(title: "PROXY MEDIA", icon: "bolt.horizontal.circle.fill") {
+            Toggle("Use proxies for playback", isOn: Binding(
+                get: { vm.proxySettings.isEnabled },
+                set: vm.setProxyEnabled
+            ))
+            .tint(Color.appColors.primaryColor)
+
+            Toggle("Generate automatically", isOn: Binding(
+                get: { vm.proxySettings.automaticallyGenerate },
+                set: vm.setAutomaticProxyGeneration
+            ))
+            .tint(Color.appColors.primaryColor)
+            .disabled(!vm.proxySettings.isEnabled)
+
+            Picker("Proxy quality", selection: Binding(
+                get: { vm.proxySettings.quality },
+                set: vm.setProxyQuality
+            )) {
+                ForEach(EditorProxyQuality.allCases) { quality in
+                    Text(quality.title).tag(quality)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!vm.proxySettings.isEnabled)
+
+            if let progress = vm.proxyGenerationProgress {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Generating proxies")
+                        Spacer()
+                        Text(progress, format: .percent.precision(.fractionLength(0)))
+                            .monospacedDigit()
+                    }
+                    .font(.caption.weight(.semibold))
+                    ProgressView(value: progress).tint(Color.appColors.primaryColor)
+                }
+            }
+
+            Button {
+                vm.generateMissingProxies()
+            } label: {
+                Label("Generate missing proxies", systemImage: "wand.and.rays")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.appColors.primaryColor)
+            .disabled(vm.proxyGenerationProgress != nil)
+        }
+    }
+
+    private var renderCard: some View {
+        cacheCard(title: "RENDER CACHE", icon: "film.stack.fill") {
+            Toggle("Cache complex playback", isOn: Binding(
+                get: { vm.proxySettings.backgroundRenderCache },
+                set: vm.setBackgroundRenderCache
+            ))
+            .tint(Color.appColors.primaryColor)
+
+            Text("After editing pauses, Mixtape renders the exact current cut for smooth playback. Any visual, timing, or audio change gets a new fingerprint.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                vm.buildRenderCacheNow()
+            } label: {
+                HStack {
+                    if vm.isBuildingRenderCache { ProgressView().controlSize(.small) }
+                    Label(
+                        vm.isBuildingRenderCache ? "Rendering current cut…" : "Render current cut now",
+                        systemImage: "play.rectangle.on.rectangle.fill"
+                    )
+                    Spacer()
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(!vm.proxySettings.backgroundRenderCache || vm.isBuildingRenderCache)
+        }
+    }
+
+    private var storageCard: some View {
+        cacheCard(title: "STORAGE", icon: "internaldrive.fill") {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(byteString(vm.mediaCacheStats.totalBytes))
+                        .font(.title3.bold()).monospacedDigit()
+                    Text("\(vm.mediaCacheStats.proxyCount) proxies · \(vm.mediaCacheStats.renderCount) renders")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Limit \(budgetString)")
+                    .font(.caption.bold())
+                    .foregroundStyle(Color.appColors.primaryColor)
+            }
+
+            Slider(
+                value: Binding(
+                    get: { Double(vm.proxySettings.cacheBudgetMB) },
+                    set: { vm.setMediaCacheBudgetMB(Int($0)) }
+                ),
+                in: 256...16_384,
+                step: 256
+            )
+            .tint(Color.appColors.primaryColor)
+
+            HStack(spacing: 10) {
+                Button("Clear proxies", role: .destructive) { vm.clearProxyCache() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                Button("Clear renders", role: .destructive) { vm.clearRenderCache() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func cacheCard<Content: View>(
+        title: String,
+        icon: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(title, systemImage: icon)
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var statusIcon: String {
+        vm.isBuildingRenderCache || vm.proxyGenerationProgress != nil
+            ? "hourglass"
+            : "checkmark.circle"
+    }
+
+    private func byteString(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private var budgetString: String {
+        ByteCountFormatter.string(
+            fromByteCount: Int64(vm.proxySettings.cacheBudgetMB) * 1_024 * 1_024,
+            countStyle: .file
+        )
+    }
+}
+
 struct VisualEffectsStackPanel: View {
     let vm: EditorViewModel
     let isEmbedded: Bool
@@ -434,6 +875,281 @@ struct VisualEffectsStackPanel: View {
                 .foregroundStyle(.black)
         }
         .disabled(vm.selectedAdjustmentLayerID == nil && vm.selectedClip == nil && vm.selectedOverlayClip == nil)
+    }
+}
+
+// MARK: - Stickers and reusable graphics
+
+struct EditorGraphicsPanel: View {
+    let vm: EditorViewModel
+    @State private var category: GraphicLibraryCategory = .emoji
+    @State private var query = ""
+    @State private var photoItem: PhotosPickerItem?
+    @State private var favoriteIDs = EditorGraphicFavoritesStore.ids
+    @State private var importError: String?
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let graphic = vm.selectedGraphicOverlay { inspector(graphic) }
+                    searchField
+                    categoryStrip
+                    libraryGrid
+                }
+                .padding(18)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.appColors.backgroundColor)
+        .alert("Couldn’t Import Graphic", isPresented: Binding(
+            get: { importError != nil }, set: { if !$0 { importError = nil } }
+        )) { Button("OK", role: .cancel) {} } message: { Text(importError ?? "Unknown error") }
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    try vm.importGraphicImageData(data)
+                } catch { importError = error.localizedDescription }
+                photoItem = nil
+            }
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            VStack(spacing: 1) {
+                Text("Stickers & Graphics").font(.headline)
+                Text("Reusable visual layers").font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { vm.commitGraphicEdit(); vm.selectedTool = nil }
+                    .font(.subheadline.bold()).foregroundStyle(Color.appColors.primaryColor)
+            }
+        }
+        .padding(.horizontal, 18).frame(height: 52)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search symbols", text: $query)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 13).frame(height: 42)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.07)))
+    }
+
+    private var categoryStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 9) {
+                ForEach(GraphicLibraryCategory.allCases) { item in
+                    Button { category = item } label: {
+                        Label(item.title, systemImage: item.icon)
+                            .font(.caption.bold()).padding(.horizontal, 13).frame(height: 36)
+                            .foregroundStyle(category == item ? .black : .white)
+                            .background(Capsule().fill(category == item ? Color.appColors.primaryColor : Color.white.opacity(0.08)))
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var libraryGrid: some View {
+        if category == .imported {
+            VStack(spacing: 12) {
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Label("Import PNG, photo or artwork", systemImage: "photo.badge.plus")
+                        .font(.subheadline.bold()).frame(maxWidth: .infinity).frame(height: 52)
+                        .foregroundStyle(.black)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.appColors.primaryColor))
+                }
+                Text("Mixtape copies the graphic into project-safe storage. Transparent PNGs stay transparent.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+        } else if filteredSources.isEmpty {
+            ContentUnavailableView(
+                category == .favorites ? "No Favorites Yet" : "No Results",
+                systemImage: category == .favorites ? "heart" : "magnifyingglass",
+                description: Text(category == .favorites ? "Long-press the heart on any graphic to keep it reusable." : "Try another search.")
+            )
+        } else {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(filteredSources, id: \.catalogID) { source in graphicCell(source) }
+            }
+        }
+    }
+
+    private func graphicCell(_ source: EditorGraphicSource) -> some View {
+        Button { vm.addGraphic(source: source) } label: {
+            ZStack(alignment: .topTrailing) {
+                graphicPreview(source)
+                    .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit)
+                    .background(RoundedRectangle(cornerRadius: 13).fill(Color.white.opacity(0.07)))
+                if favoriteIDs.contains(source.catalogID) {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.appColors.primaryColor)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(.black.opacity(0.55)))
+                        .padding(4)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                EditorGraphicFavoritesStore.toggle(source)
+                favoriteIDs = EditorGraphicFavoritesStore.ids
+            } label: {
+                Label(
+                    favoriteIDs.contains(source.catalogID) ? "Remove from Favorites" : "Add to Favorites",
+                    systemImage: favoriteIDs.contains(source.catalogID) ? "heart.slash" : "heart"
+                )
+            }
+        }
+        .accessibilityLabel("Add \(source.displayName)")
+        .accessibilityHint("Double tap to place on the preview. Long press for favorites.")
+    }
+
+    @ViewBuilder
+    private func graphicPreview(_ source: EditorGraphicSource) -> some View {
+        switch source {
+        case let .emoji(value): Text(value).font(.system(size: 34))
+        case let .symbol(name): Image(systemName: name).resizable().scaledToFit().padding(20).foregroundStyle(.white)
+        case let .image(path):
+            if let image = UIImage(contentsOfFile: path) { Image(uiImage: image).resizable().scaledToFit().padding(7) }
+        }
+    }
+
+    private func inspector(_ graphic: EditorGraphicOverlay) -> some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                graphicPreview(graphic.source).frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(graphic.title).font(.subheadline.bold()).lineLimit(1)
+                    Text("\(format(graphic.startTime)) – \(format(graphic.endTime))")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Spacer()
+                inspectorButton(
+                    favoriteIDs.contains(graphic.source.catalogID) ? "heart.fill" : "heart",
+                    "Favorite"
+                ) {
+                    EditorGraphicFavoritesStore.toggle(graphic.source)
+                    favoriteIDs = EditorGraphicFavoritesStore.ids
+                }
+                inspectorButton("doc.on.doc", "Duplicate") { vm.duplicateSelectedGraphic() }
+                inspectorButton("trash", "Delete", destructive: true) { vm.deleteSelectedGraphic() }
+            }
+            control("Size", value: Double(graphic.size), range: 40...320) { value in
+                vm.updateSelectedGraphic { $0.size = CGFloat(value) }
+            }
+            control("Scale", value: Double(graphic.scale), range: 0.25...3) { value in
+                vm.updateSelectedGraphic { $0.scale = CGFloat(value) }
+            }
+            control("Rotate", value: graphic.rotationDegrees, range: -180...180) { value in
+                vm.updateSelectedGraphic { $0.rotationDegrees = value }
+            }
+            control("Opacity", value: graphic.opacity, range: 0...1) { value in
+                vm.updateSelectedGraphic { $0.opacity = value }
+            }
+            HStack(spacing: 10) {
+                Menu {
+                    ForEach(EditorGraphicAnimation.allCases) { value in
+                        Button(value.title) { vm.updateSelectedGraphic { $0.animation = value }; vm.commitGraphicEdit() }
+                    }
+                } label: { inspectorMenu("Animation", graphic.animation.title, "waveform.path") }
+                Menu {
+                    ForEach(EditorGraphicBlendMode.allCases) { value in
+                        Button(value.title) { vm.updateSelectedGraphic { $0.blendMode = value }; vm.commitGraphicEdit() }
+                    }
+                } label: { inspectorMenu("Blend", graphic.blendMode.title, "circle.hexagongrid") }
+                Button {
+                    vm.updateSelectedGraphic { $0.isFlippedHorizontally.toggle() }; vm.commitGraphicEdit()
+                } label: { inspectorMenu("Transform", "Flip", "arrow.left.and.right.righttriangle.left.righttriangle.right") }
+                    .buttonStyle(.plain)
+            }
+        }
+        .padding(14).background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.055)))
+    }
+
+    private func control(_ title: String, value: Double, range: ClosedRange<Double>, update: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 12) {
+            Text(title).font(.caption).foregroundStyle(.secondary).frame(width: 52, alignment: .leading)
+            Slider(value: Binding(get: { value }, set: update), in: range, onEditingChanged: { if !$0 { vm.commitGraphicEdit() } })
+                .tint(Color.appColors.primaryColor)
+            Text(value.formatted(.number.precision(.fractionLength(title == "Opacity" ? 2 : 0))))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+        }
+    }
+
+    private func inspectorButton(_ icon: String, _ label: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: icon).frame(width: 34, height: 34) }
+            .buttonStyle(.plain).foregroundStyle(destructive ? .red : Color.appColors.primaryColor)
+            .background(Circle().fill(Color.white.opacity(0.07))).accessibilityLabel(label)
+    }
+
+    private func inspectorMenu(_ label: String, _ value: String, _ icon: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.body.bold())
+            Text(value).font(.caption2.bold()).lineLimit(1)
+        }.frame(maxWidth: .infinity).frame(height: 52)
+            .foregroundStyle(.white).background(RoundedRectangle(cornerRadius: 11).fill(Color.white.opacity(0.07)))
+            .accessibilityLabel("\(label): \(value)")
+    }
+
+    private var filteredSources: [EditorGraphicSource] {
+        let all: [EditorGraphicSource]
+        switch category {
+        case .emoji: all = EditorGraphicCatalog.emojis.map(EditorGraphicSource.emoji)
+        case .symbols: all = EditorGraphicCatalog.symbols.map(EditorGraphicSource.symbol)
+        case .favorites:
+            all = favoriteIDs.compactMap(EditorGraphicSource.init(catalogID:))
+            return all.filter(matches)
+        case .imported: return []
+        }
+        return all.filter(matches)
+    }
+
+    private func matches(_ source: EditorGraphicSource) -> Bool {
+        query.isEmpty || source.displayName.localizedCaseInsensitiveContains(query)
+    }
+
+    private func format(_ seconds: TimeInterval) -> String {
+        let value = max(0, Int(seconds.rounded()))
+        return String(format: "%02d:%02d", value / 60, value % 60)
+    }
+}
+
+private enum GraphicLibraryCategory: String, CaseIterable, Identifiable {
+    case emoji, symbols, favorites, imported
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var icon: String {
+        switch self {
+        case .emoji: return "face.smiling"
+        case .symbols: return "sparkles"
+        case .favorites: return "heart.fill"
+        case .imported: return "photo.badge.plus"
+        }
     }
 }
 

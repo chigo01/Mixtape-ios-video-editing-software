@@ -586,6 +586,7 @@ private struct EditorExportPreviewSection: View {
                 }
 
                 EditorTextOverlayLayerView(vm: vm)
+                EditorGraphicOverlayLayerView(vm: vm)
                     .allowsHitTesting(false)
             }
         }
