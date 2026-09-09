@@ -12,6 +12,7 @@ import SwiftUI
 enum ProjectListRoute: Hashable {
     case createProject
     case editor(EditorProject)
+    case template(EditorProjectTemplate)
 }
 
 struct ProjectListScreen: View {
@@ -19,27 +20,14 @@ struct ProjectListScreen: View {
     @State private var projectToDelete: EditorProject?
     @State private var projectToRename: EditorProject?
     @State private var renameText = ""
-    @State private var path: [ProjectListRoute] = []
 
     var body: some View {
         AppGlobalBackgroundScaffold {
-            NavigationStack(path: $path) {
+            Group {
                 GeometryReader { geometry in
                     projectListContent(availableWidth: geometry.size.width)
                         .frame(maxWidth: 1180)
                         .frame(maxWidth: .infinity)
-                }
-                .navigationDestination(for: ProjectListRoute.self) { route in
-                    switch route {
-                    case .createProject:
-                        CreateProjectScreen { project in
-                            // Swap the create screen for the editor so back pops to home.
-                            path = [.editor(project)]
-                        }
-                    case .editor(let project):
-                        EditorScreen(project: project)
-                            .id(project.id)
-                    }
                 }
                 .confirmationDialog(
                     "Delete this project?",
@@ -82,9 +70,6 @@ struct ProjectListScreen: View {
             .toolbarBackground(Color.appColors.backgroundColor, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .onAppear { listVM.reload() }
-            .onChange(of: path) { _, newPath in
-                if newPath.isEmpty { listVM.reload() }
-            }
         }
     }
 
@@ -93,12 +78,12 @@ struct ProjectListScreen: View {
         let columnCount = availableWidth >= 1080 ? 3 : 2
 
         return VStack(spacing: 0) {
-            SizedBox(height: usesGrid ? 32 : 20)
+            SizedBox(height: usesGrid ? 20 : 12)
 
-            Text("Studio WorkSpace")
+            Text("Studio Workspace")
                 .font(.system(size: usesGrid ? 24 : 18, weight: .semibold))
             SizedBox(height: 8)
-            Text("Manage and curate your visual narratives")
+            Text("Your stories, ready for the next cut.")
                 .font(.system(size: usesGrid ? 16 : 15))
                 .foregroundStyle(Color.appColors.darkPrimary)
 

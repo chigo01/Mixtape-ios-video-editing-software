@@ -368,6 +368,23 @@ actor EditorMediaCache {
         activeRenderExport = nil
     }
 
+    /// Settings only removes regenerable performance files, never project-owned media.
+    /// Reject cleanup while an exporter is writing, including across actor suspension points.
+    func clearDisposableCache() throws {
+        guard activeProxyExports.isEmpty, activeRenderExport == nil else {
+            throw NSError(domain: "MixtapeCache", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Preview files are still being generated. Try clearing the cache again in a moment."
+            ])
+        }
+        for name in [Self.proxyFolder, Self.renderFolder] {
+            let directory = Self.directory(named: name)
+            let files = try FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            )
+            for file in files { try FileManager.default.removeItem(at: file) }
+        }
+    }
+
     func clearProxies() { Self.clear(directoryNamed: Self.proxyFolder) }
     func clearRenders() { Self.clear(directoryNamed: Self.renderFolder) }
 

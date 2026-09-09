@@ -66,6 +66,13 @@ enum EditorCaptionAudioSource: String, CaseIterable, Identifiable {
 struct EditorCaptionTranscriptResult: Sendable {
     let words: [EditorCaptionWord]
     let localeIdentifier: String
+    let isAudioOnly: Bool
+
+    init(words: [EditorCaptionWord], localeIdentifier: String, isAudioOnly: Bool = false) {
+        self.words = words
+        self.localeIdentifier = localeIdentifier
+        self.isAudioOnly = isAudioOnly
+    }
 }
 
 /// Builds the same edited audio mix used by preview/export, then asks Apple's
@@ -82,12 +89,15 @@ enum EditorCaptionService {
         requestedLocaleIdentifier: String?,
         source: EditorCaptionAudioSource,
         requiresOnDeviceRecognition: Bool = false,
+        allowsAudioOnlyFallback: Bool = false,
         timeRange: ClosedRange<TimeInterval>? = nil,
         highlightSampleTarget: TimeInterval? = nil,
         onProgress: @MainActor (String) -> Void = { _ in }
     ) async throws -> EditorCaptionTranscriptResult {
         let authorization = await requestAuthorization()
-        guard authorization == .authorized else { throw EditorCaptionError.permissionDenied }
+        guard authorization == .authorized || allowsAudioOnlyFallback else {
+            throw EditorCaptionError.permissionDenied
+        }
         try Task.checkCancellation()
         onProgress("Preparing timeline audio…")
 
@@ -161,6 +171,15 @@ enum EditorCaptionService {
         var allWords: [EditorCaptionWord] = []
         var preferredLocale: Locale?
         var preferredMode: Bool?
+        if authorization != .authorized {
+            let activityWords = audioActivityWords(from: chunks)
+            guard !activityWords.isEmpty else { throw EditorCaptionError.silentAudio }
+            return EditorCaptionTranscriptResult(
+                words: activityWords,
+                localeIdentifier: Locale.current.identifier,
+                isAudioOnly: true
+            )
+        }
         for (index, chunk) in chunks.enumerated() {
             try Task.checkCancellation()
             onProgress("Recognizing section \(index + 1) of \(chunks.count)…")
@@ -214,7 +233,9 @@ enum EditorCaptionService {
                 if let recognized, !recognized.isEmpty { break }
             }
             guard let recognized else {
-                if requiresOnDeviceRecognition {
+                if requiresOnDeviceRecognition && allowsAudioOnlyFallback {
+                    continue
+                } else if requiresOnDeviceRecognition {
                     throw EditorCopilotError.message(
                         "On-device transcription could not finish. No audio was uploaded. "
                         + (lastError?.localizedDescription ?? "Try another spoken language.")
@@ -237,6 +258,17 @@ enum EditorCaptionService {
             }
         }
         guard !allWords.isEmpty else {
+            if allowsAudioOnlyFallback {
+                let activityWords = audioActivityWords(from: chunks)
+                guard !activityWords.isEmpty else {
+                    throw EditorCaptionError.noSpeech(attemptedLanguages: candidates.map(\.identifier))
+                }
+                return EditorCaptionTranscriptResult(
+                    words: activityWords,
+                    localeIdentifier: preferredLocale?.identifier ?? Locale.current.identifier,
+                    isAudioOnly: true
+                )
+            }
             throw EditorCaptionError.noSpeech(attemptedLanguages: candidates.map(\.identifier))
         }
         return EditorCaptionTranscriptResult(
@@ -252,6 +284,24 @@ enum EditorCaptionService {
         let ownedStart: TimeInterval
         let ownedEnd: TimeInterval
         let isAudible: Bool
+    }
+
+    private static func audioActivityWords(from chunks: [AudioChunk]) -> [EditorCaptionWord] {
+        var result: [EditorCaptionWord] = []
+        for chunk in chunks where chunk.isAudible {
+            var start = chunk.ownedStart
+            while start < chunk.ownedEnd - 0.3 {
+                let end = min(chunk.ownedEnd, start + 8)
+                result.append(EditorCaptionWord(
+                    text: "Audio activity \(result.count + 1)",
+                    startTime: start,
+                    endTime: end,
+                    confidence: 0
+                ))
+                start = end
+            }
+        }
+        return result
     }
 
     /// Decode once, then write bounded PCM files without an AAC export per section.

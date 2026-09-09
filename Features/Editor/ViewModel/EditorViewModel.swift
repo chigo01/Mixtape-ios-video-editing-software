@@ -6945,7 +6945,6 @@ final class EditorViewModel {
     // MARK: Copilot transactions
 
     var copilotRestriction: String? {
-        if let reason = EditorCopilotService.unavailableReason { return reason }
         guard !clips.isEmpty else {
             return "Add a clip before using MixPilot."
         }
@@ -7035,7 +7034,8 @@ final class EditorViewModel {
                     )
                     let transcript = try await self.copilotTranscript(
                         source: source, locale: locale, jobID: jobID,
-                        highlightSampleTarget: Double(duration)
+                        highlightSampleTarget: Double(duration),
+                        allowsAudioOnlyFallback: true
                     )
                     let plan = try await EditorCopilotService.plan(
                         prompt: prompt, target: duration, captions: wantsCaptions,
@@ -7055,7 +7055,9 @@ final class EditorViewModel {
                     try await self.publishCopilotDraft(
                         source: source, draft: draft, plan: plan, editPlan: nil,
                         seekTo: 0, jobID: jobID,
-                        readyMessage: "Draft ready. Review the cuts before applying."
+                        readyMessage: transcript.isAudioOnly
+                            ? "Draft ready from audio activity. Review the cuts before applying; captions need supported on-device speech recognition."
+                            : "Draft ready. Review the cuts before applying."
                     )
                 case .excerpt(let start, let end, let wantsCaptions):
                     if let reason = self.copilotHighlightRestriction {
@@ -7150,12 +7152,14 @@ final class EditorViewModel {
     private func copilotTranscript(
         source: EditorTimelineSnapshot, locale: String?, jobID: UUID,
         timeRange: ClosedRange<TimeInterval>? = nil,
-        highlightSampleTarget: TimeInterval? = nil
+        highlightSampleTarget: TimeInterval? = nil,
+        allowsAudioOnlyFallback: Bool = false
     ) async throws -> EditorCaptionTranscriptResult {
         let canReuseFullTranscript = timeRange == nil
             && copilotTranscriptSource == source
             && copilotTranscriptLocale == locale
-        if canReuseFullTranscript, let cached = copilotTranscript {
+        if canReuseFullTranscript, let cached = copilotTranscript,
+           allowsAudioOnlyFallback || !cached.isAudioOnly {
             return cached
         }
         do {
@@ -7164,6 +7168,7 @@ final class EditorViewModel {
                 audioTrackSettings: [:], masterVolume: 1,
                 requestedLocaleIdentifier: locale, source: .video,
                 requiresOnDeviceRecognition: true,
+                allowsAudioOnlyFallback: allowsAudioOnlyFallback,
                 timeRange: timeRange,
                 highlightSampleTarget: highlightSampleTarget,
                 onProgress: { [weak self] message in
@@ -7174,7 +7179,7 @@ final class EditorViewModel {
             guard copilotJobID == jobID else {
                 throw CancellationError()
             }
-            if timeRange == nil {
+            if timeRange == nil, !transcript.isAudioOnly {
                 copilotTranscript = transcript
                 copilotTranscriptSource = source
                 copilotTranscriptLocale = locale

@@ -12,7 +12,7 @@ struct EditorExportScreen: View {
     @Bindable var vm: EditorViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var settings = EditorExportSettings()
+    @State private var settings = EditorExportSettings.userDefaults
     @State private var showShareSheet = false
 
     var body: some View {

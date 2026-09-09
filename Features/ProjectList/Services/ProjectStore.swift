@@ -262,6 +262,31 @@ final class EditorTemplateStore {
         return project
     }
 
+    /// Fork the edit graph with a fresh identity and privately copied package assets.
+    func createProject(from template: EditorProjectTemplate) throws -> EditorProject {
+        let id = UUID()
+        let source = try materializedProject(from: template, destinationProjectID: id)
+        let now = Date()
+        let project = EditorProject(
+            id: id, title: template.name, createdAt: now, modifiedAt: now,
+            clips: source.clips, textOverlays: source.textOverlays,
+            graphicOverlays: source.graphicOverlays, audioClips: source.audioClips,
+            overlayClips: source.overlayClips, adjustmentLayers: source.adjustmentLayers,
+            openingTransitionKind: source.openingTransitionKind,
+            openingTransitionDuration: source.openingTransitionDuration,
+            closingTransitionKind: source.closingTransitionKind,
+            closingTransitionDuration: source.closingTransitionDuration,
+            timelinePosition: 0, selectedClipID: source.clips.first?.id,
+            sequences: source.sequences, markers: source.markers,
+            canvasSettings: source.canvasSettings,
+            exportInPoint: source.exportInPoint, exportOutPoint: source.exportOutPoint,
+            audioTrackSettings: source.audioTrackSettings, masterVolume: source.masterVolume,
+            proxySettings: source.proxySettings
+        )
+        try ProjectStore.shared.save(project)
+        return project
+    }
+
     private func makeSlots(from project: EditorProject) -> [EditorTemplateMediaSlot] {
         let ids = project.clips.map(\.assetLocalIdentifier) + project.overlayClips.map(\.assetLocalIdentifier)
         let fetch = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)

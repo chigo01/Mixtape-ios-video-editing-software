@@ -70,6 +70,19 @@ struct PlanValidationTests {
         print("PASS: a longer excerpt can keep more than eight ranked sections")
         precondition(EditorCopilotPlan.selectionCap(forTarget: 45) == 12)
         precondition(EditorCopilotPlan.selectionCap(forTarget: 120) == 30)
+        let offlineCandidates = [
+            EditorCopilotSegment(id: 10, start: 0, end: 7, text: "Um, like, this is an introduction"),
+            EditorCopilotSegment(id: 11, start: 40, end: 48, text: "The key pricing result increased revenue because retention improved."),
+            EditorCopilotSegment(id: 12, start: 90, end: 98, text: "A separate closing thought.")
+        ]
+        let offlineRank = EditorCopilotPlan.offlineRanking(
+            prompt: "Extract the pricing and revenue highlights", candidates: offlineCandidates, limit: 3
+        )
+        precondition(offlineRank.first == 11 && Set(offlineRank) == Set([10, 11, 12]))
+        precondition(offlineRank == EditorCopilotPlan.offlineRanking(
+            prompt: "Extract the pricing and revenue highlights", candidates: offlineCandidates, limit: 3
+        ))
+        print("PASS: offline ranking is relevant, complete, and deterministic")
         let many = (0..<20).map { EditorCopilotSegment(id: $0, start: Double($0) * 10, end: Double($0) * 10 + 6, text: "s") }
         let twoMinutes = try EditorCopilotPlan.validated(
             rankedIDs: Array(0..<8), candidates: many, targetDuration: 120, sourceDuration: 250, addsCaptions: false

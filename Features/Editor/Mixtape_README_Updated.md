@@ -1380,11 +1380,13 @@ accepted timeline mutation and rendered frame.
 #### Priority 39 — MixPilot (core shipped)
 
 The editor header opens **MixPilot** (Mixtape + Pilot). On compatible iOS 26+
-devices it uses Apple Foundation Models to interpret a brief. MixPilot is a
-general editor assistant that speeds up ordinary editing; spoken **highlight
-reels** remain a first-class path. The user reviews a draft before anything is
-applied. No AI API key or cloud backend is used. Speech for MixPilot stays
-on-device.
+devices it uses Apple Foundation Models to interpret a brief and rank transcript
+sections. Other supported devices use an offline compatibility planner for the
+built-in highlight presets, timed excerpts, and supported editor commands. When
+local speech recognition is unavailable, highlight assembly falls back to sampled
+audio activity and omits captions rather than inventing transcript text. The user
+reviews a draft before anything is applied. No AI API key or cloud backend is
+used; media analysis stays on-device.
 
 Highlight reels keep the original contract: target duration (10 seconds–30 minutes,
 named in the brief or chosen with the excerpt control), captions, spoken language,
@@ -1416,11 +1418,12 @@ and the timeline scroller recenters there. Highlight Apply still opens the new
 cut at `0`. Tapping outside the brief field dismisses the keyboard. Original
 media is never deleted.
 
-Unavailable-device/language states, cancellation, stale draft rejection, and
-preview isolation are implemented. The deterministic test runner and the required
-real-device acceptance matrix are in `Tests/Copilot/README.md`. Hardware highlight
-quality, offline speech resource availability, thermal behavior, and complete
-preview/export acceptance still require device validation. Follow-up conversation
+Foundation Model availability, offline fallback, cancellation, stale draft
+rejection, and preview isolation are implemented. The deterministic test runner
+and the required real-device acceptance matrix are in `Tests/Copilot/README.md`.
+Hardware highlight quality, offline speech resource availability, audio-only cut
+quality, thermal behavior, and complete preview/export acceptance still require
+device validation. Follow-up conversation
 memory, per-section selection controls, semantic asset caching, automatic vertical
 reframing, music ducking, reverse/freeze/track via MixPilot, and generated media
 remain future work.

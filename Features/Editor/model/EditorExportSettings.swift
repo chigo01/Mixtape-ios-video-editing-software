@@ -125,6 +125,15 @@ struct EditorExportSettings: Equatable {
     var includeHDR: Bool = false
     var format: EditorExportFormat = .mp4
 
+    static var userDefaults: EditorExportSettings {
+        let defaults = UserDefaults.standard
+        var settings = EditorExportSettings()
+        settings.resolution = EditorExportResolution(rawValue: defaults.string(forKey: "export.defaultResolution") ?? "") ?? .p1080
+        settings.frameRate = EditorExportFrameRate(rawValue: defaults.integer(forKey: "export.defaultFrameRate")) ?? .fps30
+        settings.quality = EditorExportQuality(rawValue: defaults.string(forKey: "export.defaultQuality") ?? "") ?? .balanced
+        return settings
+    }
+
     var targetVideoBitratebps: Int {
         quality.targetBitratebps(for: resolution)
     }

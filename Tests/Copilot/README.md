@@ -13,11 +13,12 @@ Build with Xcode 26 or newer:
 xcodebuild -project Mixtape.xcodeproj -scheme Mixtape -destination 'generic/platform=iOS Simulator' -configuration Debug -derivedDataPath /tmp/mixtape-copilot-build CODE_SIGNING_ALLOWED=NO build
 ```
 
-Physical-device acceptance (requires iOS 26+, Apple Intelligence enabled and downloaded, and on-device speech resources for the selected language):
+Physical-device acceptance should cover both an Apple Intelligence device and an older supported device:
 
 - Start with locally downloaded spoken video clips, no extra lanes, transitions, or unlinked dialogue. Open Copilot in the editor header.
 - On a long recording (30+ minutes, ideally 2–3 hours), ask for 2, 5, or 10 minutes — or type a custom length. Confirm Copilot samples speech instead of transcribing the whole file. Intro music or silent stretches must not abort the job. The draft length should follow the request (capped to the source clip) and remain undoable.
-- In airplane mode, request a 45-second highlight reel with captions. Confirm transcription and ranking complete without a network fallback. Missing local speech resources must produce an explicit error.
+- In airplane mode on an Apple Intelligence device, request a 45-second highlight reel with captions. Confirm transcription and semantic ranking complete without a network fallback.
+- On a device without Apple Intelligence, request 45-second and 2-minute highlights. Confirm the offline mode notice appears and the draft is assembled locally. With local speech resources, confirm keyword ranking and captions work. Without speech permission/resources, confirm audio-activity ranking still creates a draft, reports the fallback, and omits captions.
 - Review source ranges, captions, and draft playback. Confirm the main timeline has not changed, including after closing the sheet or terminating/reopening the app before Apply.
 - Apply. Confirm every clip/caption is editable. One Undo restores the original timeline and captions, and Redo restores the draft. Save/reopen and export: check duration, speech boundaries, caption timing, framing, grading, and sound against preview.
 - Change the duration, caption toggle, language, and brief; regenerate. Identical source/language reuses only the in-memory transcript. Changed source/language must trigger transcription again.
@@ -25,9 +26,9 @@ Physical-device acceptance (requires iOS 26+, Apple Intelligence enabled and dow
 - Ask for unsupported music, reframing, tracking, or generated media and confirm an explicit explanation, not a success claim.
 - Ask for a timed effect or keyframe (for example “add a vignette at the playhead and keyframe it”). Confirm Copilot plans an adjustment-layer effect with amount keyframes, previews it without changing the main timeline, and Apply/Undo uses one transaction. Highlight-reel options stay unused for this path.
 - Confirm the built-in Highlights suggestion still produces a spoken highlight draft with duration, captions, and language controls. Existing extra lanes still block highlight reels but must not block effect/keyframe/text drafts.
-- Check an older iOS/device, Apple Intelligence disabled/model downloading, unavailable speech language, denied Speech permission, missing/iCloud media, quiet/no-speech footage, and a long recording with multiple analysis batches.
+- Check Apple Intelligence disabled/model downloading, unavailable speech language, denied Speech permission, missing/iCloud media, quiet/no-speech footage, and a long recording with multiple sampled windows. Preset and explicitly supported commands must continue through offline compatibility mode.
 
-The executable tests validate the model-output trust boundary. They do not establish highlight quality, Foundation Models runtime availability, hardware performance, or preview/export parity; those require the device checks above.
+The executable tests validate the model-output trust boundary and deterministic offline ranking. They do not establish highlight quality, Foundation Models runtime availability, hardware performance, or preview/export parity; those require the device checks above.
 
 Regression checks for the first phone report:
 

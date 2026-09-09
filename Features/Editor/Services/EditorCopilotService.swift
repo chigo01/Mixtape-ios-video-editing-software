@@ -83,20 +83,11 @@ struct EditorCopilotTimelineContext: Sendable {
 enum EditorCopilotService {
     static let productName = "MixPilot"
 
-    static var unavailableReason: String? {
-        guard #available(iOS 26.0, *) else {
-            return "On-device MixPilot requires iOS 26 or later. You can continue editing manually."
-        }
+    static var usesAppleIntelligence: Bool {
+        guard #available(iOS 26.0, *) else { return false }
         switch SystemLanguageModel.default.availability {
-        case .available: return nil
-        case .unavailable(.deviceNotEligible):
-            return "This device does not support Apple Intelligence. Manual editing is available."
-        case .unavailable(.appleIntelligenceNotEnabled):
-            return "Enable Apple Intelligence in Settings to use MixPilot."
-        case .unavailable(.modelNotReady):
-            return "Apple’s on-device model is still downloading or preparing. Try again when it is ready."
-        case .unavailable:
-            return "Apple’s on-device model is unavailable. Check Apple Intelligence settings and language support."
+        case .available: return true
+        case .unavailable: return false
         }
     }
 
@@ -141,8 +132,6 @@ enum EditorCopilotService {
         context: EditorCopilotTimelineContext,
         progress: (String) -> Void
     ) async throws -> EditorCopilotRequestKind {
-        if let reason = unavailableReason { throw EditorCopilotError.message(reason) }
-        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("iOS 26 is required.") }
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 800 else {
             throw EditorCopilotError.message("Enter a request of up to 800 characters.")
@@ -172,6 +161,12 @@ enum EditorCopilotService {
             && !looksLikeHighlight(trimmed) {
             return .edits
         }
+        guard usesAppleIntelligence else {
+            throw EditorCopilotError.message(
+                "Offline MixPilot understands highlights, timed excerpts, captions, splits, speed, crop, rotate, flip, filters, transitions, effects, text, volume, markers, and keyframes. Try one of those commands."
+            )
+        }
+        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("This request needs Apple Intelligence.") }
         progress("Reading your brief…")
         let intent = try await readIntent(
             prompt: trimmed, target: target, captions: captions, context: context
@@ -197,8 +192,6 @@ enum EditorCopilotService {
         context: EditorCopilotTimelineContext,
         progress: (String) -> Void
     ) async throws -> EditorCopilotEditPlan {
-        if let reason = unavailableReason { throw EditorCopilotError.message(reason) }
-        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("iOS 26 is required.") }
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 800 else {
             throw EditorCopilotError.message("Enter a request of up to 800 characters.")
@@ -213,6 +206,12 @@ enum EditorCopilotService {
                 summary: ""
             )
         }
+        guard usesAppleIntelligence else {
+            throw EditorCopilotError.message(
+                "That wording needs Apple Intelligence. On this device, use a specific command such as ‘split here’, ‘slow motion here’, ‘add a vignette’, ‘fade transition’, ‘add title’, or ‘add captions’."
+            )
+        }
+        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("This request needs Apple Intelligence.") }
         progress("Planning the edit…")
         let effects = EditorCopilotEditPlan.effectIDs.sorted().joined(separator: ", ")
         let properties = EditorCopilotEditPlan.propertyIDs.sorted().joined(separator: ", ")
@@ -291,8 +290,6 @@ enum EditorCopilotService {
                      transcript: EditorCaptionTranscriptResult, duration: Double,
                      progress: (String) -> Void,
                      skipIntent: Bool = false) async throws -> EditorCopilotPlan {
-        if let reason = unavailableReason { throw EditorCopilotError.message(reason) }
-        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("iOS 26 is required.") }
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 800 else {
             throw EditorCopilotError.message("Enter a request of up to 800 characters.")
         }
@@ -302,6 +299,10 @@ enum EditorCopilotService {
             highlightDuration = target
             highlightCaptions = captions
         } else {
+            guard usesAppleIntelligence else {
+                throw EditorCopilotError.message("Use a highlight preset or include the requested duration on this device.")
+            }
+            guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("This request needs Apple Intelligence.") }
             progress("Reading your brief…")
             let intent: CopilotIntent
             if isHighlightPreset(prompt) {
@@ -339,6 +340,19 @@ enum EditorCopilotService {
         let candidates = segments(from: transcript.words, duration: duration)
         guard !candidates.isEmpty else { throw EditorCopilotError.message("No usable speech sections were found.") }
         let cap = EditorCopilotPlan.selectionCap(forTarget: Double(highlightDuration))
+        if !usesAppleIntelligence {
+            progress(transcript.isAudioOnly ? "Finding active audio sections…" : "Ranking highlights offline…")
+            let ranked = EditorCopilotPlan.offlineRanking(
+                prompt: prompt, candidates: candidates, limit: cap
+            )
+            try Task.checkCancellation()
+            return try EditorCopilotPlan.validated(
+                rankedIDs: ranked, candidates: candidates,
+                targetDuration: Double(highlightDuration), sourceDuration: duration,
+                addsCaptions: highlightCaptions && !transcript.isAudioOnly
+            )
+        }
+        guard #available(iOS 26.0, *) else { throw EditorCopilotError.message("This request needs Apple Intelligence.") }
         // A fresh session per bounded batch avoids growing conversation context on long footage.
         var batches: [[EditorCopilotSegment]] = []
         var batch: [EditorCopilotSegment] = []

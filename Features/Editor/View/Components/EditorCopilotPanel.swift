@@ -3,12 +3,10 @@ import SwiftUI
 struct EditorCopilotPanel: View {
     @Bindable var vm: EditorViewModel
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
     @State private var prompt = ""
     @State private var target = 45
     @State private var captions = true
     @State private var locale = ""
-    @State private var availability: String?
     @FocusState private var isBriefFocused: Bool
 
     private let suggestions: [(label: String, prompt: String)] = [
@@ -38,7 +36,16 @@ struct EditorCopilotPanel: View {
                     Text("MixPilot speeds up ordinary editing — cuts, effects, keyframes, text, or captions. Analysis stays on this device. Review every change before applying. After Apply, the playhead stays on the edit.")
                         .font(.subheadline).foregroundStyle(.secondary)
 
-                    if let reason = availability ?? vm.copilotRestriction {
+                    if !EditorCopilotService.usesAppleIntelligence {
+                        Label(
+                            "Offline compatibility mode: preset highlights and supported editor commands run locally. Highlight ranking uses local speech or audio activity; captions require supported on-device speech recognition.",
+                            systemImage: "iphone.and.arrow.forward"
+                        )
+                        .font(.subheadline).padding()
+                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                    }
+
+                    if let reason = vm.copilotRestriction {
                         Label(reason, systemImage: "info.circle")
                             .font(.subheadline).padding()
                             .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
@@ -130,7 +137,6 @@ struct EditorCopilotPanel: View {
                         }
                     } else {
                         Button {
-                            availability = EditorCopilotService.unavailableReason
                             vm.generateCopilot(
                                 prompt: prompt, target: target, captions: captions,
                                 locale: locale.isEmpty ? nil : locale
@@ -145,8 +151,7 @@ struct EditorCopilotPanel: View {
                         .buttonStyle(.borderedProminent).tint(Color.appColors.primaryColor)
                         .foregroundStyle(.black)
                         .disabled(
-                            availability != nil
-                                || vm.copilotRestriction != nil
+                            vm.copilotRestriction != nil
                                 || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                 || prompt.count > 800
                         )
@@ -189,11 +194,7 @@ struct EditorCopilotPanel: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
-            availability = EditorCopilotService.unavailableReason
             target = min(max(target, 10), maxTarget)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { availability = EditorCopilotService.unavailableReason }
         }
         .onDisappear { vm.cancelCopilot() }
     }

@@ -114,6 +114,72 @@ struct EditorCopilotPlan: Equatable, Sendable {
         return min(40, max(8, Int((duration / 4).rounded(.up))))
     }
 
+    /// Deterministic ranking for devices without Foundation Models. It rewards
+    /// prompt matches and complete, information-dense speech, then spreads ties
+    /// across the source so long recordings are not cut only from the beginning.
+    static func offlineRanking(
+        prompt: String, candidates: [EditorCopilotSegment], limit: Int
+    ) -> [Int] {
+        guard !candidates.isEmpty, limit > 0 else { return [] }
+        let stopWords: Set<String> = [
+            "a", "an", "and", "are", "best", "clip", "clips", "create", "cut",
+            "extract", "for", "from", "highlight", "highlights", "in", "make",
+            "minute", "minutes", "moment", "moments", "most", "of", "reel",
+            "seconds", "the", "this", "to", "useful", "video", "with"
+        ]
+        func tokens(_ text: String) -> [String] {
+            text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count > 1 }
+        }
+        let promptTerms = Set(tokens(prompt)).subtracting(stopWords)
+        let cueTerms: Set<String> = [
+            "because", "first", "how", "important", "key", "learned", "remember",
+            "result", "secret", "solution", "therefore", "why"
+        ]
+        let fillerTerms: Set<String> = ["ah", "erm", "hmm", "like", "uh", "um"]
+        let sourceStart = candidates.map(\.start).min() ?? 0
+        let sourceEnd = candidates.map(\.end).max() ?? sourceStart + 1
+        let sourceSpan = max(1, sourceEnd - sourceStart)
+        let scored = candidates.map { segment -> (segment: EditorCopilotSegment, score: Double) in
+            let words = tokens(segment.text)
+            let wordSet = Set(words)
+            let promptMatches = Double(wordSet.intersection(promptTerms).count)
+            let cues = Double(wordSet.intersection(cueTerms).count)
+            let fillers = Double(words.filter { fillerTerms.contains($0) }.count)
+            let density = min(1, Double(wordSet.count) / Double(max(words.count, 1)))
+            let usefulLength = min(1, Double(words.count) / 14)
+            let durationFit = max(0, 1 - abs(segment.duration - 8) / 18)
+            let completeThought = segment.text.last.map { ".!?".contains($0) } == true ? 0.35 : 0
+            let score = promptMatches * 4 + cues * 0.7 + density * 0.7
+                + usefulLength * 0.8 + durationFit * 0.6 + completeThought - fillers * 0.45
+            return (segment, score)
+        }
+        var remaining = scored
+        var selected: [(segment: EditorCopilotSegment, score: Double)] = []
+        while !remaining.isEmpty, selected.count < min(limit, candidates.count) {
+            let next = remaining.enumerated().max { lhs, rhs in
+                func adjusted(_ item: (segment: EditorCopilotSegment, score: Double)) -> Double {
+                    guard !selected.isEmpty else { return item.score }
+                    let position = (item.segment.start - sourceStart) / sourceSpan
+                    let nearest = selected.map {
+                        abs(position - (($0.segment.start - sourceStart) / sourceSpan))
+                    }.min() ?? 0
+                    return item.score + min(0.8, nearest * 1.6)
+                }
+                let left = adjusted(lhs.element)
+                let right = adjusted(rhs.element)
+                if abs(left - right) < 0.000_001 {
+                    return lhs.element.segment.start > rhs.element.segment.start
+                }
+                return left < right
+            }
+            guard let next else { break }
+            selected.append(next.element)
+            remaining.remove(at: next.offset)
+        }
+        return selected.map(\.segment.id)
+    }
+
     static func validated(
         rankedIDs: [Int], candidates: [EditorCopilotSegment],
         targetDuration: Double, sourceDuration: Double, addsCaptions: Bool
