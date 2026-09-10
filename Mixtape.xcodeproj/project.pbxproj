@@ -96,6 +96,7 @@
 		CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */; };
 		CED677A82FADDF6E00531EBF /* MediaLibraryPickerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */; };
 		CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */; };
+		AB102030405060708090A001 /* SavedAudioFileResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB102030405060708090A002 /* SavedAudioFileResolver.swift */; };
 		CEEAAC5E2FB87D8900EF5188 /* SwipeBackEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */; };
 		DA5900000000000000000001 /* DashboardScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000002 /* DashboardScreen.swift */; };
 		DA5900000000000000000003 /* OnboardingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000004 /* OnboardingScreen.swift */; };
@@ -196,6 +197,7 @@
 		CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryPickerScreen.swift; sourceTree = "<group>"; };
 		CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Mixtape-Info.plist"; sourceTree = "<group>"; };
 		CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionConfigurator.swift; sourceTree = "<group>"; };
+		AB102030405060708090A002 /* SavedAudioFileResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedAudioFileResolver.swift; sourceTree = "<group>"; };
 		CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeBackEnabler.swift; sourceTree = "<group>"; };
 		DA5900000000000000000002 /* DashboardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardScreen.swift; sourceTree = "<group>"; };
 		DA5900000000000000000004 /* OnboardingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingScreen.swift; sourceTree = "<group>"; };
@@ -232,6 +234,7 @@
 			children = (
 				CED6779F2FAD0DA700531EBF /* Components */,
 				CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */,
+				AB102030405060708090A002 /* SavedAudioFileResolver.swift */,
 				CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */,
 				494AF242A7E19C2ED189AC1D /* AppTheme.swift */,
 				CED6779D2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift */,
@@ -574,6 +577,7 @@
 				CED677A12FAD0DD200531EBF /* SizedBox.swift in Sources */,
 				CED6779E2FAD04CD00531EBF /* AppGlobalBackgroundScaffold.swift in Sources */,
 				CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */,
+				AB102030405060708090A001 /* SavedAudioFileResolver.swift in Sources */,
 				CEEAAC5E2FB87D8900EF5188 /* SwipeBackEnabler.swift in Sources */,
 				CED677A42FAD2D2B00531EBF /* ProjectCardView.swift in Sources */,
 				CED677972FACE5BD00531EBF /* ProjectListScreen.swift in Sources */,

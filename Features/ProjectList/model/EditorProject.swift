@@ -271,7 +271,8 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
-        fileURLPath = try c.decode(String.self, forKey: .fileURLPath)
+        let savedPath = try c.decode(String.self, forKey: .fileURLPath)
+        fileURLPath = SavedAudioFileResolver.resolve(savedPath)?.path ?? savedPath
         originalDuration = try c.decode(TimeInterval.self, forKey: .originalDuration)
         trimStart = try c.decode(TimeInterval.self, forKey: .trimStart)
         trimEnd = try c.decode(TimeInterval.self, forKey: .trimEnd)
@@ -286,8 +287,7 @@ struct SavedAudioClip: Codable, Identifiable, Hashable {
     }
 
     func toAudioClip() -> EditorAudioClip? {
-        let url = URL(fileURLWithPath: fileURLPath)
-        guard FileManager.default.fileExists(atPath: fileURLPath) else { return nil }
+        guard let url = SavedAudioFileResolver.resolve(fileURLPath) else { return nil }
         return EditorAudioClip(
             id: id,
             title: title,
@@ -434,8 +434,7 @@ struct SavedAudioTrack: Codable, Identifiable, Hashable {
     var volume: Float
 
     func toAudioClip() -> EditorAudioClip? {
-        let url = URL(fileURLWithPath: fileURLPath)
-        guard FileManager.default.fileExists(atPath: fileURLPath) else { return nil }
+        guard let url = SavedAudioFileResolver.resolve(fileURLPath) else { return nil }
         return EditorAudioClip(
             id: id,
             title: title,

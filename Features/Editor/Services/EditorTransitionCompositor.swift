@@ -162,6 +162,7 @@ final class EditorTransitionRenderInstruction:
     let outgoingMotion: EditorTransitionMotionCurve?
     let renderSize: CGSize
     let canvasBackgroundKind: EditorCanvasBackgroundKind
+    let canvasBackgroundBlurIntensity: Double
 
     init(
         timeRange: CMTimeRange,
@@ -183,6 +184,7 @@ final class EditorTransitionRenderInstruction:
         outgoingMotion: EditorTransitionMotionCurve?,
         renderSize: CGSize,
         canvasBackgroundKind: EditorCanvasBackgroundKind,
+        canvasBackgroundBlurIntensity: Double,
         enablePostProcessing: Bool
     ) {
         self.timeRange = timeRange
@@ -204,6 +206,7 @@ final class EditorTransitionRenderInstruction:
         self.outgoingMotion = outgoingMotion
         self.renderSize = renderSize
         self.canvasBackgroundKind = canvasBackgroundKind
+        self.canvasBackgroundBlurIntensity = min(max(canvasBackgroundBlurIntensity, 0), 1)
         self.enablePostProcessing = enablePostProcessing
         self.containsTweening = incomingDuration > 0
             || outgoingDuration > 0
@@ -634,7 +637,10 @@ final class EditorTransitionCompositor: NSObject, AVVideoCompositing {
             ))
             return centered
                 .clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 36])
+                .applyingFilter(
+                    "CIGaussianBlur",
+                    parameters: [kCIInputRadiusKey: 12 + instruction.canvasBackgroundBlurIntensity * 52]
+                )
                 .cropped(to: extent)
         }
         if let trackID = instruction.backgroundTrackID,

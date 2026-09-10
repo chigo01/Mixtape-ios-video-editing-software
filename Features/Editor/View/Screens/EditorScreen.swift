@@ -21,6 +21,7 @@ struct EditorScreen: View {
     @State private var isVoiceoverRecorderPresented = false
     @State private var isOverlayPickerPresented = false
     @State private var isOverlayTracksExpanded = false
+    @State private var isAudioTracksExpanded = false
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioClipID: UUID?
@@ -36,6 +37,7 @@ struct EditorScreen: View {
     init(project: EditorProject) {
         _vm = State(initialValue: EditorViewModel(project: project))
         _isOverlayTracksExpanded = State(initialValue: project.selectedOverlayClipID != nil)
+        _isAudioTracksExpanded = State(initialValue: project.selectedAudioClipID != nil)
     }
 
     var body: some View {
@@ -217,6 +219,19 @@ struct EditorScreen: View {
                 .presentationDetents([.height(410), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.appColors.backgroundColor)
+        }
+        .editorSheet(
+            isPresented: Binding(
+                get: { vm.selectedTool == .background },
+                set: { if !$0 && vm.selectedTool == .background { vm.selectedTool = nil } }
+            ),
+            iPadHeight: .fixed(430)
+        ) {
+            BackgroundToolPanel(vm: vm, isEmbedded: UIDevice.current.userInterfaceIdiom == .pad)
+                .presentationDetents([.height(430), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color.appColors.backgroundColor)
+                .presentationBackgroundInteraction(.enabled)
         }
         .editorSheet(
             isPresented: Binding(
@@ -633,6 +648,7 @@ struct EditorScreen: View {
         EditorTimeline(
             vm: vm,
             isOverlayTracksExpanded: $isOverlayTracksExpanded,
+            isAudioTracksExpanded: $isAudioTracksExpanded,
             onInsertAfterClip: { clipIndex in
                 insertAfterClipIndex = clipIndex
                 isMediaPickerPresented = true
@@ -662,6 +678,12 @@ struct EditorScreen: View {
             }
         )
         .frame(maxHeight: .infinity, alignment: .top)
+        .onChange(of: vm.selectedOverlayClipID) { _, id in
+            if id != nil { isOverlayTracksExpanded = true }
+        }
+        .onChange(of: vm.selectedAudioClipID) { _, id in
+            if id != nil { isAudioTracksExpanded = true }
+        }
     }
 
     private var selectionActionBar: some View {
@@ -687,7 +709,8 @@ struct EditorScreen: View {
                     onAddAudio: {
                         insertAfterAudioClipID = nil
                         isAudioSourceChooserPresented = true
-                    }
+                    },
+                    onBack: { isAudioTracksExpanded = false }
                 )
             } else if vm.selectedClipID != nil {
                 EditorClipActionBar(vm: vm, onReplace: {
@@ -703,8 +726,16 @@ struct EditorScreen: View {
                     onAddOverlay: {
                         if vm.overlayClips.isEmpty {
                             isOverlayPickerPresented = true
+                        } else if isOverlayTracksExpanded {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isOverlayTracksExpanded = false
+                                vm.deselectOverlayClip()
+                            }
                         } else {
-                            isOverlayTracksExpanded.toggle()
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isOverlayTracksExpanded = true
+                                vm.selectPreferredOverlayClip()
+                            }
                         }
                     }
                 )

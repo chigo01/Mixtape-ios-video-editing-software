@@ -28,6 +28,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
     case opacity
     case compositing
     case canvas
+    case background
     case keyframe
     case track
     case stabilize
@@ -67,6 +68,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .opacity: return "OPACITY"
         case .compositing: return "COMPOSITE"
         case .canvas: return "CANVAS"
+        case .background: return "BACKGROUND"
         case .keyframe: return "KEYFRAME"
         case .track: return "TRACK"
         case .stabilize: return "STABILIZE"
@@ -97,6 +99,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .opacity: return "circle.lefthalf.filled"
         case .compositing: return "square.3.layers.3d"
         case .canvas: return "rectangle.ratio.16.to.9"
+        case .background: return "square.fill"
         case .keyframe: return "diamond.fill"
         case .track: return "viewfinder"
         case .stabilize: return "gyroscope"

@@ -59,7 +59,10 @@ and configurable video export across iPhone and adaptive iPad layouts.
   directly with the timeline's right trim handle, using the same generated-video path
   for preview and export as primary still-image clips.
 - Project-level 9:16, 16:9, 1:1, 4:5, and custom canvases with solid-color,
-  GPU-blurred, or imported-image backgrounds in both preview and export.
+  adjustable GPU-blurred, or imported-image backgrounds in both preview and export.
+  Backgrounds update live, include reset/image-removal controls, crop oversized artwork
+  to the canvas without affecting editor layout, and survive app-container relocation
+  during development rebuilds.
 - Forty categorized looks, twenty primary color controls, selective HSL, RGB/master
   curves, lift/gamma/gain/offset wheels, and waveform, parade, vectorscope, and
   histogram monitoring with copy/paste and apply-to-all workflows.

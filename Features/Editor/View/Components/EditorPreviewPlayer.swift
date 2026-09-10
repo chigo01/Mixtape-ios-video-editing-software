@@ -103,22 +103,35 @@ struct EditorPreviewPlayer: View {
     }
 
     private var background: some View {
-        Group {
-            if vm.canvasSettings.backgroundKind == .image,
-               let path = vm.canvasSettings.backgroundImagePath,
-               let image = UIImage(contentsOfFile: path) {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else if vm.canvasSettings.backgroundKind == .blur, let posterImage {
-                Image(uiImage: posterImage).resizable().scaledToFill().blur(radius: 24).scaleEffect(1.12)
-            } else {
-                let rgb = vm.canvasSettings.backgroundColorRGB
-                Color(
-                    red: Double((rgb >> 16) & 0xff) / 255,
-                    green: Double((rgb >> 8) & 0xff) / 255,
-                    blue: Double(rgb & 0xff) / 255
-                )
+        GeometryReader { geometry in
+            Group {
+                if vm.canvasSettings.backgroundKind == .image,
+                   let path = vm.canvasSettings.backgroundImagePath,
+                   let image = UIImage(contentsOfFile: path) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else if vm.canvasSettings.backgroundKind == .blur, let posterImage {
+                    Image(uiImage: posterImage)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: 10 + vm.canvasSettings.backgroundBlurIntensity * 34)
+                        .scaleEffect(1.12)
+                } else {
+                    let rgb = vm.canvasSettings.backgroundColorRGB
+                    Color(
+                        red: Double((rgb >> 16) & 0xff) / 255,
+                        green: Double((rgb >> 8) & 0xff) / 255,
+                        blue: Double(rgb & 0xff) / 255
+                    )
+                }
             }
+            // A large source image must never participate in the editor's layout.
+            // It is only a cropped canvas fill, regardless of its pixel dimensions.
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
+        .clipped()
     }
 
     private var controlsHUD: some View {

@@ -32,6 +32,7 @@ private struct SequenceLanePlacement: Identifiable {
 struct EditorTimeline: View {
     let vm: EditorViewModel
     @Binding var isOverlayTracksExpanded: Bool
+    @Binding var isAudioTracksExpanded: Bool
     var onInsertAfterClip: (Int) -> Void = { _ in }
     var onSelectOpeningTransition: () -> Void = {}
     var onSelectClosingTransition: () -> Void = {}
@@ -168,6 +169,13 @@ struct EditorTimeline: View {
         min(audioLaneResolvedHeight, audioLaneHeight * 2 + audioLaneSpacing)
     }
 
+    private var audioDisplayHeight: CGFloat {
+        if vm.audioClips.isEmpty || isAudioTracksExpanded {
+            return audioViewportHeight
+        }
+        return audioLaneHeight
+    }
+
     private var playheadStackHeight: CGFloat {
         4 + rulerLabelHeight + scrubRailHeight
             + (sequenceLaneHeight > 0 ? 8 + sequenceLaneHeight : 0)
@@ -175,7 +183,7 @@ struct EditorTimeline: View {
             + (isOverlayTracksExpanded || graphicOverlayLaneHeight == 0 ? 0 : 8 + graphicOverlayLaneHeight)
             + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
             + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
-            + (isOverlayTracksExpanded ? 0 : 8 + audioViewportHeight)
+            + (isOverlayTracksExpanded ? 0 : 8 + audioDisplayHeight)
     }
 
     private var layout: TimelineLayout {
@@ -232,7 +240,7 @@ struct EditorTimeline: View {
 
                         if !isOverlayTracksExpanded {
                             audioRow(totalWidth: totalWidth, layout: layout)
-                                .frame(height: audioViewportHeight, alignment: .leading)
+                                .frame(height: audioDisplayHeight, alignment: .leading)
                         }
 
                         // Fills space below tracks (and future overlay lanes) so horizontal pan works
@@ -400,7 +408,17 @@ struct EditorTimeline: View {
         guard let selectedID = vm.selectedOverlayClipID,
               let lane = overlayLanePlacements.first(where: { $0.clip.id == selectedID })?.lane
         else { return }
+        revealTimelineLane(lane, using: proxy, animated: animated)
+    }
 
+    private func revealSelectedAudioRow(using proxy: ScrollViewProxy, animated: Bool) {
+        guard let selectedID = vm.selectedAudioClipID,
+              let lane = audioLanePlacements.first(where: { $0.clip.id == selectedID })?.lane
+        else { return }
+        revealTimelineLane(lane, using: proxy, animated: animated)
+    }
+
+    private func revealTimelineLane(_ lane: Int, using proxy: ScrollViewProxy, animated: Bool) {
         if animated {
             withAnimation(.easeInOut(duration: 0.2)) {
                 proxy.scrollTo(lane, anchor: .center)
@@ -481,6 +499,7 @@ struct EditorTimeline: View {
         return Button {
             withAnimation(.easeInOut(duration: 0.18)) {
                 isOverlayTracksExpanded = true
+                vm.selectPreferredOverlayClip()
             }
         } label: {
             HStack(spacing: 7) {
@@ -776,17 +795,70 @@ struct EditorTimeline: View {
         Group {
             if vm.audioClips.isEmpty {
                 emptyAudioRow(totalWidth: totalWidth)
-            } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    audioLanes(totalWidth: totalWidth)
+            } else if isAudioTracksExpanded {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        audioLanes(totalWidth: totalWidth)
+                    }
+                    .onAppear {
+                        revealSelectedAudioRow(using: proxy, animated: false)
+                    }
+                    .onChange(of: audioLaneCount) { _, _ in
+                        revealSelectedAudioRow(using: proxy, animated: true)
+                    }
+                    .onChange(of: vm.selectedAudioClipID) { _, _ in
+                        revealSelectedAudioRow(using: proxy, animated: true)
+                    }
                 }
                 .frame(width: totalWidth, height: audioViewportHeight, alignment: .topLeading)
                 .contentShape(Rectangle())
                 .clipped()
+            } else {
+                collapsedAudioSummary(totalWidth: totalWidth, layout: layout)
             }
         }
-        .frame(width: totalWidth, height: audioViewportHeight, alignment: .topLeading)
+        .frame(width: totalWidth, height: audioDisplayHeight, alignment: .topLeading)
         .clipped()
+    }
+
+    private func collapsedAudioSummary(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        let start = vm.audioClips.map(\.timelineStart).min() ?? 0
+        let end = vm.audioClips.map(\.timelineEnd).max() ?? start
+        let startX = layout.contentX(forTime: start)
+        let endX = layout.contentX(forTime: end)
+        let width = max(64, endX - startX)
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isAudioTracksExpanded = true
+                vm.selectPreferredAudioClip()
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 11, weight: .bold))
+                Text("\(vm.audioClips.count) Audio Track\(vm.audioClips.count == 1 ? "" : "s")")
+                    .font(.system(size: 10, weight: .semibold))
+                Spacer(minLength: 2)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 9)
+            .frame(width: width, height: audioLaneHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.appColors.primaryColor.opacity(0.26))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.appColors.primaryColor.opacity(0.75), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .offset(x: startX)
+        .frame(width: totalWidth, height: audioLaneHeight, alignment: .leading)
+        .accessibilityLabel("Show \(vm.audioClips.count) audio tracks")
     }
 
     private func emptyAudioRow(totalWidth: CGFloat) -> some View {
@@ -1090,10 +1162,9 @@ private struct AudioClipThumb: View {
 
     @State private var trimBaseline: (timelineStart: TimeInterval, trimStart: TimeInterval)?
     @State private var moveBaselineTimelineStart: TimeInterval?
-    /// Real peak-amplitude samples loaded async from `AudioWaveformGenerator` (Priority 13) —
-    /// starts flat/placeholder-shaped and fills in once the file's been analyzed (cached after
-    /// the first time, so this is usually instant on subsequent renders).
-    @State private var waveformSamples: [CGFloat] = []
+    /// Full-file peak envelope from `AudioWaveformGenerator`. The visible bars are sliced to
+    /// this clip's trim window so the waveform matches the audio you actually hear.
+    @State private var waveform: AudioWaveform?
 
     private var width: CGFloat {
         max(44, CGFloat(clip.duration) * pixelsPerSecond)
@@ -1151,16 +1222,22 @@ private struct AudioClipThumb: View {
         }
     }
 
+    private var displayedWaveformSamples: [CGFloat] {
+        guard let waveform else { return [] }
+        let barCount = max(8, Int(width / 1.6))
+        return waveform.buckets(start: clip.trimStart, end: clip.trimEnd, count: barCount)
+    }
+
     private var clipVisual: some View {
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.appColors.primaryColor.opacity(isSelected ? 0.28 : 0.18))
 
-            WaveformShape(samples: waveformSamples)
-                .stroke(Color.appColors.primaryColor.opacity(0.95), lineWidth: 1)
-                .padding(.vertical, 6)
-                .task(id: clip.fileURL) {
-                    waveformSamples = await AudioWaveformGenerator.shared.waveform(for: clip.fileURL)
+            WaveformShape(samples: displayedWaveformSamples)
+                .fill(Color.appColors.primaryColor.opacity(isSelected ? 0.95 : 0.82))
+                .padding(.vertical, 3)
+                .task(id: clip.playbackFileURL) {
+                    waveform = await AudioWaveformGenerator.shared.waveform(for: clip.playbackFileURL)
                 }
 
             HStack(spacing: 5) {
@@ -1971,16 +2048,21 @@ private struct WaveformShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        guard !samples.isEmpty else { return path }
+        guard !samples.isEmpty, rect.width > 0, rect.height > 0 else { return path }
+
         let barCount = samples.count
-        let spacing = rect.width / CGFloat(barCount)
+        let slot = rect.width / CGFloat(barCount)
+        let barWidth = max(1, slot * 0.72)
         let midY = rect.midY
+        let maxHeight = max(2, rect.height - 1)
 
         for (index, sample) in samples.enumerated() {
-            let x = CGFloat(index) * spacing + spacing / 2
-            let h = max(2, sample * (rect.height - 4))
-            path.move(to: CGPoint(x: x, y: midY - h / 2))
-            path.addLine(to: CGPoint(x: x, y: midY + h / 2))
+            let amplitude = min(1, max(0, sample))
+            let height = max(1.5, amplitude * maxHeight)
+            let x = CGFloat(index) * slot + (slot - barWidth) / 2
+            let y = midY - height / 2
+            let bar = CGRect(x: x, y: y, width: barWidth, height: height)
+            path.addRoundedRect(in: bar, cornerSize: CGSize(width: min(1.2, barWidth / 2), height: 1))
         }
         return path
     }

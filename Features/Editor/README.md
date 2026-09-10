@@ -233,6 +233,7 @@ Core Animation tool because AVPlayer rejects that offline-only configuration.
 
 - **Stage aspect ratio:** `vm.canvasSettings.aspectRatio` (`EditorCanvasSettings` in `EditorClip.swift`) — project-level 9∶16, 16∶9, 1∶1, 4∶5, or custom. `EditorPreviewLayout.defaultAspectWidthOverHeight` is only the 9∶16 fallback constant.
 - **CapCut-style inline card:** `EditorScreen` constrains the preview with `maxWidth` (screen − 32pt inset) and `maxHeight` (~60% of screen, or chrome-limited). `EditorPreviewPlayer` uses `.aspectRatio(vm.canvasSettings.aspectRatio, .fit)` so the card sizes itself with natural side margins — not edge-to-edge stretch.
+- **Backgrounds:** the project-wide **BACKGROUND** tool switches live between preset/custom colors, an imported Photo Library image, and an adjustable blurred copy of the current clip. Reset or **Remove background image** restores black without changing the canvas format. Imported artwork uses a geometry-bounded aspect-fill layer, so even very large images crop to the canvas instead of participating in editor layout.
 - **Video gravity:** inline and fullscreen both use `.resizeAspect` (letterbox inside the canvas). Fullscreen previously used `.resizeAspectFill`, which cropped the frame and made text land on a different part of the picture than the small card.
 
 **Fullscreen:** Tapping the expand control calls `onFullscreen`, which presents a `fullScreenCover` with `EditorFullscreenPreviewSheet`. The **same** `EditorViewModel` (and thus the same `AVPlayer` when applicable) is used so playback state continues. The sheet’s `canvasSurface` is `.aspectRatio(..., .fit)` — the same fitted canvas as the inline card — with close/scrubber chrome **outside** that canvas so overlay math is not stretched to fill the phone.
@@ -694,6 +695,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Delete:** long-press a card → **Delete Project** → confirmation dialog → `ProjectStore.delete(id:)` removes the JSON file.
 - **Home card UI:** cover thumbnail from first clip; title and clip count use **text shadows** for readability (the old gradient scrim overlay was removed).
 - **Auto-save:** `EditorViewModel.scheduleSave()` debounces (~700ms) after edits; `saveNow()` on leave.
+- **App-owned asset paths:** imported background images are saved immediately and their Application Support paths are rebased when iOS changes the app-container UUID during a rebuild. Existing audio call sites use the same `SavedProjectFileResolver` through its compatibility alias.
 
 ### 12.6 PhotoKit thumbnail loading (home + export)
 
@@ -809,7 +811,7 @@ through project save/reopen, and has reasonable device-performance coverage.
 |----------|---------|--------------------|
 | 1 | **Color and filters — complete** | 40 categorized filters and intensity; 20 primary adjustments including Vibrance and Dehaze; selective HSL; master/R/G/B curves; lift/gamma/gain/offset wheels; direct-preview Vision face, ellipse, rectangle, linear, and polygon power windows with independent local/skin corrections, overlay hiding, and forward/backward tracking; four professional scopes with clipping readouts and Source/Graded comparison; reset/copy/paste/apply-to-all; undo/persistence; identical GPU preview/export. |
 | 2 | **Crop and reframe — complete** | Per-clip crop, rotate, flip, scale, position, straighten, Original/9:16/16:9/1:1/4:5 presets, optional safe-area/rule-of-thirds guides, and Fit/Fill background framing. Preview, undo, persistence, reopen, GPU transitions, and export use the same transform. |
-| 3 | **Canvas formats — complete** | 9:16, 16:9, 1:1, 4:5, and encoder-safe custom pixel sizes; color, GPU-blurred, and app-owned image backgrounds; project persistence, undo, preview, and export parity. |
+| 3 | **Canvas formats and backgrounds — complete** | 9:16, 16:9, 1:1, 4:5, and encoder-safe custom pixel sizes; live color, adjustable GPU-blurred, and app-owned image backgrounds; reset/removal controls; canvas-bounded image cropping; rebuild-safe path persistence; undo plus preview/export parity. |
 | 4 | **Timeline snapping — complete** | Magnetic playhead and movable audio/text/video-overlay edges snap to all meaningful timeline edges and range markers using a point-based, zoom-aware threshold, with visible guides and latched haptic feedback. |
 | 5 | **Duplicate and replace — complete** | Video, audio, and text duplication creates independent timeline items in one undoable operation. Video/photo replacement retains compatible trim span, speed, volume, crop/reframe transform, color grade, and transitions. |
 | 6 | **Export range — complete** | Persistent, undoable In/Out markers appear on the timeline; the export screen reports selected duration and bitrate-based size; AVAssetReader crops the composed video, mixed audio, overlays, and timed text to the exact selected range. |

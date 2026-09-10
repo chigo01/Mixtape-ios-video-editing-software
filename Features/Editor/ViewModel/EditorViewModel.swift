@@ -961,6 +961,65 @@ final class EditorViewModel {
         selectedTool = nil
     }
 
+    /// Overlay to focus when expanding collapsed overlay tracks: keep the current selection
+    /// if it still exists, otherwise the topmost overlay under the playhead, otherwise the
+    /// closest overlay on the timeline.
+    func preferredOverlayClipID() -> UUID? {
+        preferredTimelineItemID(
+            selectedID: selectedOverlayClipID,
+            items: overlayClips.map { ($0.id, $0.timelineStart, $0.timelineEnd, $0.zIndex) }
+        )
+    }
+
+    func selectPreferredOverlayClip() {
+        guard let id = preferredOverlayClipID(), selectedOverlayClipID != id else { return }
+        selectOverlayClip(id)
+    }
+
+    /// Audio clip to focus when expanding collapsed audio tracks. Same playhead-first
+    /// preference as overlays, using `laneIndex` as the tie-breaker (lower lane on top).
+    func preferredAudioClipID() -> UUID? {
+        preferredTimelineItemID(
+            selectedID: selectedAudioClipID,
+            items: audioClips.map { ($0.id, $0.timelineStart, $0.timelineEnd, -$0.laneIndex) }
+        )
+    }
+
+    func selectPreferredAudioClip() {
+        guard let id = preferredAudioClipID(), selectedAudioClipID != id else { return }
+        selectAudioClip(id)
+    }
+
+    private func preferredTimelineItemID(
+        selectedID: UUID?,
+        items: [(id: UUID, start: TimeInterval, end: TimeInterval, rank: Int)]
+    ) -> UUID? {
+        if let selectedID, items.contains(where: { $0.id == selectedID }) {
+            return selectedID
+        }
+        let time = timelinePosition
+        let covering = items.filter { time >= $0.start && time < $0.end }
+        if let top = covering.max(by: { $0.rank < $1.rank }) {
+            return top.id
+        }
+        return items.min { lhs, rhs in
+            let lhsDistance = distanceFromPlayhead(start: lhs.start, end: lhs.end, time: time)
+            let rhsDistance = distanceFromPlayhead(start: rhs.start, end: rhs.end, time: time)
+            if lhsDistance == rhsDistance { return lhs.rank > rhs.rank }
+            return lhsDistance < rhsDistance
+        }?.id
+    }
+
+    private func distanceFromPlayhead(
+        start: TimeInterval,
+        end: TimeInterval,
+        time: TimeInterval
+    ) -> TimeInterval {
+        if time < start { return start - time }
+        if time >= end { return time - end }
+        return 0
+    }
+
     func deselectClip() {
         if selectedTool == .speed {
             finalizeSpeedEditUndo()
@@ -1520,6 +1579,8 @@ final class EditorViewModel {
             beginMultiSelection()
         case .canvas:
             selectTool(.canvas)
+        case .background:
+            selectTool(.background)
         default:
             selectTool(tool)
         }

@@ -54,12 +54,14 @@ struct EditorAudioActionBar: View {
     /// **+** buttons, always inserting a new track at the current playhead — reachable from here
     /// too so adding another sound doesn't require deselecting the current clip first.
     var onAddAudio: () -> Void = {}
+    var onBack: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     vm.deselectAudioClip()
+                    onBack()
                 }
             } label: {
                 Image(systemName: "chevron.left")

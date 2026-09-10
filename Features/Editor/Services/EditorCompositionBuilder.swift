@@ -1820,6 +1820,7 @@ enum EditorCompositionBuilder {
                     ),
                     renderSize: renderSize,
                     canvasBackgroundKind: canvasSettings.backgroundKind,
+                    canvasBackgroundBlurIntensity: canvasSettings.backgroundBlurIntensity,
                     enablePostProcessing: animationTool != nil
                 )
             }

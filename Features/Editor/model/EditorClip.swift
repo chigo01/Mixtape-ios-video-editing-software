@@ -44,6 +44,48 @@ struct EditorCanvasSettings: Codable, Hashable {
     var backgroundColorRGB: UInt32
     /// App-owned image file, copied from the photo picker.
     var backgroundImagePath: String?
+    /// Normalized blur amount used by both the live compositor and export.
+    var backgroundBlurIntensity: Double
+
+    init(
+        format: EditorCanvasFormat,
+        customWidth: Int,
+        customHeight: Int,
+        backgroundKind: EditorCanvasBackgroundKind,
+        backgroundColorRGB: UInt32,
+        backgroundImagePath: String?,
+        backgroundBlurIntensity: Double = 0.55
+    ) {
+        self.format = format
+        self.customWidth = customWidth
+        self.customHeight = customHeight
+        self.backgroundKind = backgroundKind
+        self.backgroundColorRGB = backgroundColorRGB
+        self.backgroundImagePath = backgroundImagePath
+        self.backgroundBlurIntensity = min(max(backgroundBlurIntensity, 0), 1)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case format, customWidth, customHeight, backgroundKind
+        case backgroundColorRGB, backgroundImagePath, backgroundBlurIntensity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        format = try container.decodeIfPresent(EditorCanvasFormat.self, forKey: .format) ?? .vertical
+        customWidth = try container.decodeIfPresent(Int.self, forKey: .customWidth) ?? 1080
+        customHeight = try container.decodeIfPresent(Int.self, forKey: .customHeight) ?? 1920
+        backgroundKind = try container.decodeIfPresent(EditorCanvasBackgroundKind.self, forKey: .backgroundKind) ?? .color
+        backgroundColorRGB = try container.decodeIfPresent(UInt32.self, forKey: .backgroundColorRGB) ?? 0x000000
+        let savedBackgroundPath = try container.decodeIfPresent(String.self, forKey: .backgroundImagePath)
+        backgroundImagePath = savedBackgroundPath.flatMap {
+            SavedProjectFileResolver.resolve($0)?.path
+        } ?? savedBackgroundPath
+        backgroundBlurIntensity = min(
+            max(try container.decodeIfPresent(Double.self, forKey: .backgroundBlurIntensity) ?? 0.55, 0),
+            1
+        )
+    }
 
     static let `default` = EditorCanvasSettings(
         format: .vertical,
@@ -51,7 +93,8 @@ struct EditorCanvasSettings: Codable, Hashable {
         customHeight: 1920,
         backgroundKind: .color,
         backgroundColorRGB: 0x000000,
-        backgroundImagePath: nil
+        backgroundImagePath: nil,
+        backgroundBlurIntensity: 0.55
     )
 
     var aspectRatio: CGFloat {
