@@ -404,12 +404,15 @@ use the same selected duration.
 **Adding audio:** every **+** (the pinned lane-0 button, the empty-state **Add Audio** button, the
 small **+** after a clip's trailing edge, and **ADD AUDIO** on the contextual bar) opens a
 `confirmationDialog` — **"Record Voiceover"** (→ `VoiceoverRecorderView`, see **Priority 14**),
-**"Browse Sound Library"** (→ `AudioLibraryPickerView`, see **Priority 20**), or **"Import from
-Files"** (→ `AudioPickerView`, the `UIDocumentPickerViewController` wrapper) — via
+**"Extract Audio from Video"** (→ the single-video PhotoKit picker and
+`VideoAudioExtractionService`), **"Browse Sound Library"** (→ `AudioLibraryPickerView`, see
+**Priority 20**), or **"Import from Files"** (→ `AudioPickerView`, the
+`UIDocumentPickerViewController` wrapper) — via
 `AudioSourceSheets`, a `ViewModifier` in `EditorScreen.swift`. Whichever is picked ends up calling
 `EditorViewModel.loadAudioClip(from:insertion:)` (Files), `insertAudioLibraryItem(...)` (library),
-or `insertRecordedVoiceover(fileURL:duration:insertion:)` (recorder), all funneling through the
-same **`resolveAudioInsertion(_:)`** placement logic:
+`insertExtractedVideoAudio(...)` (video extraction), or
+`insertRecordedVoiceover(fileURL:duration:insertion:)` (recorder), all funneling through the same
+**`resolveAudioInsertion(_:)`** placement logic:
 - **`.newTrackAtPlayhead`** (the lane-0 **+**, empty-state button, and contextual-bar ADD AUDIO)
   — allocates a new `laneIndex` (`(audioClips.map(\.laneIndex).max() ?? -1) + 1`) and starts the
   clip at `timelinePosition`, so it can sit alongside whatever is already playing.
@@ -427,6 +430,13 @@ same **`resolveAudioInsertion(_:)`** placement logic:
 **Composition:** every clip — regardless of lane — already becomes its own composition audio track with its own `AVAudioMixInputParameters` (per-clip volume, keyframed volume ramps, fade in/out). Lanes are a **timeline-UI grouping only**; overlapping clips on different lanes were always mixable at the composition/export layer, they just had no way to be placed or displayed without colliding before this change. Timeline extends past video when music runs long.
 
 **Persistence:** `SavedAudioClip[]` in `EditorProject`, including `laneIndex` (decodes to `0` for projects saved before multi-track support); legacy `SavedAudioTrack` migrates to one clip on decode.
+
+**Extract from video:** the picker accepts exactly one Photos video and disables further selection
+while extraction is running. `VideoAudioExtractionService` loads the original asset, including an
+iCloud download when necessary, verifies that it contains audio, and exports an M4A into
+`Application Support/MixtapeAudio`. Cancellation removes partial output. The file is app-owned and
+`SavedProjectFileResolver` repairs its container-relative path after development rebuilds, so the
+timeline does not lose extracted audio when iOS changes the app-container UUID.
 
 **Layout:** `TimelineLayout` positions video clips using `videoDuration`; ruler width uses `timelineExtent` (= `totalDuration`).
 
@@ -529,6 +539,7 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 | `View/Components/AudioLibraryPickerView.swift` | Sound Library sheet UI: search, category chips, Bundled/Freesound sections, attribution confirm. |
 | `Services/AudioLibraryCache.swift` | Actor-based, budget-capped on-disk cache for downloaded library sounds, shared across projects. |
 | `Services/FreesoundAudioLibraryProvider.swift` | Freesound API search + license mapping; remote `EditorAudioLibraryProviding` conformer. |
+| `Services/VideoAudioExtractionService.swift` | PhotoKit video loading, audio-track validation, cancellable M4A extraction, and durable output storage. |
 | `Services/AudioWaveformGenerator.swift` | Real per-clip waveform decoding (`AVAudioFile`) with in-memory + on-disk caching. |
 | `Model/EditorTimelineSnapshot.swift` | Undo snapshot for primary/overlay clips, endpoints, playhead, selections, text, and audio. |
 | `Model/EditorTool.swift` | Tool enum, including selected-clip color adjustment routing. |
@@ -1175,21 +1186,24 @@ chrome. If a real music catalog gets licensed later, `EditorAudioLibrarySource` 
 - **Remote search:** `Services/FreesoundAudioLibraryProvider.swift` hits the Freesound text-search
   API (`Authorization: Token …` header) for whatever the user types, mapping each result's license
   URL to CC0 / CC BY / CC BY-SA / CC BY-NC(-SA) / Sampling+, with unrecognized licenses defaulting
-  to "attribution required" rather than silently treating them as free-and-clear. The API key is
-  **hardcoded** in that file (an explicit product decision — it lands in git history the moment
-  this is committed; rotate at https://freesound.org/apiv2/apply/ if that becomes a problem, or
-  move it to a gitignored config file, which doesn't require touching the rest of the file).
+  to "attribution required" rather than silently treating them as free-and-clear. The provider
+  automatically retries short-lived HTTP 429 and 5xx responses. If Freesound remains unavailable,
+  the UI identifies it as temporarily busy and provides a **Try Again** action instead of exposing
+  a raw status code.
+- **API configuration:** `FREESOUND_API_KEY` lives in the ignored
+  `Config/Secrets.xcconfig`; `Config/Base.xcconfig` supplies an empty fallback and injects the value
+  into `Mixtape-Info.plist`. `Core/AppConfiguration.swift` reads the compiled value. The app still
+  builds without a key, and the Sound Library gives a specific setup message when online search is
+  unavailable for that reason.
 - **Cache:** `Services/AudioLibraryCache.swift` — an `actor` downloading Freesound previews into
   `Application Support/MixtapeAudioLibraryCache/`, keyed by sound id so the same sound inserted
   into two different projects downloads once and both share the file. Budget-capped (300MB,
   oldest-accessed evicted first) and independent of any single project's clip lifecycle —
   `EditorViewModel.releaseAudioFileIfUnused` explicitly skips both this directory and the app
   bundle path, so deleting a clip from one project never deletes a file another project (or a
-  future re-insert) still needs. Trade-off: a project left unopened long enough could in principle
-  reopen missing a library clip if its cache entry got evicted meanwhile — the same "silently drop
-  a clip with a missing backing file" fallback `SavedAudioClip.toAudioClip()` already applies to
-  missing imported audio, not a new failure mode. A real fix is Phase 5 Priority 31 (missing-media
-  relink), out of scope here.
+  future re-insert) still needs. When the user inserts a remote result, `EditorViewModel` copies it
+  from this bounded cache into `Application Support/MixtapeAudio` before saving the project. Cache
+  eviction therefore cannot remove audio already used by an edit.
 - **Model:** `Model/EditorAudioLibraryItem.swift` — source-agnostic `EditorAudioLibraryItem`
   (id, title, category, duration, tags, `source`, `license`), `EditorAudioLibraryCategory` (the
   filter chips), `EditorAudioLibraryLicense`, and the `@MainActor` `EditorAudioLibraryProviding`
@@ -1206,9 +1220,9 @@ chrome. If a real music catalog gets licensed later, `EditorAudioLibrarySource` 
   one seeds the search query so one field drives both local filtering and the remote query),
   "Bundled" / "Freesound" sections, per-row cached/offline indicator, and an attribution
   confirmation alert that blocks insertion of any item whose license requires it until the user
-  sees the required credit text.
-- **Entry point:** the audio lane's **+** opens a `confirmationDialog` ("Browse Sound Library" /
-  "Import from Files") instead of jumping straight to the Files picker — see `AudioSourceSheets`
+  sees the required credit text. Temporary provider failures show a **Try Again** control.
+- **Entry point:** the audio lane's **+** opens a `confirmationDialog` ("Record Voiceover" /
+  "Extract Audio from Video" / "Browse Sound Library" / "Import from Files") — see `AudioSourceSheets`
   in `EditorScreen.swift`, pulled out as its own `ViewModifier` because `EditorScreen.body` is
   already one large expression; three more inline sheet modifiers pushed the type checker over its
   complexity budget.
@@ -1218,7 +1232,8 @@ chrome. If a real music catalog gets licensed later, `EditorAudioLibrarySource` 
   a sound effect drops at the playhead on its own track without disturbing existing audio, or
   `.afterClip` when inserted from a track's own "extend" button. Required attribution text (if any)
   is stored on `EditorAudioClip.attribution` (persisted via `SavedAudioClip`, backward-compatible)
-  so it isn't lost once the clip leaves the library sheet. From insertion onward the clip is a
+  so it isn't lost once the clip leaves the library sheet. Remote cache files are copied into the
+  durable `MixtapeAudio` directory before this model is created. From insertion onward the clip is a
   completely normal `EditorAudioClip` — trim, move, split, duplicate, volume, keyframes, undo, and
   persistence all work on it with no library-specific code. This is why the multi-track work above
   had to land first: without independent, overlappable tracks, a sound effect dropped under

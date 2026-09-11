@@ -41,7 +41,9 @@ struct EditorTimeline: View {
     var onInsertAudioAfterClip: (UUID) -> Void = { _ in }
     var onAddOverlayClip: () -> Void = {}
 
-    private let pixelsPerSecond: CGFloat = 18
+    private let minimumPixelsPerSecond: CGFloat = 1.5
+    private let maximumPixelsPerSecond: CGFloat = 72
+    private let trackHeaderWidth: CGFloat = 38
     private let rulerLabelHeight: CGFloat = 14
     /// Drag here (or on the ruler labels) to scrub; pinch-scroll is disabled while dragging.
     private let scrubRailHeight: CGFloat = 24
@@ -53,8 +55,11 @@ struct EditorTimeline: View {
     /// Require this much drag on filmstrips before scrubbing claims the gesture (keeps horizontal scroll natural).
     private let clipScrubMinimumDistance: CGFloat = 18
     private let audioScrubMinimumDistance: CGFloat = 18
-    /// Fixed column between clips so + never overlaps thumbnails.
-    private let insertSlotWidth: CGFloat = 28
+    /// Transition gaps compress with the timeline when zoomed far out. Keeping
+    /// these fixed at 28pt prevented projects with many cuts from ever fitting.
+    private var insertSlotWidth: CGFloat {
+        max(3, 28 * min(1, pixelsPerSecond / 18))
+    }
 
     @State private var isScrubbing = false
     @State private var isAudioTrimming = false
@@ -67,7 +72,16 @@ struct EditorTimeline: View {
     @State private var isOverlayMoving = false
     @State private var playheadDragBaselineContentX: CGFloat?
     @State private var reorderState = ClipReorderState()
+    @State private var committedPixelsPerSecond: CGFloat = 18
+    @GestureState private var activeTimelineMagnification: CGFloat = 1
     fileprivate static let playheadScrollID = "timeline-playhead"
+
+    private var pixelsPerSecond: CGFloat {
+        min(
+            maximumPixelsPerSecond,
+            max(minimumPixelsPerSecond, committedPixelsPerSecond * activeTimelineMagnification)
+        )
+    }
 
     private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 36 }
     private var graphicOverlayLaneHeight: CGFloat { vm.graphicOverlays.isEmpty ? 0 : 36 }
@@ -203,8 +217,11 @@ struct EditorTimeline: View {
             /// Inset for `ZStack` vertical padding (4pt top + bottom).
             let paddedMinHeight = max(1, geo.size.height - 8)
 
-            ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                trackHeaderRail(height: geo.size.height)
+
+                ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 8) {
                         rulerAndScrubStrip(totalWidth: totalWidth, layout: layout)
@@ -289,15 +306,143 @@ struct EditorTimeline: View {
             }
             .scrollDisabled(
                 isScrubbing || isAudioTrimming || isAudioMoving || isTextTrimming
-                    || isTextMoving || isOverlayTrimming || isOverlayMoving || reorderState.isDragging
+                    || isTextMoving || isGraphicTrimming || isGraphicMoving
+                    || isOverlayTrimming || isOverlayMoving || reorderState.isDragging
             )
-            .frame(width: geo.size.width, height: geo.size.height)
+            .simultaneousGesture(
+                timelineZoomGesture(
+                    onChanged: { proxy.scrollTo(Self.playheadScrollID, anchor: .center) },
+                    onEnded: { revealPlayhead(using: proxy) }
+                )
+            )
+            .frame(
+                width: max(1, geo.size.width - trackHeaderWidth),
+                height: geo.size.height
+            )
             .onAppear { revealPlayhead(using: proxy) }
             .onChange(of: vm.timelineRevealNonce) { _, _ in
                 revealPlayhead(using: proxy)
             }
+                }
             }
         }
+    }
+
+    private func timelineZoomGesture(
+        onChanged: @escaping () -> Void,
+        onEnded: @escaping () -> Void
+    ) -> some Gesture {
+        MagnificationGesture()
+            .updating($activeTimelineMagnification) { value, state, _ in
+                state = value
+            }
+            .onChanged { _ in onChanged() }
+            .onEnded { value in
+                committedPixelsPerSecond = min(
+                    maximumPixelsPerSecond,
+                    max(minimumPixelsPerSecond, committedPixelsPerSecond * value)
+                )
+                UISelectionFeedbackGenerator().selectionChanged()
+                onEnded()
+            }
+    }
+
+    private func trackHeaderRail(height: CGFloat) -> some View {
+        VStack(spacing: 8) {
+            Color.clear
+                .frame(height: rulerLabelHeight + scrubRailHeight)
+                .padding(.top, 4)
+
+            if sequenceLaneHeight > 0 {
+                trackHeaderIcon("square.stack.3d.up.fill", label: "Sequence track")
+                    .frame(height: sequenceLaneHeight)
+            }
+
+            if adjustmentLaneHeight > 0 {
+                trackHeaderIcon("wand.and.stars", label: "Adjustment track")
+                    .frame(height: adjustmentLaneHeight)
+            }
+
+            if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
+                trackHeaderIcon("textformat", label: "Text track")
+                    .frame(height: textOverlayLaneHeight)
+            }
+
+            if !isOverlayTracksExpanded, !vm.graphicOverlays.isEmpty {
+                trackHeaderIcon("face.smiling", label: "Graphic track")
+                    .frame(height: graphicOverlayLaneHeight)
+            }
+
+            trackHeaderIcon("film.stack", label: "Main video track")
+                .frame(height: clipsLaneHeight)
+
+            if !vm.overlayClips.isEmpty {
+                trackHeaderLaneIcons(
+                    "rectangle.on.rectangle",
+                    label: "Overlay track",
+                    visibleLaneCount: isOverlayTracksExpanded ? min(2, overlayLaneCount) : 1,
+                    laneHeight: overlayLaneHeight,
+                    laneSpacing: overlayLaneSpacing,
+                    totalHeight: overlayDisplayHeight
+                )
+            }
+
+            if !isOverlayTracksExpanded {
+                trackHeaderLaneIcons(
+                    "music.note",
+                    label: "Audio track",
+                    visibleLaneCount: isAudioTracksExpanded ? min(2, audioLaneCount) : 1,
+                    laneHeight: audioLaneHeight,
+                    laneSpacing: audioLaneSpacing,
+                    totalHeight: audioDisplayHeight
+                )
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .frame(width: trackHeaderWidth, height: height, alignment: .top)
+        .background(Color.black.opacity(0.96))
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(width: 1)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func trackHeaderLaneIcons(
+        _ systemName: String,
+        label: String,
+        visibleLaneCount: Int,
+        laneHeight: CGFloat,
+        laneSpacing: CGFloat,
+        totalHeight: CGFloat
+    ) -> some View {
+        VStack(spacing: laneSpacing) {
+            ForEach(0..<max(1, visibleLaneCount), id: \.self) { lane in
+                trackHeaderIcon(systemName, label: "\(label) \(lane + 1)")
+                    .frame(height: laneHeight)
+            }
+        }
+        .frame(width: trackHeaderWidth, height: totalHeight, alignment: .top)
+        .clipped()
+    }
+
+    private func trackHeaderIcon(_ systemName: String, label: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.78))
+            .frame(width: 30, height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(0.09))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+            )
+            .accessibilityLabel(label)
     }
 
     private func revealPlayhead(using proxy: ScrollViewProxy) {
@@ -461,6 +606,12 @@ struct EditorTimeline: View {
                                     timelineStart: start
                                 )
                             },
+                            onMoveToLane: { laneDelta in
+                                vm.setOverlayLaneIndex(
+                                    clipID: placement.clip.id,
+                                    laneIndex: max(0, placement.clip.laneIndex + laneDelta)
+                                )
+                            },
                             onMoveEnded: { vm.commitOverlayMove() }
                         )
                         .opacity(vm.isItemInActiveSequence(.overlay(placement.clip.id)) ? 1 : 0.18)
@@ -555,9 +706,15 @@ struct EditorTimeline: View {
     }
 
     private func ruler(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
-        let everyFive = stride(from: 0, through: Int(layout.timelineExtent), by: 5).map { $0 }
+        let tickInterval: Int = {
+            if pixelsPerSecond >= 12 { return 5 }
+            if pixelsPerSecond >= 6 { return 10 }
+            if pixelsPerSecond >= 3 { return 20 }
+            return 30
+        }()
+        let ticks = stride(from: 0, through: Int(layout.timelineExtent), by: tickInterval).map { $0 }
         return ZStack(alignment: .topLeading) {
-            ForEach(everyFive, id: \.self) { sec in
+            ForEach(ticks, id: \.self) { sec in
                 Text(formatRuler(sec))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundColor(Color.white.opacity(0.55))
@@ -934,6 +1091,12 @@ struct EditorTimeline: View {
                             onMove: { start in
                                 vm.setAudioTimelineStart(clipID: clip.id, timelineStart: start)
                             },
+                            onMoveToLane: { laneDelta in
+                                vm.setAudioLaneIndex(
+                                    clipID: clip.id,
+                                    laneIndex: max(0, clip.laneIndex + laneDelta)
+                                )
+                            },
                             onMoveEnded: { vm.commitAudioMove() }
                         )
                         .opacity(vm.isItemInActiveSequence(.audio(clip.id)) ? 1 : 0.18)
@@ -994,6 +1157,7 @@ private struct OverlayClipThumb: View {
     let onTrimChanged: (TimeInterval, TimeInterval) -> Void
     let onTrimEnded: () -> Void
     let onMove: (TimeInterval) -> Void
+    let onMoveToLane: (Int) -> Void
     let onMoveEnded: () -> Void
 
     @State private var trimBaseline: (
@@ -1002,6 +1166,8 @@ private struct OverlayClipThumb: View {
         trimEnd: TimeInterval
     )?
     @State private var moveBaselineTimelineStart: TimeInterval?
+    @State private var moveTranslation: CGSize = .zero
+    @State private var isHoldActive = false
 
     private var displayTimelineStart: TimeInterval {
         if let baseline = trimBaseline {
@@ -1019,7 +1185,7 @@ private struct OverlayClipThumb: View {
 
     private var startX: CGFloat { layout.contentX(forTime: displayTimelineStart) }
     private var endX: CGFloat { layout.contentX(forTime: displayTimelineStart + clip.duration) }
-    private var width: CGFloat { max(44, endX - startX) }
+    private var width: CGFloat { max(layout.minimumItemWidth, endX - startX) }
 
     private var displayedTrimStart: TimeInterval {
         clip.playback.isReverse
@@ -1040,7 +1206,9 @@ private struct OverlayClipThumb: View {
                 guard !isTrimming, !isMoving else { return }
                 onSelect()
             }
-            .offset(x: startX)
+            .scaleEffect(isHoldActive ? 1.04 : 1)
+            .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
+            .offset(x: startX, y: moveTranslation.height)
             .simultaneousGesture(
                 moveGesture,
                 including: isSelected && allowsEditing ? .all : .none
@@ -1121,23 +1289,46 @@ private struct OverlayClipThumb: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+        LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
             .onChanged { value in
                 guard !isTrimming else { return }
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                if moveBaselineTimelineStart == nil {
-                    moveBaselineTimelineStart = clip.timelineStart
+                switch value {
+                case .first(true):
+                    activateHoldMove()
+                case let .second(true, drag):
+                    guard let drag else { return }
+                    activateHoldMove()
+                    moveTranslation = drag.translation
+                    if moveBaselineTimelineStart == nil {
+                        moveBaselineTimelineStart = clip.timelineStart
+                    }
+                    let baseX = layout.contentX(forTime: moveBaselineTimelineStart ?? clip.timelineStart)
+                    onMove(layout.time(atContentX: max(0, baseX + drag.translation.width)))
+                default:
+                    break
                 }
-                isMoving = true
-                let baseX = layout.contentX(forTime: moveBaselineTimelineStart ?? clip.timelineStart)
-                onMove(layout.time(atContentX: max(0, baseX + value.translation.width)))
             }
-            .onEnded { _ in
-                guard moveBaselineTimelineStart != nil else { return }
+            .onEnded { value in
+                if case let .second(true, drag) = value, let drag {
+                    let laneStep = laneHeight + 6
+                    onMoveToLane(Int((drag.translation.height / laneStep).rounded()))
+                }
+                let didMove = moveBaselineTimelineStart != nil
                 isMoving = false
+                isHoldActive = false
+                moveTranslation = .zero
                 moveBaselineTimelineStart = nil
-                onMoveEnded()
+                if didMove { onMoveEnded() }
             }
+    }
+
+    private func activateHoldMove() {
+        guard !isHoldActive else { return }
+        isHoldActive = true
+        isMoving = true
+        onSelect()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }
 
@@ -1158,16 +1349,22 @@ private struct AudioClipThumb: View {
     let onTrimChanged: (TimeInterval, TimeInterval) -> Void
     let onTrimEnded: () -> Void
     let onMove: (TimeInterval) -> Void
+    let onMoveToLane: (Int) -> Void
     let onMoveEnded: () -> Void
 
     @State private var trimBaseline: (timelineStart: TimeInterval, trimStart: TimeInterval)?
     @State private var moveBaselineTimelineStart: TimeInterval?
+    @State private var moveTranslation: CGSize = .zero
+    @State private var isHoldActive = false
     /// Full-file peak envelope from `AudioWaveformGenerator`. The visible bars are sliced to
     /// this clip's trim window so the waveform matches the audio you actually hear.
     @State private var waveform: AudioWaveform?
 
     private var width: CGFloat {
-        max(44, CGFloat(clip.duration) * pixelsPerSecond)
+        max(
+            TimelineLayout.minimumItemWidth(for: pixelsPerSecond),
+            CGFloat(clip.duration) * pixelsPerSecond
+        )
     }
 
     /// During a leading-edge trim the clip must shift on the timeline without
@@ -1213,7 +1410,12 @@ private struct AudioClipThumb: View {
                 guard !isTrimming, !isMoving else { return }
                 onSelect()
             }
-            .offset(x: CGFloat(displayTimelineStart) * pixelsPerSecond, y: 0)
+            .scaleEffect(isHoldActive ? 1.04 : 1)
+            .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
+            .offset(
+                x: CGFloat(displayTimelineStart) * pixelsPerSecond,
+                y: moveTranslation.height
+            )
 
         if isSelected && allowsEditing {
             content.gesture(moveGesture)
@@ -1274,22 +1476,47 @@ private struct AudioClipThumb: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+        LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
             .onChanged { value in
                 guard !isTrimming else { return }
-                if moveBaselineTimelineStart == nil {
-                    moveBaselineTimelineStart = clip.timelineStart
+                switch value {
+                case .first(true):
+                    activateHoldMove()
+                case let .second(true, drag):
+                    guard let drag else { return }
+                    activateHoldMove()
+                    moveTranslation = drag.translation
+                    if moveBaselineTimelineStart == nil {
+                        moveBaselineTimelineStart = clip.timelineStart
+                    }
+                    let delta = TimeInterval(drag.translation.width / pixelsPerSecond)
+                    let base = moveBaselineTimelineStart ?? clip.timelineStart
+                    onMove(max(0, base + delta))
+                default:
+                    break
                 }
-                isMoving = true
-                let delta = TimeInterval(value.translation.width / pixelsPerSecond)
-                let base = moveBaselineTimelineStart ?? clip.timelineStart
-                onMove(max(0, base + delta))
             }
-            .onEnded { _ in
+            .onEnded { value in
+                if case let .second(true, drag) = value, let drag {
+                    let laneStep = laneHeight + 5
+                    onMoveToLane(Int((drag.translation.height / laneStep).rounded()))
+                }
+                let didMove = moveBaselineTimelineStart != nil
                 isMoving = false
+                isHoldActive = false
+                moveTranslation = .zero
                 moveBaselineTimelineStart = nil
-                onMoveEnded()
+                if didMove { onMoveEnded() }
             }
+    }
+
+    private func activateHoldMove() {
+        guard !isHoldActive else { return }
+        isHoldActive = true
+        isMoving = true
+        onSelect()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }
 
@@ -1310,6 +1537,7 @@ private struct TextOverlayThumb: View {
 
     @State private var trimBaseline: (startTime: TimeInterval, startX: CGFloat)?
     @State private var moveBaselineStart: TimeInterval?
+    @State private var isHoldActive = false
 
     private var endX: CGFloat { layout.contentX(forTime: overlay.endTime) }
 
@@ -1324,7 +1552,9 @@ private struct TextOverlayThumb: View {
         // Caption segments are often well under a second. Giving every one a
         // 44pt minimum made neighboring captions overlap into an unreadable
         // stack. Their bars must remain faithful to timeline time.
-        overlay.isCaption ? max(2, endX - displayStartX) : max(44, endX - displayStartX)
+        overlay.isCaption
+            ? max(2, endX - displayStartX)
+            : max(layout.minimumItemWidth, endX - displayStartX)
     }
 
     var body: some View {
@@ -1362,6 +1592,8 @@ private struct TextOverlayThumb: View {
                 guard !isTrimming, !isMoving else { return }
                 onSelect()
             }
+            .scaleEffect(isHoldActive ? 1.04 : 1)
+            .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
             .offset(x: displayStartX, y: 0)
 
         if isSelected && allowsEditing {
@@ -1423,23 +1655,41 @@ private struct TextOverlayThumb: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+        LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
             .onChanged { value in
                 guard !isTrimming else { return }
-                if moveBaselineStart == nil {
-                    moveBaselineStart = overlay.startTime
+                switch value {
+                case .first(true):
+                    activateHoldMove()
+                case let .second(true, drag):
+                    guard let drag else { return }
+                    activateHoldMove()
+                    if moveBaselineStart == nil {
+                        moveBaselineStart = overlay.startTime
+                    }
+                    let baseX = layout.contentX(forTime: moveBaselineStart ?? overlay.startTime)
+                    let newX = max(0, baseX + drag.translation.width)
+                    onMove(layout.time(atContentX: newX))
+                default:
+                    break
                 }
-                isMoving = true
-                let baseX = layout.contentX(forTime: moveBaselineStart ?? overlay.startTime)
-                let newX = max(0, baseX + value.translation.width)
-                let newStart = layout.time(atContentX: newX)
-                onMove(newStart)
             }
             .onEnded { _ in
+                let didMove = moveBaselineStart != nil
                 isMoving = false
+                isHoldActive = false
                 moveBaselineStart = nil
-                onMoveEnded()
+                if didMove { onMoveEnded() }
             }
+    }
+
+    private func activateHoldMove() {
+        guard !isHoldActive else { return }
+        isHoldActive = true
+        isMoving = true
+        onSelect()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
     private func truncated(_ s: String) -> String {
@@ -1460,6 +1710,7 @@ private struct GraphicOverlayThumb: View {
 
     @State private var trimBaseline: (time: TimeInterval, x: CGFloat)?
     @State private var moveBaseline: TimeInterval?
+    @State private var isHoldActive = false
 
     private var startX: CGFloat {
         if let trimBaseline {
@@ -1468,7 +1719,9 @@ private struct GraphicOverlayThumb: View {
         }
         return layout.contentX(forTime: graphic.startTime)
     }
-    private var width: CGFloat { max(44, layout.contentX(forTime: graphic.endTime) - startX) }
+    private var width: CGFloat {
+        max(layout.minimumItemWidth, layout.contentX(forTime: graphic.endTime) - startX)
+    }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -1514,24 +1767,45 @@ private struct GraphicOverlayThumb: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { if !isTrimming && !isMoving { onSelect() } }
+        .scaleEffect(isHoldActive ? 1.04 : 1)
+        .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
         .gesture(moveGesture)
         .offset(x: startX)
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 6)
+        LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
                 guard !isTrimming else { return }
-                if moveBaseline == nil { moveBaseline = graphic.startTime }
-                isMoving = true
-                let baseX = layout.contentX(forTime: moveBaseline ?? graphic.startTime)
-                onMove(layout.time(atContentX: max(0, baseX + value.translation.width)))
+                switch value {
+                case .first(true):
+                    activateHoldMove()
+                case let .second(true, drag):
+                    guard let drag else { return }
+                    activateHoldMove()
+                    if moveBaseline == nil { moveBaseline = graphic.startTime }
+                    let baseX = layout.contentX(forTime: moveBaseline ?? graphic.startTime)
+                    onMove(layout.time(atContentX: max(0, baseX + drag.translation.width)))
+                default:
+                    break
+                }
             }
             .onEnded { _ in
+                let didMove = moveBaseline != nil
                 isMoving = false
+                isHoldActive = false
                 moveBaseline = nil
-                onEditEnded()
+                if didMove { onEditEnded() }
             }
+    }
+
+    private func activateHoldMove() {
+        guard !isHoldActive else { return }
+        isHoldActive = true
+        isMoving = true
+        onSelect()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }
 
@@ -1543,6 +1817,14 @@ private struct TimelineLayout {
     let timelineExtent: TimeInterval
     let pixelsPerSecond: CGFloat
     let insertSlotWidth: CGFloat
+
+    var minimumItemWidth: CGFloat {
+        Self.minimumItemWidth(for: pixelsPerSecond)
+    }
+
+    static func minimumItemWidth(for pixelsPerSecond: CGFloat) -> CGFloat {
+        max(4, min(44, 44 * pixelsPerSecond / 18))
+    }
 
     init(
         clips: [EditorClip],
@@ -1559,7 +1841,7 @@ private struct TimelineLayout {
     }
 
     func clipWidth(for clip: EditorClip) -> CGFloat {
-        max(44, CGFloat(clip.duration) * pixelsPerSecond)
+        max(minimumItemWidth, CGFloat(clip.duration) * pixelsPerSecond)
     }
 
     func clipStartContentX(forIndex index: Int) -> CGFloat {
@@ -1718,6 +2000,7 @@ private struct ClipBoundarySlot: View {
             .accessibilityLabel("Add media at this cut")
         }
         .frame(width: width, height: height)
+        .clipped()
     }
 }
 
@@ -1775,6 +2058,7 @@ private struct ClipEndingSlot: View {
             .accessibilityLabel("Add media after this clip")
         }
         .frame(width: width, height: height)
+        .clipped()
     }
 }
 
@@ -1808,6 +2092,8 @@ private struct OpeningTransitionControl: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Edit opening transition")
         .accessibilityHint("Applies an entrance effect to the first clip")
+        .frame(maxWidth: .infinity)
+        .clipped()
     }
 }
 

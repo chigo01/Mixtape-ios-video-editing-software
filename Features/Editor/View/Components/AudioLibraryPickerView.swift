@@ -2,8 +2,8 @@
 //  AudioLibraryPickerView.swift
 //  Mixtape
 //
-//  Sound library browser (Priority 20). Merges the bundled starter SFX pack with a live
-//  Freesound search, auditions a clip without touching the project's own playhead/player, and
+//  Sound-effects library browser. Combines bundled effects with Freesound search,
+//  auditions clips without touching the project's own playhead/player, and
 //  inserts the selected item as a normal `EditorAudioClip` via
 //  `EditorViewModel.insertAudioLibraryItem` — downloading + caching remote items first.
 //
@@ -59,10 +59,10 @@ struct AudioLibraryPickerView: View {
             Button("Cancel", role: .cancel) {}
             Button("Insert") { insert(item, skipAttributionCheck: true) }
         } message: { item in
-            Text(item.license?.attributionText ?? "This sound requires attribution when used.")
+            Text(item.license?.attributionText ?? "This audio requires attribution when used.")
         }
         .alert(
-            "Couldn't add sound",
+            "Couldn't add audio",
             isPresented: Binding(
                 get: { insertErrorMessage != nil },
                 set: { if !$0 { insertErrorMessage = nil } }
@@ -125,7 +125,7 @@ struct AudioLibraryPickerView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 categoryChip(title: "All", systemImage: "square.grid.2x2", isSelected: library.selectedCategory == nil) {
-                    library.selectedCategory = nil
+                    library.selectCategory(nil)
                 }
                 ForEach(library.availableCategories) { category in
                     categoryChip(
@@ -189,7 +189,18 @@ struct AudioLibraryPickerView: View {
         if library.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             emptyRow("Type to search \(library.remoteSourceName ?? "online") sounds.")
         } else if let message = library.remoteStatusMessage {
-            emptyRow(message)
+            VStack(alignment: .leading, spacing: 10) {
+                emptyRow(message)
+                Button {
+                    Task { await library.refresh() }
+                } label: {
+                    Label("Try Again", systemImage: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color.appColors.primaryColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(library.isSearchingRemote)
+            }
         } else {
             ForEach(library.remoteResults) { item in
                 row(for: item)
@@ -237,7 +248,7 @@ struct AudioLibraryPickerView: View {
             library.stopPreview()
             do {
                 let url = try await library.resolvedLocalURL(for: item)
-                vm.insertAudioLibraryItem(
+                try vm.insertAudioLibraryItem(
                     title: item.title,
                     fileURL: url,
                     duration: item.durationSeconds,
@@ -264,7 +275,10 @@ private struct AudioLibraryItemRow: View {
     let onInsert: () -> Void
 
     private var durationLabel: String {
-        String(format: "%.1fs", item.durationSeconds)
+        let total = max(0, Int(item.durationSeconds.rounded()))
+        return total >= 60
+            ? String(format: "%d:%02d", total / 60, total % 60)
+            : String(format: "%.1fs", item.durationSeconds)
     }
 
     var body: some View {
@@ -290,7 +304,7 @@ private struct AudioLibraryItemRow: View {
                     Text(durationLabel)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
-                    if item.source == .freesound {
+                    if item.source != .bundled {
                         Image(systemName: isCached ? "checkmark.icloud.fill" : "icloud.and.arrow.down")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.white.opacity(0.4))

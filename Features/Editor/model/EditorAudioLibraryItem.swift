@@ -82,18 +82,24 @@ struct EditorAudioLibraryItem: Identifiable, Hashable {
 enum EditorAudioLibraryError: LocalizedError {
     case resourceMissing
     case requestFailed(Int)
+    case serviceUnavailable
     case downloadFailed
+    case missingConfiguration(String)
 
     var errorDescription: String? {
         switch self {
         case .resourceMissing:
-            return "That sound isn't available right now."
+            return "That audio isn't available right now."
         case .requestFailed(let code):
             return code == 401 || code == 403
-                ? "The sound library rejected the request (check the API key)."
-                : "Sound library search failed (\(code))."
+                ? "The audio library rejected the request (check the API key)."
+                : "Audio library search failed (\(code))."
+        case .serviceUnavailable:
+            return "Freesound is temporarily busy. Try again in a moment."
         case .downloadFailed:
-            return "Couldn't download that sound. Check your connection and try again."
+            return "Couldn't download that audio. Check your connection and try again."
+        case .missingConfiguration(let key):
+            return "Add \(key) to Config/Secrets.xcconfig, then rebuild the app."
         }
     }
 }

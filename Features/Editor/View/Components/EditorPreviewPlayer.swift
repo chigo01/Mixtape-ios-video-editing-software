@@ -135,10 +135,13 @@ struct EditorPreviewPlayer: View {
     }
 
     private var controlsHUD: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             Text(vm.currentTimeString)
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
 
             Button(action: { vm.togglePlay() }) {
                 Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
@@ -159,7 +162,7 @@ struct EditorPreviewPlayer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Fullscreen")
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(Capsule().fill(Color.black.opacity(0.55)))
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))

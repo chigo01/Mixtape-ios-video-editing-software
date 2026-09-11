@@ -122,8 +122,18 @@ final class ClipTrimHandleContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let h = bounds.height
-        leftHandle.frame = CGRect(x: 0, y: 0, width: handleWidth, height: h)
-        rightHandle.frame = CGRect(x: bounds.width - handleWidth, y: 0, width: handleWidth, height: h)
+        // Fixed 22pt handles can consume the entire body of a very short item,
+        // leaving nowhere to grab it for a move. Shrink only the handle hit areas
+        // on narrow items so a useful draggable center always remains.
+        let narrowHandleWidth = max(10, bounds.width * 0.28)
+        let effectiveHandleWidth = min(handleWidth, min(narrowHandleWidth, bounds.width / 2))
+        leftHandle.frame = CGRect(x: 0, y: 0, width: effectiveHandleWidth, height: h)
+        rightHandle.frame = CGRect(
+            x: bounds.width - effectiveHandleWidth,
+            y: 0,
+            width: effectiveHandleWidth,
+            height: h
+        )
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {

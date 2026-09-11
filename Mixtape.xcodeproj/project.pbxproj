@@ -27,6 +27,8 @@
 		AD10000000000000000000B4 /* AudioLibrary in Resources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F4 /* AudioLibrary */; };
 		AD10000000000000000000B5 /* AudioLibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F5 /* AudioLibraryCache.swift */; };
 		AD10000000000000000000B6 /* FreesoundAudioLibraryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */; };
+		E100000000000000000000B1 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E100000000000000000000F1 /* AppConfiguration.swift */; };
+		E200000000000000000000B1 /* VideoAudioExtractionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000F1 /* VideoAudioExtractionService.swift */; };
 		AD10000000000000000000B7 /* AudioWaveformGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F7 /* AudioWaveformGenerator.swift */; };
 		AD10000000000000000000B8 /* EditorAudioMixSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F8 /* EditorAudioMixSettings.swift */; };
 		AD10000000000000000000B9 /* MixToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F9 /* MixToolPanel.swift */; };
@@ -127,6 +129,11 @@
 		AD10000000000000000000F4 /* AudioLibrary */ = {isa = PBXFileReference; lastKnownFileType = folder; path = AudioLibrary; sourceTree = "<group>"; };
 		AD10000000000000000000F5 /* AudioLibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLibraryCache.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesoundAudioLibraryProvider.swift; sourceTree = "<group>"; };
+		E100000000000000000000F1 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
+		E100000000000000000000C1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		E100000000000000000000C2 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
+		E100000000000000000000C4 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
+		E200000000000000000000F1 /* VideoAudioExtractionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAudioExtractionService.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F7 /* AudioWaveformGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformGenerator.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F8 /* EditorAudioMixSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioMixSettings.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F9 /* MixToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixToolPanel.swift; sourceTree = "<group>"; };
@@ -233,6 +240,7 @@
 			isa = PBXGroup;
 			children = (
 				CED6779F2FAD0DA700531EBF /* Components */,
+				E100000000000000000000F1 /* AppConfiguration.swift */,
 				CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */,
 				AB102030405060708090A002 /* SavedAudioFileResolver.swift */,
 				CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */,
@@ -246,9 +254,20 @@
 			isa = PBXGroup;
 			children = (
 				CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */,
+				E100000000000000000000C3 /* Config */,
 				D4BAA6CF3F4204D0B19A1276,
 				6D159F361021D92BC3E10E55 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		E100000000000000000000C3 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				E100000000000000000000C1 /* Base.xcconfig */,
+				E100000000000000000000C4 /* Secrets.xcconfig */,
+				E100000000000000000000C2 /* Secrets.example.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		6D159F361021D92BC3E10E55 /* Products */ = {
@@ -357,6 +376,7 @@
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 				AD10000000000000000000F5 /* AudioLibraryCache.swift */,
 				AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */,
+				E200000000000000000000F1 /* VideoAudioExtractionService.swift */,
 				AD10000000000000000000F7 /* AudioWaveformGenerator.swift */,
 				BA0EDF00DEAFB001CAFE001B /* EditorTransitionCompositor.swift */,
 				C010D002A15C010000000002 /* EditorColorGradeRenderer.swift */,
@@ -564,6 +584,8 @@
 				AD10000000000000000000B3 /* AudioLibraryPickerView.swift in Sources */,
 				AD10000000000000000000B5 /* AudioLibraryCache.swift in Sources */,
 				AD10000000000000000000B6 /* FreesoundAudioLibraryProvider.swift in Sources */,
+				E100000000000000000000B1 /* AppConfiguration.swift in Sources */,
+				E200000000000000000000B1 /* VideoAudioExtractionService.swift in Sources */,
 				AD10000000000000000000B7 /* AudioWaveformGenerator.swift in Sources */,
 				AD10000000000000000000B8 /* EditorAudioMixSettings.swift in Sources */,
 				AD10000000000000000000B9 /* MixToolPanel.swift in Sources */,
@@ -654,6 +676,7 @@
 /* Begin XCBuildConfiguration section */
 		3C865FDD1C80B47C0A0826A2 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E100000000000000000000C1 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -707,6 +730,7 @@
 		};
 		CFEDFA691963B1A7B22A7D71 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = E100000000000000000000C1 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

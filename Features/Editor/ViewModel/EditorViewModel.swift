@@ -2616,6 +2616,22 @@ final class EditorViewModel {
         invalidateComposition()
     }
 
+    func setOverlayLaneIndex(clipID: UUID, laneIndex: Int) {
+        if overlayMoveUndoSnapshot == nil {
+            overlayMoveUndoSnapshot = currentSnapshot()
+        }
+        guard let index = overlayClips.firstIndex(where: { $0.id == clipID }) else { return }
+        let destination = max(0, laneIndex)
+        guard overlayClips[index].laneIndex != destination else { return }
+        let destinationZIndex = overlayClips
+            .filter { $0.id != clipID && $0.laneIndex == destination }
+            .map(\.zIndex)
+            .min()
+        overlayClips[index].laneIndex = destination
+        overlayClips[index].zIndex = destinationZIndex ?? destination
+        invalidateComposition()
+    }
+
     func commitOverlayMove() {
         let before = overlayMoveUndoSnapshot
         overlayMoveUndoSnapshot = nil
@@ -6121,24 +6137,23 @@ final class EditorViewModel {
         }
     }
 
-    /// Inserts a sound/music library item (`AudioLibraryPickerView`) as a normal timeline clip.
-    /// Library items already live inside the app bundle — no security-scoped access, no copy
-    /// into `MixtapeAudio/` needed, since the bundle file is permanently available. From here
-    /// on the inserted clip is indistinguishable from an imported one: trim, move, split,
-    /// duplicate, volume, keyframes, undo, and persistence all just work.
+    /// Inserts a sound/music library item as a normal timeline clip. Remote downloads are copied
+    /// from the bounded shared cache into durable project storage before the project references
+    /// them, so cache eviction cannot silently remove audio from a saved edit.
     func insertAudioLibraryItem(
         title: String,
         fileURL: URL,
         duration: TimeInterval,
         attribution: String? = nil,
         insertion: AudioInsertion = .newTrackAtPlayhead
-    ) {
+    ) throws {
+        let storedURL = try durableAudioLibraryURL(for: fileURL)
         registerUndoIfNeeded()
         let (timelineStart, laneIndex) = resolveAudioInsertion(insertion)
 
         let clip = EditorAudioClip(
             title: title,
-            fileURL: fileURL,
+            fileURL: storedURL,
             originalDuration: duration,
             timelineStart: timelineStart,
             laneIndex: laneIndex,
@@ -6151,6 +6166,46 @@ final class EditorViewModel {
         scheduleSave()
         Task { await alignPlaybackToTimeline() }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func durableAudioLibraryURL(for sourceURL: URL) throws -> URL {
+        guard !sourceURL.path.hasPrefix(Bundle.main.bundlePath) else { return sourceURL }
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw EditorAudioLibraryError.downloadFailed
+        }
+        let directory = base.appendingPathComponent("MixtapeAudio", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileExtension = sourceURL.pathExtension.isEmpty ? "audio" : sourceURL.pathExtension
+        let destination = directory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension)
+        try fm.copyItem(at: sourceURL, to: destination)
+        return destination
+    }
+
+    /// Inserts an M4A already exported into Mixtape's durable audio directory.
+    func insertExtractedVideoAudio(
+        fileURL: URL,
+        duration: TimeInterval,
+        insertion: AudioInsertion = .newTrackAtPlayhead
+    ) {
+        registerUndoIfNeeded()
+        let (timelineStart, laneIndex) = resolveAudioInsertion(insertion)
+        let existingCount = audioClips.filter { $0.title.hasPrefix("Extracted Audio") }.count
+        let clip = EditorAudioClip(
+            title: "Extracted Audio \(existingCount + 1)",
+            fileURL: fileURL,
+            originalDuration: duration,
+            timelineStart: timelineStart,
+            laneIndex: laneIndex
+        )
+        audioClips.append(clip)
+        selectAudioClip(clip.id)
+        invalidateComposition()
+        scheduleSave()
+        Task { await alignPlaybackToTimeline() }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
     /// Inserts a finished `VoiceoverRecorderService` take (Priority 14) as a normal timeline
@@ -6349,6 +6404,15 @@ final class EditorViewModel {
         }
         guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
         audioClips[idx].timelineStart = snappedTime(timelineStart, excluding: clipID)
+        invalidateComposition()
+    }
+
+    func setAudioLaneIndex(clipID: UUID, laneIndex: Int) {
+        if audioMoveUndoSnapshot == nil {
+            audioMoveUndoSnapshot = currentSnapshot()
+        }
+        guard let index = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
+        audioClips[index].laneIndex = max(0, laneIndex)
         invalidateComposition()
     }
 

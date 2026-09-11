@@ -9,14 +9,6 @@
 
 import Foundation
 
-/// Hardcoded per explicit product decision — this key will land in git history the moment this
-/// file is committed. Rotate it at https://freesound.org/apiv2/apply/ if that's ever a problem;
-/// moving it to a gitignored config file later doesn't require touching anything else in this
-/// file's public surface.
-private enum FreesoundConfig {
-    static let apiKey = "Gg3NCAOZte4yGhjU6K5KYcABbb9Y0ssH1KrqakqU"
-}
-
 @MainActor
 final class FreesoundAudioLibraryProvider: EditorAudioLibraryProviding {
     static let shared = FreesoundAudioLibraryProvider()
@@ -31,6 +23,9 @@ final class FreesoundAudioLibraryProvider: EditorAudioLibraryProviding {
     private init() {}
 
     func search(query: String, category: EditorAudioLibraryCategory?) async throws -> [EditorAudioLibraryItem] {
+        guard !AppConfiguration.freesoundAPIKey.isEmpty else {
+            throw EditorAudioLibraryError.missingConfiguration("FREESOUND_API_KEY")
+        }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -45,11 +40,12 @@ final class FreesoundAudioLibraryProvider: EditorAudioLibraryProviding {
         guard let url = components.url else { return [] }
 
         var request = URLRequest(url: url)
-        request.setValue("Token \(FreesoundConfig.apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+        request.setValue("Token \(AppConfiguration.freesoundAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Mixtape-iOS/1.0", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw EditorAudioLibraryError.downloadFailed }
-        guard (200..<300).contains(http.statusCode) else { throw EditorAudioLibraryError.requestFailed(http.statusCode) }
+        let data = try await responseData(for: request)
 
         let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
         return decoded.results.compactMap { result in
@@ -68,6 +64,49 @@ final class FreesoundAudioLibraryProvider: EditorAudioLibraryProviding {
             previewURLsByID[item.id] = previewURL
             return item
         }
+    }
+
+    /// Freesound occasionally responds with a short-lived 429/5xx "busy" page. Retry those
+    /// responses before surfacing a useful, provider-specific message to the library UI.
+    private func responseData(for request: URLRequest) async throws -> Data {
+        let maximumAttempts = 3
+        for attempt in 0..<maximumAttempts {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw EditorAudioLibraryError.downloadFailed
+                }
+                if (200..<300).contains(http.statusCode) { return data }
+
+                let isTemporaryFailure = http.statusCode == 429 || (500..<600).contains(http.statusCode)
+                if isTemporaryFailure, attempt < maximumAttempts - 1 {
+                    let seconds = retryDelay(from: http, attempt: attempt)
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    continue
+                }
+                if isTemporaryFailure { throw EditorAudioLibraryError.serviceUnavailable }
+                throw EditorAudioLibraryError.requestFailed(http.statusCode)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as EditorAudioLibraryError {
+                throw error
+            } catch {
+                if attempt < maximumAttempts - 1 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 700_000_000)
+                    continue
+                }
+                throw EditorAudioLibraryError.downloadFailed
+            }
+        }
+        throw EditorAudioLibraryError.serviceUnavailable
+    }
+
+    private func retryDelay(from response: HTTPURLResponse, attempt: Int) -> Double {
+        if let value = response.value(forHTTPHeaderField: "Retry-After"),
+           let seconds = Double(value) {
+            return min(max(seconds, 0.5), 5)
+        }
+        return Double(attempt + 1) * 0.7
     }
 
     func previewStreamURL(for item: EditorAudioLibraryItem) -> URL? {

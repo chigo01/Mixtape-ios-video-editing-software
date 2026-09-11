@@ -1285,8 +1285,8 @@ private struct AudioEffectToolSheet: ViewModifier {
     }
 }
 
-/// Bundles the "Add Audio" source chooser and its two sheets (Files import, sound library) as
-/// one `ViewModifier` rather than three chained modifiers directly on `EditorScreen.body` —
+/// Bundles the "Add Audio" source chooser and its source sheets as one `ViewModifier` rather
+/// than chaining each presentation directly on `EditorScreen.body` —
 /// `body` is already a large single expression, and adding more inline modifiers there pushed
 /// the type checker over its complexity budget ("unable to type-check ... in reasonable time").
 private struct AudioSourceSheets: ViewModifier {
@@ -1296,6 +1296,11 @@ private struct AudioSourceSheets: ViewModifier {
     @Binding var isAudioPickerPresented: Bool
     @Binding var isVoiceoverRecorderPresented: Bool
     @Binding var insertAfterAudioClipID: UUID?
+
+    @State private var isVideoAudioPickerPresented = false
+    @State private var isExtractingVideoAudio = false
+    @State private var extractionErrorMessage: String?
+    @State private var extractionTask: Task<Void, Never>?
 
     private var pendingInsertion: EditorViewModel.AudioInsertion {
         if let clipID = insertAfterAudioClipID { return .afterClip(clipID) }
@@ -1310,9 +1315,26 @@ private struct AudioSourceSheets: ViewModifier {
                 titleVisibility: .visible
             ) {
                 Button("Record Voiceover") { isVoiceoverRecorderPresented = true }
+                Button("Extract Audio from Video") { isVideoAudioPickerPresented = true }
                 Button("Browse Sound Library") { isAudioLibraryPickerPresented = true }
                 Button("Import from Files") { isAudioPickerPresented = true }
                 Button("Cancel", role: .cancel) { insertAfterAudioClipID = nil }
+            }
+            .fullScreenCover(isPresented: $isVideoAudioPickerPresented) {
+                MediaLibraryPickerScreen(
+                    title: "Extract Audio from Video",
+                    confirmButtonTitle: "Extract Audio",
+                    isConfirmLoading: isExtractingVideoAudio,
+                    confirmLoadingTitle: "Extracting…",
+                    allowedMediaType: .video,
+                    maximumSelectionCount: 1,
+                    onCancel: cancelVideoAudioExtraction,
+                    onConfirm: { items in
+                        guard let video = items.first else { return }
+                        startVideoAudioExtraction(from: video)
+                    }
+                )
+                .interactiveDismissDisabled(isExtractingVideoAudio)
             }
             .editorSheet(
                 isPresented: $isAudioLibraryPickerPresented,
@@ -1367,6 +1389,17 @@ private struct AudioSourceSheets: ViewModifier {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color.black)
             }
+            .alert(
+                "Couldn't Extract Audio",
+                isPresented: Binding(
+                    get: { extractionErrorMessage != nil },
+                    set: { if !$0 { extractionErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { extractionErrorMessage = nil }
+            } message: {
+                Text(extractionErrorMessage ?? "The audio could not be extracted.")
+            }
             .editorSheet(
                 isPresented: Binding(
                     get: { vm.punchInPendingRange != nil },
@@ -1386,5 +1419,41 @@ private struct AudioSourceSheets: ViewModifier {
                     .presentationBackground(Color.black)
                 }
             }
+    }
+
+    private func startVideoAudioExtraction(from item: MediaItem) {
+        guard !isExtractingVideoAudio else { return }
+        let insertion = pendingInsertion
+        isExtractingVideoAudio = true
+        extractionErrorMessage = nil
+        extractionTask = Task {
+            do {
+                let extracted = try await VideoAudioExtractionService.extract(from: item.asset)
+                try Task.checkCancellation()
+                vm.insertExtractedVideoAudio(
+                    fileURL: extracted.fileURL,
+                    duration: extracted.duration,
+                    insertion: insertion
+                )
+                isExtractingVideoAudio = false
+                isVideoAudioPickerPresented = false
+                insertAfterAudioClipID = nil
+            } catch is CancellationError {
+                isExtractingVideoAudio = false
+            } catch {
+                isExtractingVideoAudio = false
+                extractionErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "The audio could not be extracted from that video."
+            }
+            extractionTask = nil
+        }
+    }
+
+    private func cancelVideoAudioExtraction() {
+        extractionTask?.cancel()
+        extractionTask = nil
+        isExtractingVideoAudio = false
+        isVideoAudioPickerPresented = false
+        insertAfterAudioClipID = nil
     }
 }

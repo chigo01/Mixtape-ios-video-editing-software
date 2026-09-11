@@ -8,6 +8,15 @@ and configurable video export across iPhone and adaptive iPad layouts.
 > The project is under active development. Core editing and export flows work,
 > while the professional roadmap below tracks the remaining production features.
 
+## Optional sound-effects API
+
+The **Extract Audio from Video** feature is fully on-device and does not require an API key.
+
+Freesound search is optional. To enable it, copy `Config/Secrets.example.xcconfig` to
+`Config/Secrets.xcconfig` and set `FREESOUND_API_KEY`. The secrets file is ignored by Git and
+loaded through `Config/Base.xcconfig`. Clean checkouts continue to build without the key; only
+online sound-effects search is unavailable.
+
 ## Features
 
 ### Platform experience
@@ -73,9 +82,27 @@ and configurable video export across iPhone and adaptive iPad layouts.
 ### Audio
 
 - Imported background-audio clips on a dedicated timeline lane.
+- A sound-effects library with bundled effects and optional Freesound search, previews, downloads, and
+  license attribution.
+- One-tap audio extraction from a selected Photos video, including iCloud-backed originals.
+- Extracted audio is saved as a project-owned `.m4a` file and inserted at the current playhead
+  or immediately after the selected audio clip.
 - Audio trim, move, split, volume, delete, and multiple simultaneous composition tracks.
 - Per-audio-clip fade-in and fade-out rendered with `AVAudioMix` volume ramps.
 - Original clip audio with independent per-clip volume.
+
+#### Extract audio from video
+
+In the editor, choose **Add Audio → Extract Audio from Video**, select one video, then tap
+**Extract Audio**. Mixtape validates that the video contains audio, shows extraction progress,
+and adds the result as a normal audio clip. The resulting clip supports the same timeline tools
+as imported audio, including trim, move, split, volume, fades, delete, duplication, undo, and
+project persistence.
+
+Exports are stored under the app's Application Support `MixtapeAudio` directory rather than a
+temporary download cache. Saved paths are repaired when iOS changes the app-container location
+during a rebuild, so extracted audio remains available after reinstalling a development build
+over the existing app data.
 
 ### Projects and export
 
@@ -105,8 +132,9 @@ and configurable video export across iPhone and adaptive iPad layouts.
 1. Clone the repository.
 2. Open `Mixtape.xcodeproj` in Xcode.
 3. Select the `Mixtape` scheme and an iOS device.
-4. Configure your development team and bundle identifier if device signing requires it.
-5. Build and run.
+4. Optionally create `Config/Secrets.xcconfig` and add a Freesound API key.
+5. Configure your development team and bundle identifier if device signing requires it.
+6. Build and run.
 
 An unsigned command-line build can be used for compilation checks:
 
@@ -130,7 +158,7 @@ Features/
     Model/            # Timeline, transition, text, audio, and export models
     ViewModel/        # Observable editor state and editing operations
     View/             # Screens and reusable SwiftUI components
-    Services/         # Composition, GPU transitions, export, and rendering
+    Services/         # Composition, audio extraction, GPU transitions, export, and rendering
   ProjectList/
     Model/            # Persisted project and PhotoKit media models
     ViewModel/        # Project list and media-library state

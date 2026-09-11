@@ -12,7 +12,9 @@ struct MediaLibraryPickerScreen: View {
     let title: String
     let confirmButtonTitle: String
     var isConfirmLoading: Bool = false
+    var confirmLoadingTitle: String = "Preparing…"
     var allowedMediaType: PHAssetMediaType?
+    var maximumSelectionCount: Int?
     var onCancel: () -> Void
     var onConfirm: ([MediaItem]) -> Void
 
@@ -28,10 +30,15 @@ struct MediaLibraryPickerScreen: View {
                         .padding(.horizontal, horizontalPadding(for: geometry.size.width))
                         .padding(.top, 6)
                         .padding(.bottom, 10)
-                    filterChips
-                        .padding(.bottom, 10)
+                        .disabled(isConfirmLoading)
+                    if allowedMediaType == nil {
+                        filterChips
+                            .padding(.bottom, 10)
+                            .disabled(isConfirmLoading)
+                    }
 
                     content(availableWidth: geometry.size.width)
+                        .allowsHitTesting(!isConfirmLoading)
                 }
                 .frame(maxWidth: 1280)
                 .frame(maxWidth: .infinity)
@@ -41,6 +48,7 @@ struct MediaLibraryPickerScreen: View {
                             vm: vm,
                             confirmTitle: confirmButtonTitle,
                             isLoading: isConfirmLoading,
+                            loadingTitle: confirmLoadingTitle,
                             onNext: confirmSelection
                         )
                         .frame(maxWidth: 920)
@@ -59,7 +67,8 @@ struct MediaLibraryPickerScreen: View {
     }
 
     private func confirmSelection() {
-        let picked = vm.selectedItems.filter(isAllowed)
+        let allowed = vm.selectedItems.filter(isAllowed)
+        let picked = maximumSelectionCount.map { Array(allowed.prefix($0)) } ?? allowed
         guard !picked.isEmpty, !isConfirmLoading else { return }
         onConfirm(picked)
     }
@@ -222,7 +231,7 @@ struct MediaLibraryPickerScreen: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             withAnimation(.easeInOut(duration: 0.15)) {
-                                vm.toggleSelection(item)
+                                toggleSelection(item)
                             }
                         }
                         .onLongPressGesture(minimumDuration: 0.35) {
@@ -236,6 +245,19 @@ struct MediaLibraryPickerScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+    }
+
+    private func toggleSelection(_ item: MediaItem) {
+        guard maximumSelectionCount == 1 else {
+            vm.toggleSelection(item)
+            return
+        }
+        if vm.isSelected(item) {
+            vm.clearSelection()
+        } else {
+            vm.clearSelection()
+            vm.toggleSelection(item)
+        }
     }
 
     private func horizontalPadding(for availableWidth: CGFloat) -> CGFloat {

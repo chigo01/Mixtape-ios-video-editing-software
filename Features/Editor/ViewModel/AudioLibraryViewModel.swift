@@ -1,19 +1,12 @@
-//
-//  AudioLibraryViewModel.swift
-//  Mixtape
-//
-
 import AVFoundation
 import Foundation
 
-/// Drives `AudioLibraryPickerView`: merges the always-available bundled catalog with a
-/// search-driven remote provider (Freesound), favorites (persisted locally — favoriting is
-/// metadata over the catalog, not a copy of any item), and single-item audition playback that
-/// streams/plays independently of the project's own composition player.
+/// Drives the sound-effects browser: bundled effects, Freesound search, favorites, previews,
+/// and local download resolution without disturbing the editor's composition player.
 @MainActor
 @Observable
 final class AudioLibraryViewModel {
-    var searchText: String = ""
+    var searchText = ""
     var selectedCategory: EditorAudioLibraryCategory?
 
     private(set) var bundledResults: [EditorAudioLibraryItem] = []
@@ -38,10 +31,8 @@ final class AudioLibraryViewModel {
         let remoteProvider = FreesoundAudioLibraryProvider.shared
         self.bundledProvider = bundledProvider
         self.remoteProvider = remoteProvider
-        self.remoteSourceName = remoteProvider.sourceName
-        self.favoriteIDs = Set(
-            UserDefaults.standard.stringArray(forKey: Self.favoritesDefaultsKey) ?? []
-        )
+        remoteSourceName = remoteProvider.sourceName
+        favoriteIDs = Set(UserDefaults.standard.stringArray(forKey: Self.favoritesDefaultsKey) ?? [])
     }
 
     init(
@@ -50,10 +41,8 @@ final class AudioLibraryViewModel {
     ) {
         self.bundledProvider = bundledProvider
         self.remoteProvider = remoteProvider
-        self.remoteSourceName = remoteProvider?.sourceName
-        self.favoriteIDs = Set(
-            UserDefaults.standard.stringArray(forKey: Self.favoritesDefaultsKey) ?? []
-        )
+        remoteSourceName = remoteProvider?.sourceName
+        favoriteIDs = Set(UserDefaults.standard.stringArray(forKey: Self.favoritesDefaultsKey) ?? [])
     }
 
     var availableCategories: [EditorAudioLibraryCategory] {
@@ -66,16 +55,13 @@ final class AudioLibraryViewModel {
         searchText = category?.searchKeyword ?? ""
     }
 
-    /// Re-runs both providers for the current `searchText`/`selectedCategory`. Bundled search is
-    /// local and instant; remote search only fires with non-empty text, since Freesound has no
-    /// "browse everything" mode worth hitting on every sheet open. Called from the view via
-    /// `.task(id:)` keyed on search text + category, which gives free debouncing/cancellation —
-    /// no `didSet` on these `@Observable` properties (unsupported by the macro).
     func refresh() async {
         searchGeneration += 1
         let generation = searchGeneration
-
-        async let bundled = (try? bundledProvider.search(query: searchText, category: selectedCategory)) ?? []
+        async let bundled = (try? bundledProvider.search(
+            query: searchText,
+            category: selectedCategory
+        )) ?? []
 
         guard let remoteProvider else {
             bundledResults = await bundled
@@ -155,9 +141,6 @@ final class AudioLibraryViewModel {
         previewingItemID = nil
     }
 
-    /// Downloads/caches (if needed) and returns a local file URL ready to hand to
-    /// `EditorViewModel.insertAudioLibraryItem`. Marks `resolvingItemID` so the row can show a
-    /// spinner for the (usually brief) remote-download case.
     func resolvedLocalURL(for item: EditorAudioLibraryItem) async throws -> URL {
         resolvingItemID = item.id
         defer { resolvingItemID = nil }

@@ -11,6 +11,7 @@ struct SelectionBottomBar: View {
     let vm: PhotoLibraryViewModel
     var confirmTitle: String = "Next"
     var isLoading: Bool = false
+    var loadingTitle: String = "Preparing…"
     var onNext: () -> Void
 
     var body: some View {
@@ -23,7 +24,7 @@ struct SelectionBottomBar: View {
                     .foregroundColor(.white)
                 Text("\(vm.totalSelectedDurationString) TOTAL DURATION")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.55))
+                    .foregroundColor(Color.white.opacity(0.72))
                     .tracking(0.5)
             }
 
@@ -37,7 +38,7 @@ struct SelectionBottomBar: View {
                             .tint(.black)
                             .scaleEffect(0.85)
                     }
-                    Text(isLoading ? "Preparing…" : confirmTitle)
+                    Text(isLoading ? loadingTitle : confirmTitle)
                         .font(.system(size: 14, weight: .semibold))
                     if !isLoading {
                         Image(systemName: "chevron.right")
@@ -56,12 +57,13 @@ struct SelectionBottomBar: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.06))
+                .fill(Color(red: 0.075, green: 0.075, blue: 0.082).opacity(0.98))
                 .overlay(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
                 )
         )
+        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }

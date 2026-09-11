@@ -78,7 +78,7 @@ struct ProjectListScreen: View {
         let columnCount = availableWidth >= 1080 ? 3 : 2
 
         return VStack(spacing: 0) {
-            SizedBox(height: usesGrid ? 20 : 12)
+            SizedBox(height: usesGrid ? 28 : 24)
 
             Text("Studio Workspace")
                 .font(.system(size: usesGrid ? 24 : 18, weight: .semibold))
