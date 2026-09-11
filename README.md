@@ -47,6 +47,31 @@ online sound-effects search is unavailable.
 - One-step duplication for video, audio, and text, plus media replacement that keeps
   compatible trim, timing, transform, color, volume, and transition settings.
 - Autosaved projects that restore clip order, edits, playhead, selections, and title.
+- Playback-following timeline scrolling keeps the current playhead visible and centered
+  where space allows. Following pauses during manual scrolling, scrubbing, trimming,
+  moving, reordering, or zooming, then resumes while playback continues.
+
+### Keyframes and effect controls
+
+- Clip, media-overlay, audio, and text keyframes share a graph editor: tap a diamond
+  to select it, then drag left or right to change its timing without changing its value.
+  Background/playhead scrubbing preserves the selection; releasing a point commits one undo step.
+- Larger point targets, reachable graph endpoints, and Bézier handles that preserve
+  the initial finger offset make selection and curve editing easier.
+- Effect keyframe cards provide an Amount slider and only the secondary control
+  supported by that effect. Zoom Pulse, Shake, and Strobe expose Speed; other effects
+  may expose Direction, Radius, Scale, or Segments. Amount-only effects keep one slider.
+- Effect values apply on release, interpolate between keyframes, and use the shared
+  preview/export renderer. Secondary values persist with projects and retain split/freeze behavior;
+  older projects fall back to their existing effect settings.
+- Effect timelines use a draggable playhead and diamonds, without a separate slider
+  beneath the ruler. Speed-curve editors support point selection, speed/timing dragging,
+  and background scrubbing, with edits applied on release.
+
+Source syntax and focused model checks have passed. Synthetic-video checks cover all six
+speed presets with contiguous segments and export timing within one 30 fps frame.
+Physical-device checks for touch responsiveness, playback following, and perceptual
+preview/export quality remain pending; see [editor verification](Tests/Editor/README.md).
 
 ### Transitions and creative tools
 

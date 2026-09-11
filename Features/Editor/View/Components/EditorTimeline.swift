@@ -221,7 +221,15 @@ struct EditorTimeline: View {
                 trackHeaderRail(height: geo.size.height)
 
                 ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
+                PlaybackFollowingTimelineScrollView(
+                    vm: vm,
+                    layout: layout,
+                    viewportWidth: max(1, geo.size.width - trackHeaderWidth),
+                    isEditing: isScrubbing || isAudioTrimming || isAudioMoving || isTextTrimming
+                        || isTextMoving || isGraphicTrimming || isGraphicMoving
+                        || isOverlayTrimming || isOverlayMoving || reorderState.isDragging
+                        || activeTimelineMagnification != 1
+                ) {
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 8) {
                         rulerAndScrubStrip(totalWidth: totalWidth, layout: layout)
@@ -2241,6 +2249,68 @@ private struct ClipThumb: View {
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 
+}
+
+/// Keep playback scrolling isolated from the expensive clip and waveform view builders.
+private struct PlaybackFollowingTimelineScrollView<Content: View>: View {
+    let vm: EditorViewModel
+    let layout: TimelineLayout
+    let viewportWidth: CGFloat
+    let isEditing: Bool
+    let content: Content
+
+    @State private var position = ScrollPosition(edge: .leading)
+    @State private var isUserScrolling = false
+
+    init(
+        vm: EditorViewModel,
+        layout: TimelineLayout,
+        viewportWidth: CGFloat,
+        isEditing: Bool,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.vm = vm
+        self.layout = layout
+        self.viewportWidth = viewportWidth
+        self.isEditing = isEditing
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            content
+        }
+        .scrollPosition($position)
+        .onScrollPhaseChange { _, phase in
+            isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            if phase == .idle { followPlayhead() }
+        }
+        .onChange(of: vm.timelinePosition) { _, _ in followPlayhead() }
+        .onChange(of: vm.isPlaying) { _, playing in
+            if playing { followPlayhead() }
+        }
+        .onChange(of: isEditing) { _, editing in
+            if !editing { followPlayhead() }
+        }
+        .onChange(of: viewportWidth) { _, _ in followPlayhead() }
+        .onChange(of: layout.contentWidth) { _, _ in followPlayhead() }
+        .onAppear { followPlayhead() }
+    }
+
+    private func followPlayhead() {
+        guard vm.isPlaying, !isEditing, !isUserScrolling else { return }
+        // Match the timeline's 16pt content padding. Clamp at either end while
+        // keeping the moving playhead centered throughout the scrollable range.
+        let maximumOffset = max(0, layout.contentWidth + 32 - viewportWidth)
+        let target = min(maximumOffset, max(0,
+            layout.contentX(forTime: vm.timelinePosition) + 16 - viewportWidth / 2
+        ))
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            position.scrollTo(x: target)
+        }
+    }
 }
 
 // MARK: - Playhead (isolated — only these views observe `timelinePosition` during playback)

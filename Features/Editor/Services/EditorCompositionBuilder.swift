@@ -1608,18 +1608,23 @@ enum EditorCompositionBuilder {
                 seconds: segment.sourceStart,
                 preferredTimescale: timescale
             )
-            let segmentSourceDuration = CMTime(
-                seconds: segment.sourceDuration,
+            // Quantize shared boundaries, not each duration independently. Otherwise
+            // rounding can leave gaps or overlap adjacent video/audio slices.
+            let segmentSourceEnd = sourceStart + CMTime(
+                seconds: segment.sourceStart + segment.sourceDuration,
                 preferredTimescale: timescale
             )
+            let segmentSourceDuration = segmentSourceEnd - segmentSourceStart
             let segmentTimelineStart = timelineStart + CMTime(
                 seconds: segment.timelineStart,
                 preferredTimescale: timescale
             )
-            let segmentTimelineDuration = CMTime(
-                seconds: segment.timelineDuration,
+            let segmentTimelineEnd = timelineStart + CMTime(
+                seconds: segment.timelineStart + segment.timelineDuration,
                 preferredTimescale: timescale
             )
+            let segmentTimelineDuration = segmentTimelineEnd - segmentTimelineStart
+            guard segmentSourceDuration > .zero, segmentTimelineDuration > .zero else { continue }
             let sourceRange = CMTimeRange(
                 start: segmentSourceStart,
                 duration: segmentSourceDuration

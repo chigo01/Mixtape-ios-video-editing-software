@@ -745,7 +745,7 @@ enum EditorVisualEffectRenderer {
         return plan.effects.reduce(source) { image, effect in
             let amount = min(max(effect.resolvedAmount(at: localTime), 0), 1)
             guard amount > 0.0001 else { return image }
-            let secondary = min(max(effect.secondaryAmount, 0), 1)
+            let secondary = min(max(effect.resolvedSecondaryAmount(at: localTime), 0), 1)
             let result: CIImage
             switch effect.kind {
             case .gaussianBlur:

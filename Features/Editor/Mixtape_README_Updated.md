@@ -250,6 +250,13 @@ Core Animation tool because AVPlayer rejects that offline-only configuration.
 
 ## 6. Timeline UI (the interesting part)
 
+**Playback following:** `PlaybackFollowingTimelineScrollView` observes playback progress
+separately from the clip and waveform builders and scrolls to the playhead's content
+position. It centers the playhead where possible, clamps at either end, and suspends
+following during manual scroll/deceleration, scrubbing, trim/move/reorder gestures,
+and timeline zoom. Following resumes when interaction finishes and playback is active.
+Paused editing retains manual scroll positioning.
+
 ### 6.1 Pixels and time
 
 `EditorTimeline` maps **time → horizontal position** with `pixelsPerSecond`. Clip width on screen ≈ `duration * pixelsPerSecond`. The ruler labels are placed the same way so ticks line up with the filmstrip.
@@ -686,6 +693,11 @@ Use this as a map of **what we built** and **why**, in learning order:
 
 #### 12.3.1 Speed ramps
 
+- **Touch interaction:** tap to select without modifying a point; drag from its original
+  position to change speed/timing. The graph uses a local draft and commits on release.
+  Drag the top handle or background to scrub in source time. Shared quantized segment
+  boundaries avoid independently rounded slice durations in the video/audio composition.
+
 - **Normal / Curve modes:** the SPEED panel keeps the existing constant-rate controls and adds a dedicated curve workspace for selected primary video clips.
 - **Presets:** Montage, Hero, Bullet, Flash, Speed Up, and Slow Down provide editable starting curves from 0.1× to 8×.
 - **Curve editor:** control points drag vertically to set speed and horizontally to set source-relative timing. Endpoint timing stays locked to the clip edges; intermediate points can be added at the playhead or largest open interval and removed independently.
@@ -864,6 +876,28 @@ keyframe behavior.
 | 12 | **Stabilization and motion tracking — complete** | Reusable point and planar tracks; Gaussian transform smoothing; tracked text and overlay graphics; Vision camera-path analysis with smoothness and crop sliders; undo, persistence, split-safe samples, and identical GPU preview/export. |
 
 #### Keyframe engine
+
+**Touch editing:** the shared Clip/Media Overlay/Audio/Text graph selects a point on
+contact and drags its time horizontally using a stable gesture origin. Point movement
+stays within the item duration and neighboring points; values remain unchanged.
+The curve previews the draft timing and commits on release as one undo step. Scrubbing
+the graph background or top playhead handle preserves selection and seeks without the
+main timeline's magnetic snapping. Padded endpoints and larger hit targets keep points
+reachable; Bézier handles preserve the initial finger offset. Updating a point retains
+its identity even when sorting changes its index.
+
+**Effect keyframes:** cards contain a labelled Amount slider and the effect's supported
+secondary control: Speed for Zoom Pulse/Shake/Strobe, Direction, Radius, Scale, or
+Segments where applicable. Amount-only effects have no extra slider. The ruler itself
+supports draggable points and playhead scrubbing; there is no separate slider below it.
+Sliders commit on release. Optional `secondaryKeyframes` tracks share point identities
+and timing with Amount, interpolate in `EditorColorGradeRenderer`, persist through
+save/reopen, and retain split/freeze values. Older projects use `secondaryAmount`
+until secondary keyframes are created.
+
+**Verification:** source syntax and focused identity/value/persistence checks passed;
+physical-device touch, playback-following, and preview/export quality checks remain
+pending. See [editor verification](../../Tests/Editor/README.md).
 
 - **Model:** `EditorKeyframe`, `EditorKeyframeCurve`, `EditorKeyframeTrack`, and `EditorKeyframeTracks` store item-local seconds, scalar values, and each point's outgoing curve. Complex transforms are composed from reusable position, scale, rotation, crop, and opacity channels.
 - **Editor:** contextual **KEYFRAME** actions open one graph editor for primary clips, video overlays, imported audio, and text. Dragging the graph scrubs the playhead and magnetically snaps to nearby diamonds without changing values; previous/next buttons jump between points. Values change only through the slider or numeric field. Points can be added, selected, deleted, and assigned preset or custom cubic Bézier curves, with undo/redo available inside the sheet.
@@ -1524,7 +1558,7 @@ The roadmap priorities above remain the detailed source of truth. When choosing 
 | **P0** | **Timeline precision: ripple/roll/slip/slide + J/L cuts — core shipped** | A dedicated precision editor now provides frame/0.1s/0.5s ripple, roll, slip, and slide adjustments plus visible linked A/V, reversible unlink/relink, and independent J/L source-audio handles. Operations are single-step undoable, persistent, and shared by preview/export composition. |
 | **P0** | **Multi-select, grouping, compound clips, and sequence structure — core shipped** | Cross-track tap and In/Out range selection, batch move/duplicate/delete, persisted groups, recursively nested compounds, named markers, focus navigation, and one-step undo now share the authoritative flat render timeline, preventing preview/export divergence. |
 | **P0** | **Reverse and freeze frame — shipped** | Primary clips and video overlays support non-destructive cached reverse generation, cancellable progress, appropriate embedded-audio policy, playhead-accurate ripple freeze insertion, held animation state, relinking/regeneration, persistence, undo, and shared preview/export rendering. |
-| **P0** | **Effects stack + adjustment layers — core shipped** | Primary clips and media overlays own ordered effect stacks. A time-ranged adjustment layer applies one shared color grade and effect stack to every clip and overlay underneath it, with bypass, parameters, amount keyframes, cached render plans, undo/persistence, and identical preview/export composition. The searchable library ships 36 curated recipes across eight categories, backed by 30 GPU-accelerated primitives including temporal motion, RGB/glitch, screen, pixel, blur, light, and distortion treatments. New layers cover the In/Out range or, when none is marked, the full project. Each effect has a large keyframe timeline with project timecode/frame labels and tap-to-seek editing. |
+| **P0** | **Effects stack + adjustment layers — core shipped** | Primary clips and media overlays own ordered effect stacks. A time-ranged adjustment layer applies one shared color grade and effect stack to every clip and overlay underneath it, with bypass, parameters, amount keyframes, cached render plans, undo/persistence, and identical preview/export composition. The searchable library ships 36 curated recipes across eight categories, backed by 30 GPU-accelerated primitives including temporal motion, RGB/glitch, screen, pixel, blur, light, and distortion treatments. New layers cover the In/Out range or, when none is marked, the full project. Each effect has a large keyframe timeline with project timecode/frame labels, point dragging, direct playhead scrubbing, and per-keyframe Amount/secondary controls. |
 | **P1** | **Text animation — shipped** | In/out/loop presets, per-character timing, typewriter, bounce, slide, blur, and keyframe interoperability now make the text system creator-ready. |
 | **P1** | **Stickers and reusable graphics — core shipped** | Searchable emoji/SF Symbol library, project-safe image/PNG import, app-wide favorites, a dedicated trim/move timeline lane, direct preview positioning, transforms, blend modes, animation presets, undo/persistence, and offline export parity. |
 | **P1** | **Proxy and render cache** | Critical for long projects, high-resolution media, thermal limits, and older supported devices. Full-resolution originals remain authoritative for export. |

@@ -60,6 +60,21 @@ struct EditorSpeedRamp: Codable, Hashable {
 
     var isUsable: Bool { points.count >= 2 }
 
+    /// Keep endpoints anchored and neighboring points ordered during a drag.
+    mutating func movePoint(at index: Int, position: Double, speed: Float) {
+        guard points.indices.contains(index) else { return }
+        let resolved: Double
+        if index == 0 {
+            resolved = 0
+        } else if index == points.count - 1 {
+            resolved = 1
+        } else {
+            let gap = min(0.02, (points[index + 1].position - points[index - 1].position) / 3)
+            resolved = min(max(position, points[index - 1].position + gap), points[index + 1].position - gap)
+        }
+        points[index] = EditorSpeedRampPoint(position: resolved, speed: speed)
+    }
+
     func speed(atSourceProgress progress: Double) -> Float {
         let p = min(max(progress, 0), 1)
         guard let first = points.first, let last = points.last else { return 1 }

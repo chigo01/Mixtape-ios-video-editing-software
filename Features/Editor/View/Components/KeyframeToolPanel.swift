@@ -61,6 +61,9 @@ struct KeyframeToolPanel: View {
             selectedKeyframeID = nil
             syncDrafts()
         }
+        .onChange(of: track.keyframes) { _, _ in
+            reconcileSelection()
+        }
     }
 
     private var panelContent: some View {
@@ -75,9 +78,23 @@ struct KeyframeToolPanel: View {
                         playheadTime: vm.keyframeLocalTime,
                         onSelect: select,
                         onScrubChanged: scrub,
-                        onScrubEnded: finishScrubbing
+                        onScrubEnded: finishScrubbing,
+                        onMoveChanged: { point, time in
+                            draftTime = time
+                            vm.scrubSelectedKeyframePlayhead(to: time)
+                        },
+                        onMoveEnded: { point, time in
+                            vm.updateSelectedKeyframe(property: selectedProperty, id: point.id, time: time)
+                            vm.seekToSelectedKeyframe(localTime: time)
+                            syncDrafts()
+                        }
                     )
+                    .id(selectedProperty)
                     .frame(height: 190)
+
+                    Text("Tap a point to select. Drag it left or right to change timing. Drag the playhead or background to scrub.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     HStack(spacing: 12) {
                         Label(
@@ -302,27 +319,12 @@ struct KeyframeToolPanel: View {
     }
 
     private func scrub(to time: TimeInterval) {
-        vm.scrubSelectedKeyframePlayhead(to: snappedTime(for: time))
+        vm.scrubSelectedKeyframePlayhead(to: time)
     }
 
     private func finishScrubbing(at time: TimeInterval) {
-        let time = snappedTime(for: time)
         vm.scrubSelectedKeyframePlayhead(to: time)
         vm.commitSelectedKeyframePlayhead()
-        if let point = track.keyframes.min(by: {
-            abs($0.time - time) < abs($1.time - time)
-        }), abs(point.time - time) < 0.001 {
-            selectedKeyframeID = point.id
-            syncDrafts()
-        }
-    }
-
-    private func snappedTime(for time: TimeInterval) -> TimeInterval {
-        guard let nearest = track.keyframes.min(by: {
-            abs($0.time - time) < abs($1.time - time)
-        }) else { return time }
-        let threshold = max(0.12, vm.keyframeTargetDuration * 0.025)
-        return abs(nearest.time - time) <= threshold ? nearest.time : time
     }
 
     private func reconcileSelection() {
@@ -354,6 +356,19 @@ private struct KeyframeCurveGraph: View {
     let onSelect: (EditorKeyframe) -> Void
     let onScrubChanged: (TimeInterval) -> Void
     let onScrubEnded: (TimeInterval) -> Void
+    let onMoveChanged: (EditorKeyframe, TimeInterval) -> Void
+    let onMoveEnded: (EditorKeyframe, TimeInterval) -> Void
+
+    @State private var interacting = false
+    @State private var draggedPoint: EditorKeyframe?
+    @State private var movedTime: TimeInterval?
+    private let inset: CGFloat = 24
+
+    private var displayedTrack: EditorKeyframeTrack {
+        var result = track
+        if let draggedPoint, let movedTime { result.update(id: draggedPoint.id, time: movedTime) }
+        return result
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -370,51 +385,97 @@ private struct KeyframeCurveGraph: View {
 
                 Rectangle()
                     .fill(Color.white.opacity(0.55))
-                    .frame(width: 1)
-                    .offset(x: x(for: playheadTime, width: size.width) - size.width / 2)
+                    .frame(width: 2, height: max(1, size.height - 24))
+                    .position(x: x(for: movedTime ?? playheadTime, width: size.width), y: size.height / 2 + 12)
 
-                ForEach(track.keyframes) { point in
+                Image(systemName: "arrowtriangle.down.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .position(x: x(for: movedTime ?? playheadTime, width: size.width), y: 10)
+
+                ForEach(displayedTrack.keyframes) { point in
                     DiamondShape()
                         .fill(point.id == selectedID ? Color.white : Color.appColors.primaryColor)
-                        .frame(width: 15, height: 15)
+                        .frame(width: 20, height: 20)
                         .position(
                             x: x(for: point.time, width: size.width),
                             y: y(for: point.value, height: size.height)
                         )
-                        .contentShape(Rectangle().inset(by: -10))
-                        .onTapGesture { onSelect(point) }
+                        .accessibilityLabel("Keyframe at \(String(format: "%.2f", point.time)) seconds")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { onSelect(point) }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .coordinateSpace(name: "keyframeGraph")
             .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(
-                    minimumDistance: 0,
-                    coordinateSpace: .named("keyframeGraph")
-                )
-                .onChanged { gesture in
-                    onScrubChanged(time(at: gesture.location.x, width: size.width))
-                }
-                .onEnded { gesture in
-                    onScrubEnded(time(at: gesture.location.x, width: size.width))
-                }
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named("keyframeGraph"))
+                    .onChanged { gesture in
+                        if !interacting {
+                            interacting = true
+                            let nearest = track.keyframes.min {
+                                distance(to: $0, from: gesture.startLocation, size: size)
+                                    < distance(to: $1, from: gesture.startLocation, size: size)
+                            }
+                            if let nearest, gesture.startLocation.y > 20,
+                               distance(to: nearest, from: gesture.startLocation, size: size) <= 26 {
+                                draggedPoint = nearest
+                                onSelect(nearest)
+                            }
+                        }
+                        if let point = draggedPoint {
+                            guard movedTime != nil || abs(gesture.translation.width) >= 3 else { return }
+                            let requested = point.time
+                                + Double(gesture.translation.width / max(1, size.width - inset * 2)) * duration
+                            let time = constrainedTime(requested, point: point)
+                            movedTime = time
+                            onMoveChanged(point, time)
+                        } else {
+                            onScrubChanged(time(at: gesture.location.x, width: size.width))
+                        }
+                    }
+                    .onEnded { gesture in
+                        if let point = draggedPoint {
+                            if let movedTime, abs(movedTime - point.time) > 0.000001 {
+                                onMoveEnded(point, movedTime)
+                            }
+                        } else {
+                            onScrubEnded(time(at: gesture.location.x, width: size.width))
+                        }
+                        interacting = false
+                        draggedPoint = nil
+                        movedTime = nil
+                    }
             )
         }
     }
 
+    private func distance(to point: EditorKeyframe, from location: CGPoint, size: CGSize) -> CGFloat {
+        hypot(x(for: point.time, width: size.width) - location.x,
+              y(for: point.value, height: size.height) - location.y)
+    }
+
+    private func constrainedTime(_ time: TimeInterval, point: EditorKeyframe) -> TimeInterval {
+        let previous = track.keyframes.last { $0.time < point.time }?.time
+        let next = track.keyframes.first { $0.time > point.time }?.time
+        let lower = previous.map { $0 + min(1.0 / 30, (point.time - $0) / 2) } ?? 0
+        let upper = next.map { $0 - min(1.0 / 30, ($0 - point.time) / 2) } ?? duration
+        return min(max(time, lower), max(lower, upper))
+    }
+
     private func x(for time: TimeInterval, width: CGFloat) -> CGFloat {
-        width * CGFloat(min(max(time / max(duration, 0.000_001), 0), 1))
+        inset + max(1, width - inset * 2) * CGFloat(min(max(time / max(duration, 0.000_001), 0), 1))
     }
 
     private func time(at x: CGFloat, width: CGFloat) -> TimeInterval {
-        Double(min(max(x / max(width, 1), 0), 1)) * max(duration, 0)
+        Double(min(max((x - inset) / max(width - inset * 2, 1), 0), 1)) * max(duration, 0)
     }
 
     private func y(for value: Double, height: CGFloat) -> CGFloat {
         let range = track.property.range
         let normalized = (value - range.lowerBound) / max(range.upperBound - range.lowerBound, 0.000_001)
-        return height * CGFloat(1 - min(max(normalized, 0), 1))
+        return inset + max(1, height - inset * 2) * CGFloat(1 - min(max(normalized, 0), 1))
     }
 
     private func gridPath(size: CGSize) -> Path {
@@ -434,7 +495,7 @@ private struct KeyframeCurveGraph: View {
             let sampleCount = max(24, Int(size.width / 4))
             for index in 0...sampleCount {
                 let time = duration * Double(index) / Double(sampleCount)
-                let value = track.value(at: time, default: track.keyframes[0].value)
+                let value = displayedTrack.value(at: time, default: track.keyframes[0].value)
                 let point = CGPoint(x: x(for: time, width: size.width), y: y(for: value, height: size.height))
                 if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
             }
@@ -444,6 +505,7 @@ private struct KeyframeCurveGraph: View {
 
 private struct KeyframeBezierEditor: View {
     @Binding var curve: EditorKeyframeCurve
+    @State private var handleOrigins: [Int: CGPoint] = [:]
 
     var body: some View {
         GeometryReader { proxy in
@@ -462,11 +524,11 @@ private struct KeyframeBezierEditor: View {
                 }
                 .stroke(Color.appColors.primaryColor, lineWidth: 2)
 
-                handle(curve.controlPoint1, size: size) { point in
+                handle(curve.controlPoint1, index: 1, size: size) { point in
                     curve.preset = .custom
                     curve.controlPoint1 = point
                 }
-                handle(curve.controlPoint2, size: size) { point in
+                handle(curve.controlPoint2, index: 2, size: size) { point in
                     curve.preset = .custom
                     curve.controlPoint2 = point
                 }
@@ -478,12 +540,15 @@ private struct KeyframeBezierEditor: View {
 
     private func handle(
         _ point: CGPoint,
+        index: Int,
         size: CGSize,
         update: @escaping (CGPoint) -> Void
     ) -> some View {
         Circle()
             .fill(Color.white)
             .frame(width: 16, height: 16)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
             .position(x: size.width * point.x, y: size.height * (1 - point.y))
             .gesture(
                 DragGesture(
@@ -491,11 +556,14 @@ private struct KeyframeBezierEditor: View {
                     coordinateSpace: .named("bezierEditor")
                 )
                     .onChanged { gesture in
+                        if handleOrigins[index] == nil { handleOrigins[index] = point }
+                        let origin = handleOrigins[index] ?? point
                         update(CGPoint(
-                            x: min(max(gesture.location.x / max(size.width, 1), 0), 1),
-                            y: 1 - min(max(gesture.location.y / max(size.height, 1), 0), 1)
+                            x: min(max(origin.x + gesture.translation.width / max(size.width, 1), 0), 1),
+                            y: min(max(origin.y - gesture.translation.height / max(size.height, 1), 0), 1)
                         ))
                     }
+                    .onEnded { _ in handleOrigins[index] = nil }
             )
     }
 }

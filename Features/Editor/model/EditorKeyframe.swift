@@ -245,8 +245,9 @@ struct EditorKeyframeTrack: Codable, Identifiable, Hashable {
             keyframes[index].time = time
             keyframes[index].value = value
             if let curve { keyframes[index].curve = curve }
+            let updatedID = keyframes[index].id
             keyframes.sort { $0.time < $1.time }
-            return keyframes[index].id
+            return updatedID
         }
         let point = EditorKeyframe(time: time, value: value, curve: curve ?? .linear)
         keyframes.append(point)

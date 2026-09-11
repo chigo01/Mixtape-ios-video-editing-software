@@ -588,10 +588,8 @@ final class EditorViewModel {
     }
 
     func seekToSelectedKeyframe(localTime: TimeInterval) {
-        seekTimeline(
-            to: selectedKeyframeTargetStartTime
-                + min(max(0, localTime), keyframeTargetDuration)
-        )
+        scrubSelectedKeyframePlayhead(to: localTime)
+        commitSelectedKeyframePlayhead()
     }
 
     func scrubSelectedKeyframePlayhead(to localTime: TimeInterval) {
@@ -608,6 +606,12 @@ final class EditorViewModel {
             ),
             totalDuration
         )
+        if compositionFingerprint != nil {
+            player?.seek(
+                to: CMTime(seconds: timelinePosition, preferredTimescale: 600),
+                toleranceBefore: .zero, toleranceAfter: .zero
+            )
+        }
     }
 
     func commitSelectedKeyframePlayhead() {
@@ -2148,14 +2152,58 @@ final class EditorViewModel {
                 curve: .init(preset: .easeInOut)
             )
             stack[index].amountKeyframes = track
+            if stack[index].kind.secondaryControlTitle != nil {
+                stack[index].secondaryKeyframes = stack[index].alignedSecondaryKeyframes()
+            }
         }
     }
 
     func seekToVisualEffectKeyframe(localTime: TimeInterval) {
-        seekTimeline(
-            to: selectedEffectTargetStartTime
-                + min(max(0, localTime), selectedEffectTargetDuration)
+        scrubVisualEffectPlayhead(to: localTime)
+        commitTimelineAfterScrub()
+    }
+
+    func scrubVisualEffectPlayhead(to localTime: TimeInterval) {
+        pausePlaybackForEdit()
+        timelinePosition = min(
+            max(0, selectedEffectTargetStartTime + min(max(0, localTime), selectedEffectTargetDuration)),
+            totalDuration
         )
+        if compositionFingerprint != nil {
+            player?.seek(
+                to: CMTime(seconds: timelinePosition, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+        }
+    }
+
+    func updateVisualEffectAmountKeyframe(
+        effectID: UUID,
+        keyframeID: UUID,
+        time: TimeInterval? = nil,
+        value: Double? = nil,
+        secondaryValue: Double? = nil
+    ) {
+        guard let effect = selectedEffectStack.first(where: { $0.id == effectID }),
+              let point = effect.amountKeyframes.keyframes.first(where: { $0.id == keyframeID }) else { return }
+        let resolvedTime = min(max(0, time ?? point.time), selectedEffectTargetDuration)
+        let resolvedValue = min(max(0, value ?? point.value), 1)
+        let resolvedSecondary = min(max(secondaryValue ?? effect.resolvedSecondaryAmount(at: point.time), 0), 1)
+        guard resolvedTime != point.time || resolvedValue != point.value
+                || resolvedSecondary != effect.resolvedSecondaryAmount(at: point.time) else { return }
+        pausePlaybackForEdit()
+        // A gesture commits once, so dragging creates a single undo step.
+        mutateSelectedEffectStack { stack in
+            guard let index = stack.firstIndex(where: { $0.id == effectID }) else { return }
+            if stack[index].kind.secondaryControlTitle != nil {
+                var secondaryTrack = stack[index].alignedSecondaryKeyframes()
+                secondaryTrack.update(id: keyframeID, time: resolvedTime, value: resolvedSecondary)
+                stack[index].secondaryKeyframes = secondaryTrack
+            }
+            stack[index].amountKeyframes.update(id: keyframeID, time: resolvedTime, value: resolvedValue)
+        }
+        scrubVisualEffectPlayhead(to: resolvedTime)
     }
 
     func deleteVisualEffectAmountKeyframe(effectID: UUID, keyframeID: UUID) {
@@ -2164,6 +2212,7 @@ final class EditorViewModel {
             var track = stack[index].amountKeyframes
             track.remove(id: keyframeID)
             stack[index].amountKeyframes = track
+            stack[index].secondaryKeyframes?.remove(id: keyframeID)
         }
     }
 
@@ -3573,6 +3622,26 @@ final class EditorViewModel {
         Task { await alignPlaybackToTimeline() }
     }
 
+    func beginSpeedRampInteraction() {
+        pausePlaybackForEdit()
+    }
+
+    func scrubSpeedRamp(to progress: Double, clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        pausePlaybackForEdit()
+        let clip = clips[index]
+        let offset = min(max(progress, 0), 1) * max(0, clip.trimEnd - clip.trimStart)
+        timelinePosition = min(totalDuration, timelineOffsetForClipIndex(index) + clip.timelineTime(forSourceOffset: offset))
+        // Seek the current composition during the gesture; rebuild edited curves on release.
+        if compositionFingerprint != nil {
+            player?.seek(
+                to: CMTime(seconds: timelinePosition, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+        }
+    }
+
     func applySpeedRampPreset(_ preset: EditorSpeedRampPreset, clipID: UUID) {
         updateSpeedRamp(clipID: clipID) { _ in preset.ramp }
         commitSpeedRampEdit()
@@ -3613,23 +3682,7 @@ final class EditorViewModel {
     ) {
         updateSpeedRamp(clipID: clipID) { current in
             var ramp = current ?? EditorSpeedRampPreset.montage.ramp
-            guard ramp.points.indices.contains(index) else { return ramp }
-            let lowerBound = index > 0 ? ramp.points[index - 1].position + 0.02 : 0
-            let upperBound = index < ramp.points.count - 1
-                ? ramp.points[index + 1].position - 0.02
-                : 1
-            let resolvedPosition: Double
-            if index == 0 {
-                resolvedPosition = 0
-            } else if index == ramp.points.count - 1 {
-                resolvedPosition = 1
-            } else {
-                resolvedPosition = min(max(position, lowerBound), upperBound)
-            }
-            ramp.points[index] = EditorSpeedRampPoint(
-                position: resolvedPosition,
-                speed: speed
-            )
+            ramp.movePoint(at: index, position: position, speed: speed)
             return EditorSpeedRamp(points: ramp.points, interpolation: ramp.interpolation)
         }
     }
@@ -3690,7 +3743,17 @@ final class EditorViewModel {
             return
         }
         if speedUndoSnapshot == nil { speedUndoSnapshot = currentSnapshot() }
-        clips[index].speedRamp = transform(clips[index].speedRamp)
+        let oldClip = clips[index]
+        let start = timelineOffsetForClipIndex(index)
+        let localTime = timelinePosition - start
+        let sourceOffset = oldClip.sourceTime(forExportedLocal: localTime) - oldClip.trimStart
+        let updatedRamp = transform(oldClip.speedRamp)
+        guard updatedRamp != oldClip.speedRamp else { return }
+        pausePlaybackForEdit()
+        clips[index].speedRamp = updatedRamp
+        if localTime >= 0, localTime <= oldClip.duration {
+            timelinePosition = start + clips[index].timelineTime(forSourceOffset: sourceOffset)
+        }
         timelinePosition = min(timelinePosition, totalDuration)
         invalidateComposition()
     }

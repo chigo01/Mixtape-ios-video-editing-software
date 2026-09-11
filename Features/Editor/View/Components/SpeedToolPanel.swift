@@ -169,9 +169,13 @@ struct SpeedToolPanel: View {
                         speed: speed
                     )
                 },
-                onCommit: { vm.commitSpeedRampEdit() }
+                onCommit: { vm.commitSpeedRampEdit() },
+                onBegin: { vm.beginSpeedRampInteraction() },
+                onScrub: { vm.scrubSpeedRamp(to: $0, clipID: clip.id) },
+                onScrubEnd: { vm.commitTimelineAfterScrub() }
             )
-            .frame(height: 142)
+            .id(clip.id)
+            .frame(height: 166)
 
             HStack(spacing: 10) {
                 Picker(
@@ -228,7 +232,7 @@ struct SpeedToolPanel: View {
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .foregroundColor(.white.opacity(0.7))
                     Spacer()
-                    Text("Drag points vertically for speed, horizontally for timing")
+                    Text("Drag points to edit • Drag background to scrub")
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.4))
                 }
@@ -298,8 +302,18 @@ private struct SpeedRampCurveEditor: View {
     @Binding var selectedPointIndex: Int
     let onChange: (_ index: Int, _ position: Double, _ speed: Float) -> Void
     let onCommit: () -> Void
+    let onBegin: () -> Void
+    let onScrub: (Double) -> Void
+    let onScrubEnd: () -> Void
 
-    private let inset: CGFloat = 16
+    @State private var draftRamp: EditorSpeedRamp?
+    @State private var interactionStarted = false
+    @State private var draggedIndex: Int?
+    @State private var dragOrigin: CGPoint = .zero
+    @State private var didMovePoint = false
+
+    private var displayedRamp: EditorSpeedRamp { draftRamp ?? ramp }
+    private let inset: CGFloat = 24
 
     var body: some View {
         GeometryReader { geometry in
@@ -308,12 +322,17 @@ private struct SpeedRampCurveEditor: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.black.opacity(0.28))
                 grid(in: size)
-                if let playheadProgress {
+                if let progress = draggedIndex.flatMap({ draftRamp?.points[$0].position }) ?? playheadProgress {
+                    Image(systemName: "arrowtriangle.down.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                        .position(x: inset + CGFloat(progress) * max(1, size.width - inset * 2), y: 9)
+                        .allowsHitTesting(false)
                     Rectangle()
                         .fill(Color.white.opacity(0.6))
                         .frame(width: 1, height: max(1, size.height - inset * 2))
                         .position(
-                            x: inset + CGFloat(playheadProgress) * max(1, size.width - inset * 2),
+                            x: inset + CGFloat(progress) * max(1, size.width - inset * 2),
                             y: size.height / 2
                         )
                         .allowsHitTesting(false)
@@ -324,31 +343,86 @@ private struct SpeedRampCurveEditor: View {
                         style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
                     )
 
-                ForEach(Array(ramp.points.enumerated()), id: \.offset) { index, point in
+                ForEach(Array(displayedRamp.points.enumerated()), id: \.offset) { index, point in
                     Circle()
                         .fill(index == selectedPointIndex ? Color.appColors.primaryColor : .white)
-                        .frame(width: index == selectedPointIndex ? 15 : 12,
-                               height: index == selectedPointIndex ? 15 : 12)
+                        .frame(width: index == selectedPointIndex ? 18 : 14,
+                               height: index == selectedPointIndex ? 18 : 14)
                         .overlay(Circle().stroke(Color.black.opacity(0.65), lineWidth: 2))
                         .position(location(for: point, in: size))
-                        .contentShape(Rectangle().inset(by: -12))
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    selectedPointIndex = index
-                                    onChange(
-                                        index,
-                                        position(forX: value.location.x, in: size),
-                                        speed(forY: value.location.y, in: size)
-                                    )
-                                }
-                                .onEnded { _ in onCommit() }
-                        )
                         .accessibilityLabel("Speed point \(index + 1)")
                         .accessibilityValue(String(format: "%.2f times", point.speed))
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction {
+                            selectedPointIndex = index
+                            onScrub(point.position)
+                            onScrubEnd()
+                        }
+                }
+                if let index = draggedIndex, let draftRamp {
+                    Text(String(format: "Point %d • %.2f×", index + 1, draftRamp.points[index].speed))
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundColor(Color.appColors.primaryColor)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .allowsHitTesting(false)
                 }
             }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !interactionStarted {
+                            interactionStarted = true
+                            onBegin()
+                            // Resolve the nearest point once, in the fixed graph coordinate space.
+                            let nearest = ramp.points.indices.min { lhs, rhs in
+                                distance(location(for: ramp.points[lhs], in: size), value.startLocation)
+                                    < distance(location(for: ramp.points[rhs], in: size), value.startLocation)
+                            }
+                            if let nearest, value.startLocation.y > 15,
+                               distance(location(for: ramp.points[nearest], in: size), value.startLocation) <= 24 {
+                                draggedIndex = nearest
+                                selectedPointIndex = nearest
+                                dragOrigin = location(for: ramp.points[nearest], in: size)
+                                draftRamp = ramp
+                                onScrub(ramp.points[nearest].position)
+                            }
+                        }
+                        if let index = draggedIndex {
+                            guard didMovePoint || hypot(value.translation.width, value.translation.height) >= 3 else { return }
+                            didMovePoint = true
+                            // Translation preserves the finger's initial offset; selecting never jumps a point.
+                            var updated = draftRamp ?? ramp
+                            updated.movePoint(
+                                at: index,
+                                position: position(forX: dragOrigin.x + value.translation.width, in: size),
+                                speed: speed(forY: dragOrigin.y + value.translation.height, in: size)
+                            )
+                            draftRamp = updated
+                        } else {
+                            onScrub(position(forX: value.location.x, in: size))
+                        }
+                    }
+                    .onEnded { _ in
+                        if didMovePoint, let index = draggedIndex, let draftRamp {
+                            let point = draftRamp.points[index]
+                            onChange(index, point.position, point.speed)
+                            onScrub(point.position)
+                            onCommit()
+                        } else {
+                            onScrubEnd()
+                        }
+                        draftRamp = nil
+                        draggedIndex = nil
+                        didMovePoint = false
+                        interactionStarted = false
+                    }
+            )
         }
+    }
+
+    private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
     }
 
     private func grid(in size: CGSize) -> some View {
@@ -375,7 +449,7 @@ private struct SpeedRampCurveEditor: View {
                 let progress = Double(sample) / 100
                 let point = CGPoint(
                     x: inset + CGFloat(progress) * max(1, size.width - inset * 2),
-                    y: yPosition(for: ramp.speed(atSourceProgress: progress), in: size)
+                    y: yPosition(for: displayedRamp.speed(atSourceProgress: progress), in: size)
                 )
                 if sample == 0 {
                     path.move(to: point)

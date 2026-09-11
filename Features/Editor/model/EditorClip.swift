@@ -292,6 +292,24 @@ struct EditorVisualEffect: Codable, Identifiable, Hashable {
     /// A second normalized control used where an effect needs direction/size.
     var secondaryAmount: Double = 0.5
     var amountKeyframes: EditorKeyframeTrack = .init(property: .effectAmount)
+    /// Optional for compatibility with projects saved before per-keyframe secondary controls.
+    var secondaryKeyframes: EditorKeyframeTrack?
+
+    func resolvedSecondaryAmount(at localTime: TimeInterval) -> Double {
+        secondaryKeyframes?.value(at: localTime, default: secondaryAmount) ?? secondaryAmount
+    }
+
+    /// Give each amount point its own secondary value, preserving existing values by identity.
+    func alignedSecondaryKeyframes() -> EditorKeyframeTrack {
+        EditorKeyframeTrack(property: .effectAmount, keyframes: amountKeyframes.keyframes.map { point in
+            EditorKeyframe(
+                id: point.id, time: point.time,
+                value: secondaryKeyframes?.keyframes.first(where: { $0.id == point.id })?.value
+                    ?? resolvedSecondaryAmount(at: point.time),
+                curve: point.curve
+            )
+        })
+    }
 
     func resolvedAmount(at localTime: TimeInterval) -> Double {
         amountKeyframes.value(at: localTime, default: min(max(amount, 0), 1))
@@ -303,12 +321,21 @@ struct EditorVisualEffect: Codable, Identifiable, Hashable {
         var right = self
         left.amountKeyframes = pair.left.track(for: .effectAmount)
         right.amountKeyframes = pair.right.track(for: .effectAmount)
+        if let secondaryKeyframes {
+            let secondaryPair = EditorKeyframeTracks(tracks: [secondaryKeyframes]).split(at: localTime)
+            left.secondaryKeyframes = secondaryPair.left.track(for: .effectAmount)
+            right.secondaryKeyframes = secondaryPair.right.track(for: .effectAmount)
+            left.secondaryKeyframes = left.alignedSecondaryKeyframes()
+            right.secondaryKeyframes = right.alignedSecondaryKeyframes()
+        }
         return (left, right)
     }
 
     func held(at localTime: TimeInterval) -> Self {
         var result = self
         result.amount = resolvedAmount(at: localTime)
+        result.secondaryAmount = resolvedSecondaryAmount(at: localTime)
+        result.secondaryKeyframes = nil
         result.amountKeyframes = EditorKeyframeTrack(
             property: .effectAmount,
             keyframes: [EditorKeyframe(
