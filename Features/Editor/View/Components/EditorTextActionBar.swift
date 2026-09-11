@@ -7,14 +7,15 @@ import SwiftUI
 
 struct EditorTextActionBar: View {
     let vm: EditorViewModel
+    var onBack: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
-                    vm.selectTextOverlay(UUID()) // Hack to trigger the toggle-off behavior since passing random UUID won't match, actually better to just set to nil
-                    // Wait, let's just do:
+                    vm.dismissTextEditor()
                     vm.selectedTextOverlayID = nil
+                    onBack()
                 }
             } label: {
                 Image(systemName: "chevron.left")

@@ -768,3 +768,169 @@ enum EditorTextOverlayLayout {
         )
     }
 }
+
+
+/// Templates resolve to existing style fields, so projects, undo, and export
+/// preserve the result without requiring a template catalog at playback time.
+struct EditorTextTemplate: Identifiable {
+    let id: String
+    let title: String
+    let category: String
+    let font: TextOverlayFontFamily
+    let style: TextOverlayFontStyle
+    let color: TextOverlayColor
+    let size: CGFloat
+    var entrance: EditorTextAnimationPreset = .none
+    var loop: EditorTextAnimationPreset = .none
+    var exit: EditorTextAnimationPreset = .none
+
+    // A catalog entry is all a new preset needs; no per-template rendering code.
+    static let allCases: [EditorTextTemplate] = [
+        .init(id: "default", title: "Default", category: "Essentials", font: .system, style: .plain, color: .white, size: 36),
+        .init(id: "podcast", title: "Podcast", category: "Essentials", font: .helveticaNeue, style: .background, color: .white, size: 30),
+        .init(id: "headline", title: "Headline", category: "Essentials", font: .futura, style: .outlined, color: .white, size: 44),
+        .init(id: "loud", title: "Loud", category: "Essentials", font: .avenirNext, style: .outlined, color: .white, size: 48, entrance: .pop),
+        .init(id: "sunshine", title: "Sunshine", category: "Essentials", font: .chalkboardSE, style: .outlined, color: .yellow, size: 36),
+        .init(id: "editorial", title: "Editorial", category: "Essentials", font: .didot, style: .bold, color: .white, size: 42),
+        .init(id: "typewriter", title: "Typewriter", category: "Essentials", font: .menlo, style: .background, color: .white, size: 28, entrance: .typewriter),
+        .init(id: "handwritten", title: "Handwritten", category: "Essentials", font: .markerFelt, style: .shadow, color: .white, size: 36),
+        .init(id: "pop-pink", title: "Pop Pink", category: "Essentials", font: .avenirNext, style: .outlined, color: .pink, size: 36, entrance: .zoom),
+        .init(id: "statement", title: "Statement", category: "Essentials", font: .gillSans, style: .background, color: .yellow, size: 40),
+        .init(id: "romantic", title: "Romantic", category: "Essentials", font: .snellRoundhand, style: .plain, color: .white, size: 44, entrance: .fade, exit: .fade),
+        .init(id: "bounce", title: "Bounce", category: "Essentials", font: .chalkboardSE, style: .outlined, color: .orange, size: 36, entrance: .pop, loop: .bounce),
+        .init(id: "clean-caption", title: "Clean Caption", category: "Captions", font: .system, style: .outlined, color: .white, size: 28),
+        .init(id: "golden-words", title: "Golden Words", category: "Captions", font: .avenirNext, style: .outlined, color: .yellow, size: 30, entrance: .pop),
+        .init(id: "interview", title: "Interview", category: "Captions", font: .helveticaNeue, style: .background, color: .white, size: 26, entrance: .fade),
+        .init(id: "documentary", title: "Documentary", category: "Captions", font: .gillSans, style: .shadow, color: .white, size: 28, entrance: .fade, exit: .fade),
+        .init(id: "story-time", title: "Story Time", category: "Captions", font: .chalkboardSE, style: .background, color: .yellow, size: 30, entrance: .typewriter),
+        .init(id: "word-pop", title: "Word Pop", category: "Captions", font: .futura, style: .outlined, color: .white, size: 30, entrance: .pop),
+        .init(id: "soft-spoken", title: "Soft Spoken", category: "Captions", font: .optima, style: .shadow, color: .lightGray, size: 28, entrance: .fade),
+        .init(id: "hot-take", title: "Hot Take", category: "Captions", font: .avenirNext, style: .background, color: .orange, size: 32, entrance: .slideUp),
+        .init(id: "creator", title: "Creator", category: "Captions", font: .helveticaNeue, style: .outlined, color: .pink, size: 30, entrance: .zoom),
+        .init(id: "focus-words", title: "Focus Words", category: "Captions", font: .menlo, style: .background, color: .green, size: 26, entrance: .typewriter),
+        .init(id: "daily-vlog", title: "Daily Vlog", category: "Captions", font: .gillSans, style: .outlined, color: .white, size: 28, entrance: .slideUp),
+        .init(id: "quick-tip", title: "Quick Tip", category: "Captions", font: .system, style: .background, color: .yellow, size: 28, entrance: .slideLeft),
+        .init(id: "big-energy", title: "Big Energy", category: "Bold", font: .futura, style: .bold, color: .yellow, size: 54, entrance: .pop),
+        .init(id: "impact", title: "Impact", category: "Bold", font: .avenirNext, style: .outlined, color: .white, size: 56, entrance: .zoom),
+        .init(id: "red-alert", title: "Red Alert", category: "Bold", font: .helveticaNeue, style: .background, color: .red, size: 48, entrance: .slideDown),
+        .init(id: "power-move", title: "Power Move", category: "Bold", font: .gillSans, style: .outlined, color: .orange, size: 50, entrance: .slideLeft),
+        .init(id: "spotlight", title: "Spotlight", category: "Bold", font: .futura, style: .shadow, color: .white, size: 52, entrance: .fade),
+        .init(id: "champion", title: "Champion", category: "Bold", font: .avenirNext, style: .outlined, color: .yellow, size: 52, entrance: .bounce),
+        .init(id: "the-drop", title: "The Drop", category: "Bold", font: .helveticaNeue, style: .bold, color: .white, size: 54, entrance: .slideDown),
+        .init(id: "breakout", title: "Breakout", category: "Bold", font: .futura, style: .outlined, color: .pink, size: 50, entrance: .zoom),
+        .init(id: "full-volume", title: "Full Volume", category: "Bold", font: .gillSans, style: .background, color: .white, size: 50, entrance: .pop),
+        .init(id: "unstoppable", title: "Unstoppable", category: "Bold", font: .avenirNext, style: .bold, color: .orange, size: 54, entrance: .slideRight),
+        .init(id: "big-mood", title: "Big Mood", category: "Bold", font: .chalkboardSE, style: .outlined, color: .purple, size: 50, entrance: .pop),
+        .init(id: "mic-drop", title: "Mic Drop", category: "Bold", font: .helveticaNeue, style: .shadow, color: .yellow, size: 52, entrance: .slideUp),
+        .init(id: "cover-story", title: "Cover Story", category: "Editorial", font: .didot, style: .bold, color: .white, size: 48, entrance: .fade),
+        .init(id: "fine-print", title: "Fine Print", category: "Editorial", font: .baskerville, style: .plain, color: .lightGray, size: 28),
+        .init(id: "after-hours", title: "After Hours", category: "Editorial", font: .didot, style: .italic, color: .white, size: 44, entrance: .fade, exit: .fade),
+        .init(id: "the-journal", title: "The Journal", category: "Editorial", font: .hoeflerText, style: .bold, color: .white, size: 40),
+        .init(id: "sunday", title: "Sunday", category: "Editorial", font: .palatino, style: .italic, color: .yellow, size: 42, entrance: .fade),
+        .init(id: "gallery", title: "Gallery", category: "Editorial", font: .optima, style: .plain, color: .white, size: 46),
+        .init(id: "byline", title: "Byline", category: "Editorial", font: .baskerville, style: .italic, color: .lightGray, size: 32),
+        .init(id: "modern-muse", title: "Modern Muse", category: "Editorial", font: .didot, style: .plain, color: .pink, size: 46, entrance: .slideUp),
+        .init(id: "poetry", title: "Poetry", category: "Editorial", font: .hoeflerText, style: .italic, color: .white, size: 38, entrance: .typewriter),
+        .init(id: "premiere", title: "Premiere", category: "Editorial", font: .timesNewRoman, style: .bold, color: .yellow, size: 46, entrance: .fade),
+        .init(id: "monograph", title: "Monograph", category: "Editorial", font: .palatino, style: .plain, color: .white, size: 40, entrance: .slideLeft),
+        .init(id: "signature-issue", title: "Signature Issue", category: "Editorial", font: .baskerville, style: .bold, color: .orange, size: 42, entrance: .fade),
+        .init(id: "analog", title: "Analog", category: "Retro", font: .courierNew, style: .background, color: .yellow, size: 34, entrance: .typewriter),
+        .init(id: "disco", title: "Disco", category: "Retro", font: .futura, style: .outlined, color: .pink, size: 46, entrance: .pop, loop: .pulse),
+        .init(id: "old-school", title: "Old School", category: "Retro", font: .gillSans, style: .bold, color: .orange, size: 44, entrance: .slideUp),
+        .init(id: "postcard", title: "Postcard", category: "Retro", font: .palatino, style: .italic, color: .yellow, size: 36),
+        .init(id: "vintage-film", title: "Vintage Film", category: "Retro", font: .baskerville, style: .shadow, color: .lightGray, size: 38, entrance: .fade, exit: .fade),
+        .init(id: "arcade", title: "Arcade", category: "Retro", font: .menlo, style: .outlined, color: .green, size: 38, entrance: .pop),
+        .init(id: "mixtape", title: "Mixtape", category: "Retro", font: .markerFelt, style: .outlined, color: .yellow, size: 42, entrance: .pop, loop: .wiggle),
+        .init(id: "newsprint", title: "Newsprint", category: "Retro", font: .timesNewRoman, style: .background, color: .white, size: 34, entrance: .typewriter),
+        .init(id: "throwback", title: "Throwback", category: "Retro", font: .helveticaNeue, style: .outlined, color: .orange, size: 42, entrance: .zoom),
+        .init(id: "polaroid", title: "Polaroid", category: "Retro", font: .courierNew, style: .plain, color: .white, size: 32, entrance: .fade),
+        .init(id: "cassette", title: "Cassette", category: "Retro", font: .menlo, style: .background, color: .pink, size: 34, entrance: .slideLeft),
+        .init(id: "golden-era", title: "Golden Era", category: "Retro", font: .hoeflerText, style: .shadow, color: .yellow, size: 44, entrance: .fade),
+        .init(id: "dear-diary", title: "Dear Diary", category: "Handwritten", font: .noteworthy, style: .plain, color: .white, size: 36, entrance: .typewriter),
+        .init(id: "love-letter", title: "Love Letter", category: "Handwritten", font: .snellRoundhand, style: .plain, color: .pink, size: 42, entrance: .fade),
+        .init(id: "scribble", title: "Scribble", category: "Handwritten", font: .markerFelt, style: .outlined, color: .yellow, size: 38, entrance: .pop),
+        .init(id: "notebook", title: "Notebook", category: "Handwritten", font: .noteworthy, style: .background, color: .white, size: 32),
+        .init(id: "sunday-notes", title: "Sunday Notes", category: "Handwritten", font: .chalkboardSE, style: .plain, color: .lightGray, size: 34, entrance: .fade),
+        .init(id: "autograph", title: "Autograph", category: "Handwritten", font: .snellRoundhand, style: .shadow, color: .white, size: 46, entrance: .slideLeft),
+        .init(id: "little-reminder", title: "Little Reminder", category: "Handwritten", font: .noteworthy, style: .shadow, color: .yellow, size: 34, entrance: .slideUp),
+        .init(id: "doodle", title: "Doodle", category: "Handwritten", font: .markerFelt, style: .outlined, color: .blue, size: 40, entrance: .bounce),
+        .init(id: "daydream", title: "Daydream", category: "Handwritten", font: .snellRoundhand, style: .plain, color: .purple, size: 44, entrance: .fade, exit: .fade),
+        .init(id: "margin-notes", title: "Margin Notes", category: "Handwritten", font: .chalkboardSE, style: .italic, color: .white, size: 30, entrance: .typewriter),
+        .init(id: "sunset-letter", title: "Sunset Letter", category: "Handwritten", font: .noteworthy, style: .plain, color: .orange, size: 38, entrance: .fade),
+        .init(id: "with-love", title: "With Love", category: "Handwritten", font: .snellRoundhand, style: .shadow, color: .red, size: 44, entrance: .zoom),
+        .init(id: "bubblegum", title: "Bubblegum", category: "Playful", font: .chalkboardSE, style: .outlined, color: .pink, size: 42, entrance: .pop, loop: .pulse),
+        .init(id: "lemon-pop", title: "Lemon Pop", category: "Playful", font: .markerFelt, style: .outlined, color: .yellow, size: 44, entrance: .bounce),
+        .init(id: "happy-days", title: "Happy Days", category: "Playful", font: .chalkboardSE, style: .bold, color: .orange, size: 40, entrance: .pop),
+        .init(id: "oops", title: "Oops!", category: "Playful", font: .markerFelt, style: .background, color: .white, size: 46, entrance: .bounce),
+        .init(id: "wow", title: "Wow!", category: "Playful", font: .futura, style: .outlined, color: .yellow, size: 52, entrance: .pop, loop: .wiggle),
+        .init(id: "candy", title: "Candy", category: "Playful", font: .chalkboardSE, style: .shadow, color: .purple, size: 42, entrance: .zoom),
+        .init(id: "confetti", title: "Confetti", category: "Playful", font: .markerFelt, style: .outlined, color: .green, size: 40, entrance: .pop, loop: .bounce),
+        .init(id: "peachy", title: "Peachy", category: "Playful", font: .noteworthy, style: .bold, color: .orange, size: 40, entrance: .slideUp),
+        .init(id: "good-vibes", title: "Good Vibes", category: "Playful", font: .chalkboardSE, style: .outlined, color: .blue, size: 42, entrance: .bounce, loop: .pulse),
+        .init(id: "party-time", title: "Party Time", category: "Playful", font: .partyLET, style: .outlined, color: .pink, size: 46, entrance: .zoom, loop: .wiggle),
+        .init(id: "tiny-win", title: "Tiny Win", category: "Playful", font: .markerFelt, style: .background, color: .yellow, size: 34, entrance: .pop),
+        .init(id: "sweet-talk", title: "Sweet Talk", category: "Playful", font: .chalkboardSE, style: .shadow, color: .pink, size: 38, entrance: .fade),
+        .init(id: "simply", title: "Simply", category: "Minimal", font: .system, style: .plain, color: .white, size: 30),
+        .init(id: "quiet", title: "Quiet", category: "Minimal", font: .helveticaNeue, style: .plain, color: .lightGray, size: 28, entrance: .fade),
+        .init(id: "small-hours", title: "Small Hours", category: "Minimal", font: .menlo, style: .plain, color: .white, size: 24, entrance: .fade, exit: .fade),
+        .init(id: "pure", title: "Pure", category: "Minimal", font: .avenirNext, style: .plain, color: .white, size: 34),
+        .init(id: "less-is-more", title: "Less Is More", category: "Minimal", font: .gillSans, style: .plain, color: .lightGray, size: 30),
+        .init(id: "soft-title", title: "Soft Title", category: "Minimal", font: .optima, style: .plain, color: .lightGray, size: 36, entrance: .fade),
+        .init(id: "simple-italic", title: "Simple Italic", category: "Minimal", font: .helveticaNeue, style: .italic, color: .white, size: 32),
+        .init(id: "bare", title: "Bare", category: "Minimal", font: .system, style: .plain, color: .black, size: 32),
+        .init(id: "neutral", title: "Neutral", category: "Minimal", font: .avenirNext, style: .plain, color: .gray, size: 32),
+        .init(id: "one-line", title: "One Line", category: "Minimal", font: .courierNew, style: .plain, color: .white, size: 28),
+        .init(id: "subtle", title: "Subtle", category: "Minimal", font: .optima, style: .italic, color: .white, size: 30, entrance: .fade),
+        .init(id: "clean-slate", title: "Clean Slate", category: "Minimal", font: .gillSans, style: .bold, color: .white, size: 34, entrance: .slideUp),
+        .init(id: "terminal", title: "Terminal", category: "Tech", font: .menlo, style: .plain, color: .green, size: 30, entrance: .typewriter),
+        .init(id: "system-online", title: "System Online", category: "Tech", font: .courierNew, style: .background, color: .green, size: 30, entrance: .typewriter),
+        .init(id: "signal", title: "Signal", category: "Tech", font: .menlo, style: .outlined, color: .blue, size: 38, entrance: .slideLeft),
+        .init(id: "cyber-pink", title: "Cyber Pink", category: "Tech", font: .futura, style: .outlined, color: .pink, size: 40, entrance: .pop, loop: .pulse),
+        .init(id: "data-stream", title: "Data Stream", category: "Tech", font: .menlo, style: .plain, color: .blue, size: 28, entrance: .typewriter),
+        .init(id: "console", title: "Console", category: "Tech", font: .courierNew, style: .background, color: .white, size: 28, entrance: .typewriter),
+        .init(id: "access-granted", title: "Access Granted", category: "Tech", font: .menlo, style: .bold, color: .green, size: 34, entrance: .pop),
+        .init(id: "loading", title: "Loading", category: "Tech", font: .menlo, style: .plain, color: .yellow, size: 30, entrance: .typewriter, loop: .pulse),
+        .init(id: "blueprint", title: "Blueprint", category: "Tech", font: .courierNew, style: .outlined, color: .blue, size: 34, entrance: .fade),
+        .init(id: "digital-note", title: "Digital Note", category: "Tech", font: .menlo, style: .background, color: .purple, size: 28, entrance: .slideUp),
+        .init(id: "code-mode", title: "Code Mode", category: "Tech", font: .courierNew, style: .plain, color: .orange, size: 32, entrance: .typewriter),
+        .init(id: "future-now", title: "Future Now", category: "Tech", font: .avenirNext, style: .outlined, color: .blue, size: 44, entrance: .zoom),
+        .init(id: "rise", title: "Rise", category: "Motion", font: .avenirNext, style: .bold, color: .white, size: 44, entrance: .slideUp),
+        .init(id: "drift", title: "Drift", category: "Motion", font: .optima, style: .plain, color: .white, size: 40, entrance: .fade, loop: .slideLeft),
+        .init(id: "pulse", title: "Pulse", category: "Motion", font: .futura, style: .outlined, color: .red, size: 44, entrance: .zoom, loop: .pulse),
+        .init(id: "wiggle", title: "Wiggle", category: "Motion", font: .markerFelt, style: .outlined, color: .white, size: 42, entrance: .pop, loop: .wiggle),
+        .init(id: "float", title: "Float", category: "Motion", font: .gillSans, style: .shadow, color: .pink, size: 40, entrance: .fade, loop: .slideUp),
+        .init(id: "jump", title: "Jump", category: "Motion", font: .chalkboardSE, style: .outlined, color: .green, size: 44, entrance: .bounce, loop: .bounce),
+        .init(id: "slide-in", title: "Slide In", category: "Motion", font: .helveticaNeue, style: .background, color: .yellow, size: 38, entrance: .slideRight),
+        .init(id: "reveal", title: "Reveal", category: "Motion", font: .baskerville, style: .italic, color: .white, size: 40, entrance: .typewriter),
+        .init(id: "soft-focus", title: "Soft Focus", category: "Motion", font: .didot, style: .plain, color: .white, size: 42, entrance: .blur, exit: .blur),
+        .init(id: "zoom-in", title: "Zoom In", category: "Motion", font: .futura, style: .bold, color: .orange, size: 46, entrance: .zoom),
+        .init(id: "breathe", title: "Breathe", category: "Motion", font: .optima, style: .shadow, color: .blue, size: 40, entrance: .fade, loop: .pulse, exit: .fade),
+        .init(id: "curtain-call", title: "Curtain Call", category: "Motion", font: .hoeflerText, style: .bold, color: .yellow, size: 44, entrance: .slideDown, exit: .slideUp),
+    ]
+
+    static let categories: [String] = allCases.reduce(into: []) { result, template in
+        if !result.contains(template.category) { result.append(template.category) }
+    }
+
+    func applying(to source: EditorTextOverlay) -> EditorTextOverlay {
+        var result = source
+        result.fontSize = size
+        result.fontFamily = font
+        result.fontStyle = style
+        result.textColor = color
+        result.animation = .none
+        result.animation.inPreset = entrance
+        result.animation.loopPreset = loop
+        result.animation.outPreset = exit
+        return result
+    }
+
+    func matches(_ overlay: EditorTextOverlay) -> Bool {
+        let styled = applying(to: overlay)
+        return styled.fontSize == overlay.fontSize
+            && styled.fontFamily == overlay.fontFamily
+            && styled.fontStyle == overlay.fontStyle
+            && styled.textColor == overlay.textColor
+            && styled.animation == overlay.animation
+    }
+}

@@ -27,7 +27,7 @@ struct EditorTextOverlayExportView: View {
                 HStack {
                     if overlay.horizontalAlignment != .leading { Spacer(minLength: 0) }
 
-                    styledTextView(overlay)
+                    EditorStyledTextView(overlay: overlay, highlightedCaptionWordID: highlightedCaptionWordID)
                         .blur(radius: blurRadius)
                         .offset(x: overlay.xOffset, y: overlay.yOffset)
 
@@ -43,8 +43,15 @@ struct EditorTextOverlayExportView: View {
         .frame(width: renderSize.width, height: renderSize.height)
     }
 
+}
+
+/// Style-only content, shared by exported text and template thumbnails.
+struct EditorStyledTextView: View {
+    let overlay: EditorTextOverlay
+    var highlightedCaptionWordID: UUID? = nil
+
     @ViewBuilder
-    private func styledTextView(_ overlay: EditorTextOverlay) -> some View {
+    var body: some View {
         let baseText: Text = overlay.isCaption
             ? captionText(overlay)
             : Text(overlay.text)

@@ -4258,20 +4258,24 @@ final class EditorViewModel {
     }
 
     func addTextOverlay() {
-        registerUndoIfNeeded()
-
         let defaultDuration: TimeInterval = 3.0
-        let start = timelinePosition
+        let start = max(0, timelinePosition)
         let end = min(start + defaultDuration, totalDuration)
 
         guard end > start + 0.1 else { return } // not enough room
 
+        registerUndoIfNeeded()
         let overlay = EditorTextOverlay(
             text: "Text",
             startTime: start,
             endTime: end
         )
         textOverlays.append(overlay)
+        selectedClipID = nil
+        selectedAudioClipID = nil
+        selectedOverlayClipID = nil
+        selectedGraphicOverlayID = nil
+        selectedAdjustmentLayerID = nil
         selectedTextOverlayID = overlay.id
         isTextEditorPresented = true
         scheduleSave()

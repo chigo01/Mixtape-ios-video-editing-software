@@ -6,7 +6,7 @@ import SwiftUI
 @main
 struct MixtapeApp: App {
     @AppStorage("onboarding.completed.v1") private var hasCompletedOnboarding = false
-
+ 
     init() {
         AudioSessionConfigurator.configureForVideoPlayback()
     }

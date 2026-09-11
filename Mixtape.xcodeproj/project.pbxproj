@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AD1200000000000000000001 /* EditorTextLaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1200000000000000000002 /* EditorTextLaneLayout.swift */; };
 		CEF644E2B8DD9C620CF60C35 /* EditorTextOverlayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */; };
 		1FAFCD6593F00D7A42C9DDA7 /* EditorTextOverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */; };
 		07894D43A3CE2D26E7D5A681 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494AF242A7E19C2ED189AC1D /* AppTheme.swift */; };
@@ -109,6 +110,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AD1200000000000000000002 /* EditorTextLaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextLaneLayout.swift; sourceTree = "<group>"; };
 		63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayLayerView.swift; sourceTree = "<group>"; };
 		6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayRenderer.swift; sourceTree = "<group>"; };
 		494AF242A7E19C2ED189AC1D /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
@@ -316,6 +318,7 @@
 				AD10000000000000000000F1 /* EditorAudioLibraryItem.swift */,
 				AD10000000000000000000F8 /* EditorAudioMixSettings.swift */,
 				AD10000000000000000000FC /* EditorAudioEffect.swift */,
+				AD1200000000000000000002 /* EditorTextLaneLayout.swift */,
 				BA0EDF00DEAFB001CAFE0010 /* EditorTimelineSnapshot.swift */,
 				BA0EDF00DEAFB001CAFE0016 /* EditorExportSettings.swift */,
 			);
@@ -636,6 +639,7 @@
 				BA0EDF00DEAFB001CAFE0109 /* EditorBottomToolbar.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010B /* ClipTrimHandleView.swift in Sources */,
 				BA0EDF00DEAFB001CAFE010A /* EditorScreen.swift in Sources */,
+				AD1200000000000000000001 /* EditorTextLaneLayout.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0110 /* EditorTimelineSnapshot.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0111 /* EditorUndoManager.swift in Sources */,
 				BA0EDF00DEAFB001CAFE0112 /* EditorExportService.swift in Sources */,

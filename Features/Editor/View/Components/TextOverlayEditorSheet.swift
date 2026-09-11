@@ -12,7 +12,9 @@ struct TextOverlayEditorSheet: View {
     let isEmbedded: Bool
 
     @State private var overlay: EditorTextOverlay
-    @State private var selectedTab = "Styles"
+    @State private var selectedTab = "Templates"
+    @State private var templateCategory = "All"
+    @State private var templateSearch = ""
     @FocusState private var isTextFieldFocused: Bool
 
     init(vm: EditorViewModel, overlay: EditorTextOverlay, isEmbedded: Bool = false) {
@@ -47,7 +49,7 @@ struct TextOverlayEditorSheet: View {
         }
         .onAppear {
             vm.beginTextOverlayEdit()
-            isTextFieldFocused = true
+            isTextFieldFocused = false
         }
         .interactiveDismissDisabled(false)
         .onDisappear {
@@ -65,10 +67,12 @@ struct TextOverlayEditorSheet: View {
 
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 20) {
-                        tabRow
                         textInputSection
+                        tabRow
 
-                        if selectedTab == "Styles" {
+                        if selectedTab == "Templates" {
+                            templateSection
+                        } else if selectedTab == "Styles" {
                             fontStyleSection
                             colorSection
                             sizeSection
@@ -120,21 +124,22 @@ struct TextOverlayEditorSheet: View {
         .frame(height: 48)
     }
 
-    // MARK: - Tab row (Styles active; rest are future placeholders)
+    // MARK: - Text tools
 
     private var tabRow: some View {
         HStack(spacing: 0) {
-            ForEach(["Styles", "Fonts", "Animate"], id: \.self) { tab in
+            ForEach(["Templates", "Fonts", "Styles", "Animate"], id: \.self) { tab in
                 let isActive = tab == selectedTab
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
+                        isTextFieldFocused = false
                         selectedTab = tab
                     }
                 } label: {
                     Text(tab)
                         .font(.system(size: 13, weight: isActive ? .bold : .medium))
                         .foregroundColor(isActive ? .white : Color.white.opacity(0.35))
-                        .padding(.horizontal, 14)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .overlay(alignment: .bottom) {
                             if isActive {
@@ -148,6 +153,107 @@ struct TextOverlayEditorSheet: View {
             }
             Spacer()
         }
+    }
+
+    private var filteredTemplates: [EditorTextTemplate] {
+        let query = templateSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return EditorTextTemplate.allCases.filter {
+            (templateCategory == "All" || $0.category == templateCategory)
+                && (query.isEmpty || $0.title.localizedCaseInsensitiveContains(query)
+                    || $0.category.localizedCaseInsensitiveContains(query))
+        }
+    }
+
+    private var templateSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search templates", text: $templateSearch)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !templateSearch.isEmpty {
+                    Button { templateSearch = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear template search")
+                }
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(["All"] + EditorTextTemplate.categories, id: \.self) { category in
+                        Button { templateCategory = category } label: {
+                            Text(category)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(templateCategory == category ? .black : .white.opacity(0.7))
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .background(templateCategory == category
+                                    ? Color.appColors.primaryColor : Color.white.opacity(0.06),
+                                    in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(templateCategory == category ? .isSelected : [])
+                    }
+                }
+            }
+
+            Text("\(filteredTemplates.count) templates")
+                .font(.caption).foregroundStyle(.secondary)
+            if filteredTemplates.isEmpty {
+                Text("No matching templates. Try another name or category.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.vertical, 24)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                ForEach(filteredTemplates) { template in
+                    templateCell(template)
+                }
+            }
+        }
+    }
+
+    private func templateCell(_ template: EditorTextTemplate) -> some View {
+        var sample = template.applying(to: EditorTextOverlay(
+            text: template.title, startTime: 0, endTime: 3
+        ))
+        sample.fontSize *= 0.55
+        let isSelected = template.matches(overlay)
+        return Button {
+            isTextFieldFocused = false
+            overlay = template.applying(to: overlay)
+        } label: {
+            VStack(spacing: 0) {
+                TextTemplateAnimatedPreview(overlay: sample)
+                    .frame(height: 76)
+                    .clipped()
+                    .allowsHitTesting(false)
+                HStack(spacing: 4) {
+                    Text(template.title).lineLimit(1).minimumScaleFactor(0.7)
+                    if sample.animation.isAnimated {
+                        Image(systemName: "sparkles")
+                    }
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.65))
+                .padding(.bottom, 10)
+            }
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.appColors.primaryColor : .white.opacity(0.12),
+                            lineWidth: isSelected ? 2 : 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(template.title) text template")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: - Animation
@@ -662,5 +768,80 @@ struct TextOverlayEditorSheet: View {
     private func commitAndDismiss() {
         vm.updateTextOverlay(overlay)
         vm.dismissTextEditor()
+    }
+}
+
+
+/// The clock lives inside the thumbnail, never in the sheet or editor model.
+/// Only visible animated cards request frames; static styles have no clock.
+private struct TextTemplateAnimatedPreview: View {
+    let overlay: EditorTextOverlay
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isVisible = false
+    @State private var startedAt = Date()
+
+    private var shouldAnimate: Bool {
+        overlay.animation.isAnimated && isVisible && scenePhase == .active && !reduceMotion
+    }
+
+    private var duration: TimeInterval {
+        let revealDuration = overlay.animation.inPreset == .typewriter
+            ? Double(overlay.text.count) * overlay.animation.characterDelay : overlay.animation.inDuration
+        return max(3, revealDuration + 1 + overlay.animation.outDuration)
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 18.0, *) {
+                preview
+                    .onScrollVisibilityChange(threshold: 0.1) { visible in
+                        isVisible = visible
+                    }
+            } else {
+                preview.onAppear { isVisible = true }
+            }
+        }
+        .onDisappear { isVisible = false }
+        .onChange(of: shouldAnimate) { _, active in
+            if active { startedAt = Date() }
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        if shouldAnimate {
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+                let elapsed = max(0, context.date.timeIntervalSince(startedAt))
+                let time = min(duration, elapsed.truncatingRemainder(dividingBy: duration + 0.6))
+                animatedText(at: time)
+            }
+        } else {
+            thumbnail(overlay)
+        }
+    }
+
+    private func animatedText(at time: TimeInterval) -> some View {
+        let sample = overlay.animation.sample(localTime: time, duration: duration)
+        let progress = overlay.animation.revealProgress(localTime: time, itemCount: overlay.text.count)
+        var revealed = overlay
+        revealed.text = String(overlay.text.prefix(Int(floor(Double(overlay.text.count) * progress))))
+        // The catalog renders at 55% of the editor's reference font size;
+        // translations and blur follow that same scale.
+        return thumbnail(revealed)
+            .blur(radius: CGFloat(sample.blurRadius) * 0.55)
+            .scaleEffect(CGFloat(sample.scale))
+            .rotationEffect(.degrees(sample.rotationDegrees))
+            .offset(x: CGFloat(sample.xOffset) * 0.55, y: CGFloat(sample.yOffset) * 0.55)
+            .opacity(sample.opacity)
+    }
+
+    private func thumbnail(_ value: EditorTextOverlay) -> some View {
+        EditorStyledTextView(overlay: value)
+            .lineLimit(2)
+            .minimumScaleFactor(0.55)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

@@ -33,6 +33,7 @@ struct EditorTimeline: View {
     let vm: EditorViewModel
     @Binding var isOverlayTracksExpanded: Bool
     @Binding var isAudioTracksExpanded: Bool
+    @Binding var isTextTracksExpanded: Bool
     var onInsertAfterClip: (Int) -> Void = { _ in }
     var onSelectOpeningTransition: () -> Void = {}
     var onSelectClosingTransition: () -> Void = {}
@@ -83,7 +84,25 @@ struct EditorTimeline: View {
         )
     }
 
-    private var textOverlayLaneHeight: CGFloat { vm.textOverlays.isEmpty ? 0 : 36 }
+    private let textLaneHeight: CGFloat = 36
+    private let textLaneSpacing: CGFloat = 5
+    @State private var textLaneByID: [UUID: Int] = [:]
+    private var textIntervals: [EditorTextLaneInterval] {
+        vm.textOverlays.map { .init(id: $0.id, start: $0.startTime, end: $0.endTime) }
+    }
+    private var textLaneCount: Int { max(1, (textLaneByID.values.max() ?? -1) + 1) }
+
+    private func refreshTextLanes() {
+        // Keep lane positions and the viewport fixed for the entire gesture.
+        guard !isTextMoving, !isTextTrimming else { return }
+        textLaneByID = EditorTextLaneLayout.assign(textIntervals, preserving: textLaneByID)
+    }
+
+    private var textOverlayLaneHeight: CGFloat {
+        guard isTextTracksExpanded else { return textLaneHeight }
+        return CGFloat(min(2, textLaneCount)) * textLaneHeight
+            + CGFloat(min(2, textLaneCount) - 1) * textLaneSpacing
+    }
     private var graphicOverlayLaneHeight: CGFloat { vm.graphicOverlays.isEmpty ? 0 : 36 }
     private var adjustmentLaneHeight: CGFloat { vm.adjustmentLayers.isEmpty ? 0 : 32 }
     private let sequenceBandHeight: CGFloat = 26
@@ -195,7 +214,7 @@ struct EditorTimeline: View {
             + (sequenceLaneHeight > 0 ? 8 + sequenceLaneHeight : 0)
             + (adjustmentLaneHeight > 0 ? 8 + adjustmentLaneHeight : 0)
             + (isOverlayTracksExpanded || graphicOverlayLaneHeight == 0 ? 0 : 8 + graphicOverlayLaneHeight)
-            + (isOverlayTracksExpanded ? 0 : 8 + textOverlayLaneHeight)
+            + 8 + textOverlayLaneHeight
             + 8 + clipsLaneHeight + 8 + overlayDisplayHeight
             + (isOverlayTracksExpanded ? 0 : 8 + audioDisplayHeight)
     }
@@ -245,10 +264,8 @@ struct EditorTimeline: View {
                                 .frame(height: adjustmentLaneHeight, alignment: .leading)
                         }
 
-                        if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
-                            textOverlayRow(totalWidth: totalWidth, layout: layout)
-                                .frame(height: textOverlayLaneHeight, alignment: .leading)
-                        }
+                        textTracks(totalWidth: totalWidth, layout: layout)
+                            .frame(height: textOverlayLaneHeight, alignment: .leading)
 
                         if !isOverlayTracksExpanded, !vm.graphicOverlays.isEmpty {
                             graphicOverlayRow(totalWidth: totalWidth, layout: layout)
@@ -327,7 +344,17 @@ struct EditorTimeline: View {
                 width: max(1, geo.size.width - trackHeaderWidth),
                 height: geo.size.height
             )
-            .onAppear { revealPlayhead(using: proxy) }
+            .onAppear {
+                refreshTextLanes()
+                revealPlayhead(using: proxy)
+            }
+            .onChange(of: textIntervals) { _, _ in refreshTextLanes() }
+            .onChange(of: isTextMoving) { _, moving in
+                if !moving { refreshTextLanes() }
+            }
+            .onChange(of: isTextTrimming) { _, trimming in
+                if !trimming { refreshTextLanes() }
+            }
             .onChange(of: vm.timelineRevealNonce) { _, _ in
                 revealPlayhead(using: proxy)
             }
@@ -371,10 +398,15 @@ struct EditorTimeline: View {
                     .frame(height: adjustmentLaneHeight)
             }
 
-            if !isOverlayTracksExpanded, !vm.textOverlays.isEmpty {
-                trackHeaderIcon("textformat", label: "Text track")
+            Button {
+                vm.addTextOverlay()
+            } label: {
+                trackHeaderIcon("text.badge.plus", label: "Add text overlay")
                     .frame(height: textOverlayLaneHeight)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add text overlay")
+            .disabled(vm.totalDuration <= 0.1)
 
             if !isOverlayTracksExpanded, !vm.graphicOverlays.isEmpty {
                 trackHeaderIcon("face.smiling", label: "Graphic track")
@@ -416,7 +448,6 @@ struct EditorTimeline: View {
                 .fill(Color.white.opacity(0.1))
                 .frame(width: 1)
         }
-        .allowsHitTesting(false)
     }
 
     private func trackHeaderLaneIcons(
@@ -774,6 +805,101 @@ struct EditorTimeline: View {
         .frame(width: totalWidth, height: adjustmentLaneHeight, alignment: .leading)
     }
 
+    private func textTracks(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        Group {
+            if vm.textOverlays.isEmpty {
+                Button { vm.addTextOverlay() } label: {
+                    Label("Add Text", systemImage: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 12)
+                        .frame(height: textLaneHeight)
+                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.totalDuration <= 0.1)
+                .frame(width: totalWidth, alignment: .leading)
+            } else if !isTextTracksExpanded {
+                collapsedTextSummary(totalWidth: totalWidth, layout: layout)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: textLaneCount > 2) {
+                        ZStack(alignment: .topLeading) {
+                            VStack(spacing: textLaneSpacing) {
+                                ForEach(0..<textLaneCount, id: \.self) { lane in
+                                    Color.white.opacity(0.025)
+                                        .frame(height: textLaneHeight)
+                                        .id(lane)
+                                }
+                            }
+                            .allowsHitTesting(false)
+
+                            // One stable ForEach owns every clip. Changing a lane
+                            // changes only its offset, never its gesture identity.
+                            textOverlayRow(totalWidth: totalWidth, layout: layout)
+                        }
+                        .frame(width: totalWidth,
+                               height: CGFloat(textLaneCount) * (textLaneHeight + textLaneSpacing) - textLaneSpacing,
+                               alignment: .topLeading)
+                    }
+                    .frame(width: totalWidth, height: textOverlayLaneHeight, alignment: .topLeading)
+                    .clipped()
+                    .onChange(of: textLaneByID) { _, _ in
+                        revealSelectedTextLane(using: proxy)
+                    }
+                    .onChange(of: vm.selectedTextOverlayID) { _, _ in
+                        revealSelectedTextLane(using: proxy)
+                    }
+                    .onAppear { revealSelectedTextLane(using: proxy) }
+                }
+            }
+        }
+    }
+
+    private func collapsedTextSummary(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
+        let start = vm.textOverlays.map(\.startTime).min() ?? 0
+        let end = vm.textOverlays.map(\.endTime).max() ?? start
+        let startX = layout.contentX(forTime: start)
+        let width = max(96, layout.contentX(forTime: end) - startX)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isTextTracksExpanded = true
+                if vm.selectedTextOverlayID == nil,
+                   let preferred = vm.textOverlays.first(where: { $0.isVisible(at: vm.timelinePosition) })
+                    ?? vm.textOverlays.first {
+                    vm.selectTextOverlay(preferred.id)
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "textformat")
+                Text("\(vm.textOverlays.count) Text & Captions")
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Image(systemName: "chevron.up.chevron.down")
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9)
+            .frame(width: width, height: textLaneHeight)
+            .background(Color.appColors.primaryColor.opacity(0.26), in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.appColors.primaryColor.opacity(0.75), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .offset(x: startX)
+        .frame(width: totalWidth, height: textLaneHeight, alignment: .leading)
+        .accessibilityLabel("Expand text and caption tracks")
+    }
+
+    private func revealSelectedTextLane(using proxy: ScrollViewProxy) {
+        guard !isTextMoving, !isTextTrimming,
+              let id = vm.selectedTextOverlayID, let lane = textLaneByID[id] else { return }
+        proxy.scrollTo(lane, anchor: .center)
+    }
+
     private func textOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(vm.textOverlays) { overlay in
@@ -795,11 +921,15 @@ struct EditorTimeline: View {
                     },
                     onMoveEnded: { vm.commitTextOverlayMove() }
                 )
+                .offset(y: CGFloat(textLaneByID[overlay.id] ?? 0) * (textLaneHeight + textLaneSpacing))
+                .zIndex(vm.selectedTextOverlayID == overlay.id ? 1 : 0)
                 .opacity(vm.isItemInActiveSequence(.text(overlay.id)) ? 1 : 0.18)
                 .allowsHitTesting(vm.isItemInActiveSequence(.text(overlay.id)))
             }
         }
-        .frame(width: totalWidth, alignment: .leading)
+        .frame(width: totalWidth,
+               height: CGFloat(textLaneCount) * (textLaneHeight + textLaneSpacing) - textLaneSpacing,
+               alignment: .topLeading)
     }
 
     private func graphicOverlayRow(totalWidth: CGFloat, layout: TimelineLayout) -> some View {
@@ -1546,6 +1676,7 @@ private struct TextOverlayThumb: View {
     @State private var trimBaseline: (startTime: TimeInterval, startX: CGFloat)?
     @State private var moveBaselineStart: TimeInterval?
     @State private var isHoldActive = false
+    @GestureState private var isMoveGestureActive = false
 
     private var endX: CGFloat { layout.contentX(forTime: overlay.endTime) }
 
@@ -1604,10 +1735,33 @@ private struct TextOverlayThumb: View {
             .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
             .offset(x: displayStartX, y: 0)
 
-        if isSelected && allowsEditing {
-            content.gesture(moveGesture)
-        } else {
-            content
+        Group {
+            if isSelected && allowsEditing {
+                content.gesture(moveGesture)
+            } else {
+                content
+            }
+        }
+        .onChange(of: isSelected) { _, selected in
+            if !selected { finishInteraction() }
+        }
+        .onChange(of: isMoveGestureActive) { _, active in
+            if !active { finishInteraction() }
+        }
+        .onDisappear { finishInteraction() }
+    }
+
+    private func finishInteraction() {
+        if isHoldActive || moveBaselineStart != nil {
+            isMoving = false
+            isHoldActive = false
+            moveBaselineStart = nil
+            onMoveEnded()
+        }
+        if trimBaseline != nil {
+            isTrimming = false
+            trimBaseline = nil
+            onTrimEnded()
         }
     }
 
@@ -1665,6 +1819,7 @@ private struct TextOverlayThumb: View {
     private var moveGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .updating($isMoveGestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard !isTrimming else { return }
                 switch value {
@@ -1696,7 +1851,6 @@ private struct TextOverlayThumb: View {
         guard !isHoldActive else { return }
         isHoldActive = true
         isMoving = true
-        onSelect()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 

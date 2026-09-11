@@ -22,6 +22,7 @@ struct EditorScreen: View {
     @State private var isOverlayPickerPresented = false
     @State private var isOverlayTracksExpanded = false
     @State private var isAudioTracksExpanded = false
+    @State private var isTextTracksExpanded = false
     @State private var showExportScreen = false
     @State private var insertAfterClipIndex = 0
     @State private var insertAfterAudioClipID: UUID?
@@ -649,6 +650,7 @@ struct EditorScreen: View {
             vm: vm,
             isOverlayTracksExpanded: $isOverlayTracksExpanded,
             isAudioTracksExpanded: $isAudioTracksExpanded,
+            isTextTracksExpanded: $isTextTracksExpanded,
             onInsertAfterClip: { clipIndex in
                 insertAfterClipIndex = clipIndex
                 isMediaPickerPresented = true
@@ -684,6 +686,9 @@ struct EditorScreen: View {
         .onChange(of: vm.selectedAudioClipID) { _, id in
             if id != nil { isAudioTracksExpanded = true }
         }
+        .onChange(of: vm.selectedTextOverlayID) { _, id in
+            if id != nil { isTextTracksExpanded = true }
+        }
     }
 
     private var selectionActionBar: some View {
@@ -718,7 +723,7 @@ struct EditorScreen: View {
                     isMediaPickerPresented = true
                 })
             } else if vm.selectedTextOverlayID != nil {
-                EditorTextActionBar(vm: vm)
+                EditorTextActionBar(vm: vm, onBack: { isTextTracksExpanded = false })
             } else {
                 EditorBottomToolbar(
                     vm: vm,
