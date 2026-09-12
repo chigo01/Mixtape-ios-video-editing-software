@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA5900000000000000000005 /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000006 /* SplashScreen.swift */; };
 		AD1200000000000000000001 /* EditorTextLaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1200000000000000000002 /* EditorTextLaneLayout.swift */; };
 		CEF644E2B8DD9C620CF60C35 /* EditorTextOverlayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */; };
 		1FAFCD6593F00D7A42C9DDA7 /* EditorTextOverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */; };
@@ -110,6 +111,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA5900000000000000000006 /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
 		AD1200000000000000000002 /* EditorTextLaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextLaneLayout.swift; sourceTree = "<group>"; };
 		63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayLayerView.swift; sourceTree = "<group>"; };
 		6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayRenderer.swift; sourceTree = "<group>"; };
@@ -234,6 +236,7 @@
 				BF5180642B1AC3288A6921DE /* MixtapeApp.swift */,
 				DA5900000000000000000002 /* DashboardScreen.swift */,
 				DA5900000000000000000004 /* OnboardingScreen.swift */,
+				DA5900000000000000000006 /* SplashScreen.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -580,6 +583,7 @@
 				B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */,
 				DA5900000000000000000001 /* DashboardScreen.swift in Sources */,
 				DA5900000000000000000003 /* OnboardingScreen.swift in Sources */,
+				DA5900000000000000000005 /* SplashScreen.swift in Sources */,
 				CED6779C2FACEC0E00531EBF /* ProjectMockModel.swift in Sources */,
 				07894D43A3CE2D26E7D5A681 /* AppTheme.swift in Sources */,
 				AD10000000000000000000B1 /* EditorAudioLibraryItem.swift in Sources */,
@@ -692,7 +696,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
@@ -746,7 +750,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
