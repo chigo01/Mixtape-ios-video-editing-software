@@ -109,7 +109,8 @@ struct ResponsivenessTests {
         release.signal()
         try writer.save(2, to: url)
         try await autosave.value
-        precondition(try JSONDecoder().decode(Int.self, from: writer.read(from: url)) == 2)
+        let savedValue = try JSONDecoder().decode(Int.self, from: writer.read(from: url))
+        precondition(savedValue == 2)
         print("PASS: autosave encodes off the UI thread; final save cannot be overwritten")
 
         let deletionStarted = DispatchSemaphore(value: 0)

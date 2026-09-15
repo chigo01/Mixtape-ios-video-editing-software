@@ -133,6 +133,35 @@ struct PlanValidationTests {
             timelineDuration: 119, playhead: 17.1, summary: ""
         )
         precondition(split.operations.contains { $0.kind == .split })
+        for brief in [
+            "Add fade in at this playhead",
+            "Add fade in transition at the is playhead",
+            "Fade out here", "Add a fade-in here", "fade   in here",
+            "Blend these clips", "Make the cut smoother here", "Soften this cut",
+            "A slow fade in at this moment", "Dissolve here"
+        ] {
+            let drafts = EditorCopilotEditPlan.draftsFromPrompt(brief, playhead: 13.5, duration: 29.3)!
+            let plan = try edit(drafts, duration: 29.3, playhead: 13.5)
+            precondition(plan.operations.count == 1, brief)
+            precondition(plan.operations[0].kind == .addTransition, brief)
+            precondition(abs(plan.operations[0].start - 13.5) < 0.0001, brief)
+            precondition(!plan.operations[0].fadeIn && !plan.operations[0].fadeOut, brief)
+        }
+        for (brief, property) in [("Fade in the audio here", "volume"),
+                                  ("Fade in opacity here", "opacity")] {
+            let drafts = EditorCopilotEditPlan.draftsFromPrompt(brief, playhead: 13.5, duration: 29.3)!
+            precondition(drafts.count == 1)
+            precondition(drafts[0].kind == .addKeyframe && drafts[0].property == property)
+            precondition(drafts[0].fadeIn)
+        }
+        let effectFade = EditorCopilotEditPlan.draftsFromPrompt("Fade in the vignette here", playhead: 13.5, duration: 29.3)!
+        precondition(effectFade.count == 1 && effectFade[0].kind == .addEffect)
+        precondition(effectFade[0].fadeIn && effectFade[0].effect == "vignette")
+        precondition(!EditorCopilotEditPlan.wantsVisualTransition("Apply faded film here"))
+        precondition(EditorCopilotEditPlan.draftsFromPrompt("Fade in the title here", playhead: 13.5, duration: 29.3) == nil)
+        precondition(EditorCopilotEditPlan.draftsFromPrompt("Fade in the music here", playhead: 13.5, duration: 29.3) == nil)
+        print("PASS: natural fade wording resolves one transition; explicit animation targets stay separate")
+
         let splitAndFade = try EditorCopilotEditPlan.validated(
             drafts: EditorCopilotEditPlan.draftsFromPrompt(
                 "Split at this playhead and add fade in transition", playhead: 40.2, duration: 119
@@ -169,6 +198,57 @@ struct PlanValidationTests {
         )
         precondition(captionBrief.operations.contains { $0.kind == .addCaptions && abs($0.start) < 0.0001 })
         print("PASS: captions still cover the full timeline from 0; MixPilot restore must use the playhead, not operation start")
+        precondition(EditorCopilotEditPlan.explicitlyTargetsPlayhead("Mute here"))
+        precondition(!EditorCopilotEditPlan.explicitlyTargetsPlayhead("Make it quieter"))
+        precondition(!EditorCopilotEditPlan.explicitlyTargetsPlayhead("Add title \"Here and now\""))
+        let selectedMute = EditorCopilotEditPlan.draftsFromPrompt("Mute", playhead: 12.4, duration: 40, selectedPrimaryStart: 3)!
+        let playheadMute = EditorCopilotEditPlan.draftsFromPrompt("Mute here", playhead: 12.4, duration: 40, selectedPrimaryStart: 3)!
+        let newMarker = EditorCopilotEditPlan.draftsFromPrompt("Add marker \"Beat\"", playhead: 12.4, duration: 40, selectedPrimaryStart: 3)!
+        precondition(selectedMute[0].start == 3 && playheadMute[0].start == 12.4)
+        precondition(newMarker[0].start == 12.4)
+        let directCases: [(String, EditorCopilotEditOperation.Kind, Double)] = [
+            ("Make it quieter", .setVolume, 0.4),
+            ("Lower the volume to 25% here", .setVolume, 0.25),
+            ("Set volume to 90%", .setVolume, 0.9),
+            ("Mute the clip", .setVolume, 0),
+            ("Slow it down here", .setSpeed, 0.5),
+            ("Speed to 1.5x here", .setSpeed, 1.5),
+            ("0.75x here", .setSpeed, 0.75),
+            ("Rotate 90 degrees counterclockwise", .rotate, 3),
+            ("Set opacity to 0%", .addKeyframe, 0)
+        ]
+        for (brief, kind, amount) in directCases {
+            precondition(EditorCopilotEditPlan.canPlanWithoutModel(brief), brief)
+            let result = try edit(EditorCopilotEditPlan.draftsFromPrompt(brief, playhead: 12.4, duration: 40)!)
+            precondition(result.operations.count == 1 && result.operations[0].kind == kind, brief)
+            precondition(abs(result.operations[0].amount - amount) < 0.0001, brief)
+        }
+        for (brief, kind) in [("Add noir filter here", EditorCopilotEditOperation.Kind.setFilter),
+                              ("Add noir effect here", .addEffect),
+                              ("Add RGB split effect here", .addEffect),
+                              ("Add color invert transition here", .addTransition)] {
+            let drafts = EditorCopilotEditPlan.draftsFromPrompt(brief, playhead: 12.4, duration: 40)!
+            precondition(drafts.count == 1 && drafts[0].kind == kind, brief)
+        }
+        let flip = EditorCopilotEditPlan.draftsFromPrompt("Flip vertically here", playhead: 12.4, duration: 40)!
+        precondition(flip.count == 1 && flip[0].kind == .flip && flip[0].text == "vertical")
+        let quotedTitle = EditorCopilotEditPlan.draftsFromPrompt("Add title \"Slow fade, mute the highlights\" here", playhead: 12.4, duration: 40)!
+        precondition(quotedTitle.count == 1 && quotedTitle[0].kind == .addText)
+        precondition(quotedTitle[0].text == "Slow fade, mute the highlights")
+        for brief in [
+            "Slow it down without muting", "Don't add captions",
+            "Add blur from 5 to 8 seconds", "Split at 00:12",
+            "Make the selected clip quieter", "Mute the music",
+            "Blur the face", "Remove the subtitles", "Add title",
+            "Make it cinematic and remove the background",
+            "Rotate 45 degrees", "Speed to 10x", "Set volume to 150%",
+            "Add fade in here and make it quieter"
+        ] {
+            precondition(!EditorCopilotEditPlan.canPlanWithoutModel(brief), brief)
+            precondition(EditorCopilotEditPlan.draftsFromPrompt(brief, playhead: 12.4, duration: 40) == nil, brief)
+        }
+        print("PASS: direct commands preserve numeric values, quoted text and targets; complex requests require semantic planning")
+
         let aliased = try edit([effectDraft(effect: "blur")])
         precondition(aliased.operations[0].effect == "gaussianBlur")
         print("PASS: effect aliases resolve to catalog IDs")

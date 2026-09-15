@@ -4,8 +4,8 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[2]
-source = (root / "Features/Editor/Services/EditorCompositionBuilder.swift").read_text()
-start = source.index("    private static func applySpeed(")
+source = (root / "Features/Editor/Services/EditorCompositionBuilder+Speed.swift").read_text()
+start = source.index("    static func applySpeed(")
 end = source.index("    /// Extends the last video segment", start)
 # Compile the actual production methods, including the uniform-rate fallback.
 helper = source[start:end].replace("private static func", "static func")

@@ -1,5 +1,41 @@
 # On-device Copilot verification
 
+Natural-language planning acceptance checks:
+
+- “Make it quieter”, “speed to 1.5x”, “flip vertically”, and “rotate 90 degrees
+  counterclockwise” should each produce exactly one matching edit. Whole-clip
+  changes use the selected primary clip; adding “here” uses the playhead instead.
+  New markers, titles, effects, transitions, and splits default to the playhead.
+- “Add title \"Slow fade, mute the highlights\" here” adds only that exact text.
+  It must not mute, slow down, add a transition, or open highlight controls.
+- On an Apple Intelligence device, try “slow it down without muting”, “blur from
+  5 to 8 seconds”, and a compound request. Review the full draft for negation,
+  explicit times, values, and the selected target. These requests must go through
+  semantic planning rather than returning edits for the first recognized word.
+- Requests to modify a music track, existing title, or an unsupported target must
+  explain the limitation rather than silently modifying the primary video. A
+  partially supported or ambiguous request must not force a partial draft.
+- Without Apple Intelligence, complete supported short commands still work;
+  complex wording must report that semantic planning is unavailable.
+
+The standalone suite tests shortcut eligibility and deterministic operations. It
+does not test the on-device language model's interpretation quality; the checks
+above require an Apple Intelligence device.
+
+Fade intent regression (phone): move inside a clip and request “Add fade in at
+this playhead”, then compare with “Add fade in transition at the is playhead”.
+Both drafts should contain one fade transition at that time, without an opacity
+keyframe operation. Also try “fade-in here”, “blend these clips”, and “soften this
+cut”. Apply, play before and after the cut, Undo/Redo, save/reopen, and export.
+Undo any earlier incorrect opacity edit before testing the corrected request;
+the fix does not remove existing project edits automatically.
+
+Explicit “fade in opacity here” remains an opacity animation. Check that footage
+before the requested time stays visible and that visibility returns after the
+fade. “Fade in the vignette here” must animate the effect without adding a video
+opacity fade. The standalone plan and keyframe tests cover these distinctions;
+phone preview/export still needs this acceptance check.
+
 Run deterministic plan validation from the repository root:
 
 ```sh

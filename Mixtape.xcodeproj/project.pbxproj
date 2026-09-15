@@ -108,6 +108,58 @@
 		F03900000000000000000101 /* EditorCopilotPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03900000000000000000001 /* EditorCopilotPlan.swift */; };
 		F03900000000000000000102 /* EditorCopilotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03900000000000000000002 /* EditorCopilotService.swift */; };
 		F03900000000000000000103 /* EditorCopilotPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03900000000000000000003 /* EditorCopilotPanel.swift */; };
+		B7394F07C49C657B1CC07361 /* EditorPreviewBuildCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18103D591C069FB0CD9C1C17 /* EditorPreviewBuildCoordinator.swift */; };
+		49F277ED9B5ADA8C04C35423 /* EditorViewModel+Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4DB3D9E52CCB4A27C5E6DE2 /* EditorViewModel+Timeline.swift */; };
+		686EC023D94350342044E9F9 /* EditorViewModel+Keyframes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0EC92161C49369E5BEA7835 /* EditorViewModel+Keyframes.swift */; };
+		F780639D588AE364BFDBD5DF /* EditorViewModel+Selection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F668F431C01C51B1B45AAD0 /* EditorViewModel+Selection.swift */; };
+		D8459C93DCC300358031D829 /* EditorViewModel+ReverseAndFreeze.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A5389A6D4B4EF7B8EB043F /* EditorViewModel+ReverseAndFreeze.swift */; };
+		7B24218DF0DA5D74606C100A /* EditorViewModel+Color.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39DBFBC731A9F327CB7013C2 /* EditorViewModel+Color.swift */; };
+		DF7DA9C526FA82306D0DF0A5 /* EditorViewModel+Effects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6758D21ED7FFC8E44882172A /* EditorViewModel+Effects.swift */; };
+		2D4ABB9D88C39540FD5AA4AB /* EditorViewModel+Reframe.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE89D4DD65210055EFCA06C /* EditorViewModel+Reframe.swift */; };
+		FA017BBB87B9EC108426F967 /* EditorViewModel+Overlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = F170B4DE034B23719824F568 /* EditorViewModel+Overlays.swift */; };
+		08EDA243D5E8773708AB0E93 /* EditorViewModel+MotionTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0688AD16E6E36CE28650485 /* EditorViewModel+MotionTracking.swift */; };
+		DE1C5C32AB3CA1996307DC8A /* EditorViewModel+SpeedAndDuration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 292F1CA61C42335B2BAE407F /* EditorViewModel+SpeedAndDuration.swift */; };
+		D368A619B3EAFA03BD47F457 /* EditorViewModel+ClipVolume.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730327DA283CCBDA49BCA6E8 /* EditorViewModel+ClipVolume.swift */; };
+		C8E1A537193B0B30C6219F9E /* EditorViewModel+Transitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF06648946FF41AE0E0533E9 /* EditorViewModel+Transitions.swift */; };
+		FCFE99FA6215A12329410D9D /* EditorViewModel+Captions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591E435E2A9AE220E106680D /* EditorViewModel+Captions.swift */; };
+		C4B04E30DCE27CD6449CC0D9 /* EditorViewModel+GraphicsAndText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00C9C89D6566B9FBE7373F7C /* EditorViewModel+GraphicsAndText.swift */; };
+		563B64BE46B5435492748B0E /* EditorViewModel+Sequences.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF87E834D5CFFB8B0D890885 /* EditorViewModel+Sequences.swift */; };
+		073ACEC0012EDDB824EF0E0D /* EditorViewModel+ClipEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCB4F6CDA376E92583B3405 /* EditorViewModel+ClipEditing.swift */; };
+		92623D305F68D627E6816F8B /* EditorViewModel+Audio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 681749DF9C8AF872E800986D /* EditorViewModel+Audio.swift */; };
+		60A91DFC0DD153A67E59B936 /* EditorViewModel+Export.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F06C83B0020719740670945 /* EditorViewModel+Export.swift */; };
+		50350569E5F906A81E480CBD /* EditorViewModel+Playback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 882DE71B0A8852A82A86B810 /* EditorViewModel+Playback.swift */; };
+		D49A0A2EFF6D91951C992A30 /* EditorViewModel+MediaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 889B7ED483F9B95C256128A3 /* EditorViewModel+MediaCache.swift */; };
+		F2ECBEFBBE52457151BA110B /* EditorViewModel+Copilot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19A995303C1E0D650B6917CC /* EditorViewModel+Copilot.swift */; };
+		2B900AF8CE8D4739C7C38E23 /* EditorViewModel+Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A59E54DB3A63D154E4F81F8A /* EditorViewModel+Persistence.swift */; };
+		C494266EC3D619E3AA1A971D /* EditorViewModel+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A05ED88CE7B537EE6C5D347 /* EditorViewModel+Lifecycle.swift */; };
+		3E088315ACEA60C5F4427A2D /* EditorViewModel+Snapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BEA1ECC53D95BE651FC855 /* EditorViewModel+Snapping.swift */; };
+		34F789C5E42259696E2BABDD /* EditorReverseMediaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE51138C0F4D95F6D98352F6 /* EditorReverseMediaService.swift */; };
+		99F26BC33F77CF92E4D6AAA0 /* EditorMediaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0991E22A907DA57D71DEB5 /* EditorMediaCache.swift */; };
+		12E9D5E8DA052BACE7437D44 /* EditorCompositionBuilder+AudioAndOverlays.swift in Sources */ = {isa = PBXBuildFile; fileRef = A595916631E31BEA8FEE0E89 /* EditorCompositionBuilder+AudioAndOverlays.swift */; };
+		634CF8BA5AC231C113D987A1 /* EditorCompositionBuilder+PlayerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A65F1FCA812530F2F14B96 /* EditorCompositionBuilder+PlayerItem.swift */; };
+		D316335311F23BEC9960B71A /* EditorCompositionBuilder+Speed.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA5CEC3EB5EA882670559CF /* EditorCompositionBuilder+Speed.swift */; };
+		333BC647F12E108BAADF4B89 /* EditorCompositionBuilder+VideoComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE2357B634C3CA8DC3C5E3D /* EditorCompositionBuilder+VideoComposition.swift */; };
+		2930E7A8A98369683116F168 /* EditorCompositionBuilder+Transitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C423927771197AF7C1681A6 /* EditorCompositionBuilder+Transitions.swift */; };
+		5A2327E0F95E209F3BEEC33C /* EditorCompositionBuilder+Background.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86CE19D29FBF4C89B5D86F73 /* EditorCompositionBuilder+Background.swift */; };
+		58DEA254DBC964A70C5F03C3 /* EditorCompositionBuilder+Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57BA4FEC403F886B8163005E /* EditorCompositionBuilder+Assets.swift */; };
+		68BD6FECC2B8687D047F2F9A /* EditorTemplatesPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B9E4DD020E3E90BDE1DEE9 /* EditorTemplatesPanel.swift */; };
+		8C2A243039EBF76B37C55EE4 /* ProxyRenderCachePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6ED0A55EADDAE2655E28EB7 /* ProxyRenderCachePanel.swift */; };
+		DD3B5C7E4E598889EBF90FFB /* VisualEffectsStackPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7DCF129B19B3F1E4A0BABD1 /* VisualEffectsStackPanel.swift */; };
+		1144E1568FF1B20953B72797 /* EditorGraphicsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A52E5BDB28959B171621D6 /* EditorGraphicsPanel.swift */; };
+		9A9F18CF01E42890A1E242D5 /* EffectAmountKeyframeTimelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC445CD7B7D7A39F449939C4 /* EffectAmountKeyframeTimelineSheet.swift */; };
+		5CB51B5FCA7EF989E4D9E2E8 /* CanvasToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD123AA1EE6E8C4DAA0AF70E /* CanvasToolPanel.swift */; };
+		60DE97A824F9B9F1F3B129BF /* BackgroundToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1DA161183893B0DD45FA833 /* BackgroundToolPanel.swift */; };
+		0844592EC019C8C8C7D6CF5F /* PrecisionEditToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10FB02979C392B6E7750456F /* PrecisionEditToolPanel.swift */; };
+		2102BDA0E818669A43AB51C6 /* SequenceStructurePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2B937C255C63AABD7F9999 /* SequenceStructurePanel.swift */; };
+		28F86CCA2D67DED101969CE4 /* OverlayClipThumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1209EEBA3A75771BEA4F9BC /* OverlayClipThumb.swift */; };
+		6AC3530389CE52089067EDD6 /* AudioClipThumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB8429375EDA94C0CD1201C8 /* AudioClipThumb.swift */; };
+		BEB5044A10BD55E6A09711B4 /* TextOverlayThumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E2602DEB32DA3D49C6EB197 /* TextOverlayThumb.swift */; };
+		488B8C4C0BCB3EC19C73DC5C /* GraphicOverlayThumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB3C7F51689ED163BD0025F /* GraphicOverlayThumb.swift */; };
+		2339ADBBA10DA29FD23B63FC /* TimelineLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0409E72F75461089285DFD0 /* TimelineLayout.swift */; };
+		60B1812DC440F4A5684889F8 /* TimelineClipBoundaryControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD41AC1AC596198DF8BA2075 /* TimelineClipBoundaryControls.swift */; };
+		FD1682920622C50C342F59C2 /* ClipThumb.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E1D357F1CF6A8FC0FCDC19 /* ClipThumb.swift */; };
+		D358A0BC5F3D58F271BF3D54 /* TimelinePlaybackControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5A6D3BC9A5AD78776BED78 /* TimelinePlaybackControls.swift */; };
+		F6B98AFE7DC75919FC5FCAAB /* TimelineShapes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6182B5A5C8B2E6CA21EDDE4D /* TimelineShapes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -217,6 +269,58 @@
 		F03900000000000000000002 /* EditorCopilotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCopilotService.swift; sourceTree = "<group>"; };
 		F03900000000000000000003 /* EditorCopilotPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCopilotPanel.swift; sourceTree = "<group>"; };
 		FD381624E89BEA467A3F6BF0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		18103D591C069FB0CD9C1C17 /* EditorPreviewBuildCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorPreviewBuildCoordinator.swift"; sourceTree = "<group>"; };
+		D4DB3D9E52CCB4A27C5E6DE2 /* EditorViewModel+Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Timeline.swift"; sourceTree = "<group>"; };
+		F0EC92161C49369E5BEA7835 /* EditorViewModel+Keyframes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Keyframes.swift"; sourceTree = "<group>"; };
+		0F668F431C01C51B1B45AAD0 /* EditorViewModel+Selection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Selection.swift"; sourceTree = "<group>"; };
+		23A5389A6D4B4EF7B8EB043F /* EditorViewModel+ReverseAndFreeze.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+ReverseAndFreeze.swift"; sourceTree = "<group>"; };
+		39DBFBC731A9F327CB7013C2 /* EditorViewModel+Color.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Color.swift"; sourceTree = "<group>"; };
+		6758D21ED7FFC8E44882172A /* EditorViewModel+Effects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Effects.swift"; sourceTree = "<group>"; };
+		DCE89D4DD65210055EFCA06C /* EditorViewModel+Reframe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Reframe.swift"; sourceTree = "<group>"; };
+		F170B4DE034B23719824F568 /* EditorViewModel+Overlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Overlays.swift"; sourceTree = "<group>"; };
+		E0688AD16E6E36CE28650485 /* EditorViewModel+MotionTracking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+MotionTracking.swift"; sourceTree = "<group>"; };
+		292F1CA61C42335B2BAE407F /* EditorViewModel+SpeedAndDuration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+SpeedAndDuration.swift"; sourceTree = "<group>"; };
+		730327DA283CCBDA49BCA6E8 /* EditorViewModel+ClipVolume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+ClipVolume.swift"; sourceTree = "<group>"; };
+		DF06648946FF41AE0E0533E9 /* EditorViewModel+Transitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Transitions.swift"; sourceTree = "<group>"; };
+		591E435E2A9AE220E106680D /* EditorViewModel+Captions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Captions.swift"; sourceTree = "<group>"; };
+		00C9C89D6566B9FBE7373F7C /* EditorViewModel+GraphicsAndText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+GraphicsAndText.swift"; sourceTree = "<group>"; };
+		CF87E834D5CFFB8B0D890885 /* EditorViewModel+Sequences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Sequences.swift"; sourceTree = "<group>"; };
+		ACCB4F6CDA376E92583B3405 /* EditorViewModel+ClipEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+ClipEditing.swift"; sourceTree = "<group>"; };
+		681749DF9C8AF872E800986D /* EditorViewModel+Audio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Audio.swift"; sourceTree = "<group>"; };
+		5F06C83B0020719740670945 /* EditorViewModel+Export.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Export.swift"; sourceTree = "<group>"; };
+		882DE71B0A8852A82A86B810 /* EditorViewModel+Playback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Playback.swift"; sourceTree = "<group>"; };
+		889B7ED483F9B95C256128A3 /* EditorViewModel+MediaCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+MediaCache.swift"; sourceTree = "<group>"; };
+		19A995303C1E0D650B6917CC /* EditorViewModel+Copilot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Copilot.swift"; sourceTree = "<group>"; };
+		A59E54DB3A63D154E4F81F8A /* EditorViewModel+Persistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Persistence.swift"; sourceTree = "<group>"; };
+		2A05ED88CE7B537EE6C5D347 /* EditorViewModel+Lifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Lifecycle.swift"; sourceTree = "<group>"; };
+		18BEA1ECC53D95BE651FC855 /* EditorViewModel+Snapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorViewModel+Snapping.swift"; sourceTree = "<group>"; };
+		EE51138C0F4D95F6D98352F6 /* EditorReverseMediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorReverseMediaService.swift"; sourceTree = "<group>"; };
+		9A0991E22A907DA57D71DEB5 /* EditorMediaCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorMediaCache.swift"; sourceTree = "<group>"; };
+		A595916631E31BEA8FEE0E89 /* EditorCompositionBuilder+AudioAndOverlays.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+AudioAndOverlays.swift"; sourceTree = "<group>"; };
+		E0A65F1FCA812530F2F14B96 /* EditorCompositionBuilder+PlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+PlayerItem.swift"; sourceTree = "<group>"; };
+		BCA5CEC3EB5EA882670559CF /* EditorCompositionBuilder+Speed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+Speed.swift"; sourceTree = "<group>"; };
+		0FE2357B634C3CA8DC3C5E3D /* EditorCompositionBuilder+VideoComposition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+VideoComposition.swift"; sourceTree = "<group>"; };
+		1C423927771197AF7C1681A6 /* EditorCompositionBuilder+Transitions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+Transitions.swift"; sourceTree = "<group>"; };
+		86CE19D29FBF4C89B5D86F73 /* EditorCompositionBuilder+Background.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+Background.swift"; sourceTree = "<group>"; };
+		57BA4FEC403F886B8163005E /* EditorCompositionBuilder+Assets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorCompositionBuilder+Assets.swift"; sourceTree = "<group>"; };
+		C6B9E4DD020E3E90BDE1DEE9 /* EditorTemplatesPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorTemplatesPanel.swift"; sourceTree = "<group>"; };
+		A6ED0A55EADDAE2655E28EB7 /* ProxyRenderCachePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProxyRenderCachePanel.swift"; sourceTree = "<group>"; };
+		D7DCF129B19B3F1E4A0BABD1 /* VisualEffectsStackPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VisualEffectsStackPanel.swift"; sourceTree = "<group>"; };
+		12A52E5BDB28959B171621D6 /* EditorGraphicsPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EditorGraphicsPanel.swift"; sourceTree = "<group>"; };
+		EC445CD7B7D7A39F449939C4 /* EffectAmountKeyframeTimelineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EffectAmountKeyframeTimelineSheet.swift"; sourceTree = "<group>"; };
+		CD123AA1EE6E8C4DAA0AF70E /* CanvasToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CanvasToolPanel.swift"; sourceTree = "<group>"; };
+		B1DA161183893B0DD45FA833 /* BackgroundToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackgroundToolPanel.swift"; sourceTree = "<group>"; };
+		10FB02979C392B6E7750456F /* PrecisionEditToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PrecisionEditToolPanel.swift"; sourceTree = "<group>"; };
+		0B2B937C255C63AABD7F9999 /* SequenceStructurePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SequenceStructurePanel.swift"; sourceTree = "<group>"; };
+		D1209EEBA3A75771BEA4F9BC /* OverlayClipThumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OverlayClipThumb.swift"; sourceTree = "<group>"; };
+		AB8429375EDA94C0CD1201C8 /* AudioClipThumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioClipThumb.swift"; sourceTree = "<group>"; };
+		8E2602DEB32DA3D49C6EB197 /* TextOverlayThumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TextOverlayThumb.swift"; sourceTree = "<group>"; };
+		0BB3C7F51689ED163BD0025F /* GraphicOverlayThumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GraphicOverlayThumb.swift"; sourceTree = "<group>"; };
+		D0409E72F75461089285DFD0 /* TimelineLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimelineLayout.swift"; sourceTree = "<group>"; };
+		BD41AC1AC596198DF8BA2075 /* TimelineClipBoundaryControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimelineClipBoundaryControls.swift"; sourceTree = "<group>"; };
+		D5E1D357F1CF6A8FC0FCDC19 /* ClipThumb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ClipThumb.swift"; sourceTree = "<group>"; };
+		8A5A6D3BC9A5AD78776BED78 /* TimelinePlaybackControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimelinePlaybackControls.swift"; sourceTree = "<group>"; };
+		6182B5A5C8B2E6CA21EDDE4D /* TimelineShapes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimelineShapes.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -321,6 +425,31 @@
 		BA0EDF00DEAFB001CAFE0203 /* ViewModel */ = {
 			isa = PBXGroup;
 			children = (
+				18BEA1ECC53D95BE651FC855 /* EditorViewModel+Snapping.swift */,
+				2A05ED88CE7B537EE6C5D347 /* EditorViewModel+Lifecycle.swift */,
+				A59E54DB3A63D154E4F81F8A /* EditorViewModel+Persistence.swift */,
+				19A995303C1E0D650B6917CC /* EditorViewModel+Copilot.swift */,
+				889B7ED483F9B95C256128A3 /* EditorViewModel+MediaCache.swift */,
+				882DE71B0A8852A82A86B810 /* EditorViewModel+Playback.swift */,
+				5F06C83B0020719740670945 /* EditorViewModel+Export.swift */,
+				681749DF9C8AF872E800986D /* EditorViewModel+Audio.swift */,
+				ACCB4F6CDA376E92583B3405 /* EditorViewModel+ClipEditing.swift */,
+				CF87E834D5CFFB8B0D890885 /* EditorViewModel+Sequences.swift */,
+				00C9C89D6566B9FBE7373F7C /* EditorViewModel+GraphicsAndText.swift */,
+				591E435E2A9AE220E106680D /* EditorViewModel+Captions.swift */,
+				DF06648946FF41AE0E0533E9 /* EditorViewModel+Transitions.swift */,
+				730327DA283CCBDA49BCA6E8 /* EditorViewModel+ClipVolume.swift */,
+				292F1CA61C42335B2BAE407F /* EditorViewModel+SpeedAndDuration.swift */,
+				E0688AD16E6E36CE28650485 /* EditorViewModel+MotionTracking.swift */,
+				F170B4DE034B23719824F568 /* EditorViewModel+Overlays.swift */,
+				DCE89D4DD65210055EFCA06C /* EditorViewModel+Reframe.swift */,
+				6758D21ED7FFC8E44882172A /* EditorViewModel+Effects.swift */,
+				39DBFBC731A9F327CB7013C2 /* EditorViewModel+Color.swift */,
+				23A5389A6D4B4EF7B8EB043F /* EditorViewModel+ReverseAndFreeze.swift */,
+				0F668F431C01C51B1B45AAD0 /* EditorViewModel+Selection.swift */,
+				F0EC92161C49369E5BEA7835 /* EditorViewModel+Keyframes.swift */,
+				D4DB3D9E52CCB4A27C5E6DE2 /* EditorViewModel+Timeline.swift */,
+				18103D591C069FB0CD9C1C17 /* EditorPreviewBuildCoordinator.swift */,
 				BA0EDF00DEAFB001CAFE0005 /* EditorViewModel.swift */,
 				AD10000000000000000000F2 /* AudioLibraryViewModel.swift */,
 			);
@@ -330,6 +459,24 @@
 		BA0EDF00DEAFB001CAFE0204 /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				6182B5A5C8B2E6CA21EDDE4D /* TimelineShapes.swift */,
+				8A5A6D3BC9A5AD78776BED78 /* TimelinePlaybackControls.swift */,
+				D5E1D357F1CF6A8FC0FCDC19 /* ClipThumb.swift */,
+				BD41AC1AC596198DF8BA2075 /* TimelineClipBoundaryControls.swift */,
+				D0409E72F75461089285DFD0 /* TimelineLayout.swift */,
+				0BB3C7F51689ED163BD0025F /* GraphicOverlayThumb.swift */,
+				8E2602DEB32DA3D49C6EB197 /* TextOverlayThumb.swift */,
+				AB8429375EDA94C0CD1201C8 /* AudioClipThumb.swift */,
+				D1209EEBA3A75771BEA4F9BC /* OverlayClipThumb.swift */,
+				0B2B937C255C63AABD7F9999 /* SequenceStructurePanel.swift */,
+				10FB02979C392B6E7750456F /* PrecisionEditToolPanel.swift */,
+				B1DA161183893B0DD45FA833 /* BackgroundToolPanel.swift */,
+				CD123AA1EE6E8C4DAA0AF70E /* CanvasToolPanel.swift */,
+				EC445CD7B7D7A39F449939C4 /* EffectAmountKeyframeTimelineSheet.swift */,
+				12A52E5BDB28959B171621D6 /* EditorGraphicsPanel.swift */,
+				D7DCF129B19B3F1E4A0BABD1 /* VisualEffectsStackPanel.swift */,
+				A6ED0A55EADDAE2655E28EB7 /* ProxyRenderCachePanel.swift */,
+				C6B9E4DD020E3E90BDE1DEE9 /* EditorTemplatesPanel.swift */,
 				F03900000000000000000003 /* EditorCopilotPanel.swift */,
 				BA0EDF00DEAFB001CAFE0006 /* EditorTopBar.swift */,
 				BA0EDF00DEAFB001CAFE0007 /* EditorPreviewPlayer.swift */,
@@ -368,6 +515,15 @@
 		BA0EDF00DEAFB001CAFE0205 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				57BA4FEC403F886B8163005E /* EditorCompositionBuilder+Assets.swift */,
+				86CE19D29FBF4C89B5D86F73 /* EditorCompositionBuilder+Background.swift */,
+				1C423927771197AF7C1681A6 /* EditorCompositionBuilder+Transitions.swift */,
+				0FE2357B634C3CA8DC3C5E3D /* EditorCompositionBuilder+VideoComposition.swift */,
+				BCA5CEC3EB5EA882670559CF /* EditorCompositionBuilder+Speed.swift */,
+				E0A65F1FCA812530F2F14B96 /* EditorCompositionBuilder+PlayerItem.swift */,
+				A595916631E31BEA8FEE0E89 /* EditorCompositionBuilder+AudioAndOverlays.swift */,
+				9A0991E22A907DA57D71DEB5 /* EditorMediaCache.swift */,
+				EE51138C0F4D95F6D98352F6 /* EditorReverseMediaService.swift */,
 				F03900000000000000000002 /* EditorCopilotService.swift */,
 				BA0EDF00DEAFB001CAFE000C /* EditorCompositionBuilder.swift */,
 				AD10000000000000000000F5 /* AudioLibraryCache.swift */,
@@ -577,6 +733,58 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F6B98AFE7DC75919FC5FCAAB /* TimelineShapes.swift in Sources */,
+				D358A0BC5F3D58F271BF3D54 /* TimelinePlaybackControls.swift in Sources */,
+				FD1682920622C50C342F59C2 /* ClipThumb.swift in Sources */,
+				60B1812DC440F4A5684889F8 /* TimelineClipBoundaryControls.swift in Sources */,
+				2339ADBBA10DA29FD23B63FC /* TimelineLayout.swift in Sources */,
+				488B8C4C0BCB3EC19C73DC5C /* GraphicOverlayThumb.swift in Sources */,
+				BEB5044A10BD55E6A09711B4 /* TextOverlayThumb.swift in Sources */,
+				6AC3530389CE52089067EDD6 /* AudioClipThumb.swift in Sources */,
+				28F86CCA2D67DED101969CE4 /* OverlayClipThumb.swift in Sources */,
+				2102BDA0E818669A43AB51C6 /* SequenceStructurePanel.swift in Sources */,
+				0844592EC019C8C8C7D6CF5F /* PrecisionEditToolPanel.swift in Sources */,
+				60DE97A824F9B9F1F3B129BF /* BackgroundToolPanel.swift in Sources */,
+				5CB51B5FCA7EF989E4D9E2E8 /* CanvasToolPanel.swift in Sources */,
+				9A9F18CF01E42890A1E242D5 /* EffectAmountKeyframeTimelineSheet.swift in Sources */,
+				1144E1568FF1B20953B72797 /* EditorGraphicsPanel.swift in Sources */,
+				DD3B5C7E4E598889EBF90FFB /* VisualEffectsStackPanel.swift in Sources */,
+				8C2A243039EBF76B37C55EE4 /* ProxyRenderCachePanel.swift in Sources */,
+				68BD6FECC2B8687D047F2F9A /* EditorTemplatesPanel.swift in Sources */,
+				58DEA254DBC964A70C5F03C3 /* EditorCompositionBuilder+Assets.swift in Sources */,
+				5A2327E0F95E209F3BEEC33C /* EditorCompositionBuilder+Background.swift in Sources */,
+				2930E7A8A98369683116F168 /* EditorCompositionBuilder+Transitions.swift in Sources */,
+				333BC647F12E108BAADF4B89 /* EditorCompositionBuilder+VideoComposition.swift in Sources */,
+				D316335311F23BEC9960B71A /* EditorCompositionBuilder+Speed.swift in Sources */,
+				634CF8BA5AC231C113D987A1 /* EditorCompositionBuilder+PlayerItem.swift in Sources */,
+				12E9D5E8DA052BACE7437D44 /* EditorCompositionBuilder+AudioAndOverlays.swift in Sources */,
+				99F26BC33F77CF92E4D6AAA0 /* EditorMediaCache.swift in Sources */,
+				34F789C5E42259696E2BABDD /* EditorReverseMediaService.swift in Sources */,
+				3E088315ACEA60C5F4427A2D /* EditorViewModel+Snapping.swift in Sources */,
+				C494266EC3D619E3AA1A971D /* EditorViewModel+Lifecycle.swift in Sources */,
+				2B900AF8CE8D4739C7C38E23 /* EditorViewModel+Persistence.swift in Sources */,
+				F2ECBEFBBE52457151BA110B /* EditorViewModel+Copilot.swift in Sources */,
+				D49A0A2EFF6D91951C992A30 /* EditorViewModel+MediaCache.swift in Sources */,
+				50350569E5F906A81E480CBD /* EditorViewModel+Playback.swift in Sources */,
+				60A91DFC0DD153A67E59B936 /* EditorViewModel+Export.swift in Sources */,
+				92623D305F68D627E6816F8B /* EditorViewModel+Audio.swift in Sources */,
+				073ACEC0012EDDB824EF0E0D /* EditorViewModel+ClipEditing.swift in Sources */,
+				563B64BE46B5435492748B0E /* EditorViewModel+Sequences.swift in Sources */,
+				C4B04E30DCE27CD6449CC0D9 /* EditorViewModel+GraphicsAndText.swift in Sources */,
+				FCFE99FA6215A12329410D9D /* EditorViewModel+Captions.swift in Sources */,
+				C8E1A537193B0B30C6219F9E /* EditorViewModel+Transitions.swift in Sources */,
+				D368A619B3EAFA03BD47F457 /* EditorViewModel+ClipVolume.swift in Sources */,
+				DE1C5C32AB3CA1996307DC8A /* EditorViewModel+SpeedAndDuration.swift in Sources */,
+				08EDA243D5E8773708AB0E93 /* EditorViewModel+MotionTracking.swift in Sources */,
+				FA017BBB87B9EC108426F967 /* EditorViewModel+Overlays.swift in Sources */,
+				2D4ABB9D88C39540FD5AA4AB /* EditorViewModel+Reframe.swift in Sources */,
+				DF7DA9C526FA82306D0DF0A5 /* EditorViewModel+Effects.swift in Sources */,
+				7B24218DF0DA5D74606C100A /* EditorViewModel+Color.swift in Sources */,
+				D8459C93DCC300358031D829 /* EditorViewModel+ReverseAndFreeze.swift in Sources */,
+				F780639D588AE364BFDBD5DF /* EditorViewModel+Selection.swift in Sources */,
+				686EC023D94350342044E9F9 /* EditorViewModel+Keyframes.swift in Sources */,
+				49F277ED9B5ADA8C04C35423 /* EditorViewModel+Timeline.swift in Sources */,
+				B7394F07C49C657B1CC07361 /* EditorPreviewBuildCoordinator.swift in Sources */,
 				F03900000000000000000103 /* EditorCopilotPanel.swift in Sources */,
 				F03900000000000000000102 /* EditorCopilotService.swift in Sources */,
 				F03900000000000000000101 /* EditorCopilotPlan.swift in Sources */,
@@ -707,6 +915,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.mixtape.editor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

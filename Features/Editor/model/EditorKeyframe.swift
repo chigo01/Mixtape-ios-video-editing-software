@@ -380,3 +380,49 @@ struct EditorKeyframeTracks: Codable, Hashable {
         })
     }
 }
+
+// MARK: - MixPilot animation insertion
+
+extension EditorKeyframeTrack {
+    mutating func applyCopilotAnimation(
+        start localStart: Double, end localEnd: Double, amount: Double,
+        fadeIn: Bool, fadeOut: Bool, defaultValue: Double
+    ) {
+        let rest: Double
+        switch property {
+        case .scale, .cropScale, .textScale: rest = 1
+        default: rest = 0
+        }
+        let span = max(localEnd - localStart, 0)
+        let window = min(0.4, max(0.12, span / 3))
+        if fadeIn || fadeOut, span >= 0.2 {
+            // Keyframe evaluation extends the first value back to clip start.
+            // Anchor the existing value before a mid-clip fade so a zero-opacity
+            // starting point cannot black out all the preceding footage.
+            if localStart > 0.01 {
+                let beforeTime = localStart - 0.001
+                let initialValue = value(at: 0, default: defaultValue)
+                let beforeValue = value(at: beforeTime, default: defaultValue)
+                if keyframes.first.map({ $0.time > 0 }) ?? true {
+                    _ = upsert(at: 0, value: initialValue, tolerance: 0)
+                }
+                _ = upsert(at: beforeTime, value: beforeValue,
+                           curve: .init(preset: .hold), tolerance: 0)
+            }
+            if fadeIn {
+                _ = upsert(at: localStart, value: rest, curve: .init(preset: .easeInOut), tolerance: 0)
+                _ = upsert(at: min(localStart + window, localEnd), value: amount, curve: .init(preset: .easeInOut), tolerance: 0)
+            } else {
+                _ = upsert(at: localStart, value: amount, curve: .init(preset: .easeInOut), tolerance: 0)
+            }
+            if fadeOut {
+                _ = upsert(at: max(localEnd - window, localStart), value: amount, curve: .init(preset: .easeInOut), tolerance: 0)
+                _ = upsert(at: localEnd, value: rest, curve: .init(preset: .easeInOut), tolerance: 0)
+            } else if localEnd > localStart + 0.05 {
+                _ = upsert(at: localEnd, value: amount, curve: .init(preset: .easeInOut), tolerance: 0)
+            }
+        } else {
+            _ = upsert(at: localStart, value: amount, curve: .init(preset: .easeInOut), tolerance: 0)
+        }
+    }
+}

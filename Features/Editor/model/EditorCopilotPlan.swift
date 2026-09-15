@@ -705,83 +705,189 @@ struct EditorCopilotEditPlan: Equatable, Sendable {
         ])
     }
 
+    /// Resolve the intended target before matching individual tool names. A visual
+    /// fade is a transition unless the user explicitly names an animation channel.
+    static func wantsVisualTransition(_ prompt: String) -> Bool {
+        let n = normalizedEditPrompt(prompt)
+        let explicitTarget = ["audio", "music", "sound", "volume", "opacity", "keyframe",
+                              "text", "title", "caption"]
+            .contains { n.contains($0) }
+        if explicitTarget { return false }
+        if n.contains("transition") { return true }
+        if namedEffect(fromPrompt: n) != nil || n.contains("effect") { return false }
+        if n.range(of: #"\b(fade|fading|crossfade|dissolve|dissolving)\b"#, options: .regularExpression) != nil {
+            return true
+        }
+        let boundary = ["here", "playhead", "between", "cut", "clips", "this moment"]
+            .contains { n.contains($0) }
+        let blend = ["blend", "smooth", "soften"].contains { n.contains($0) }
+        return boundary && (blend || transitionKind(fromPrompt: n) != "fade")
+    }
+
+    private static func normalizedEditPrompt(_ prompt: String) -> String {
+        prompt.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "–", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    /// Only complete, unambiguous commands bypass semantic planning. Matching a
+    /// single tool word inside a longer brief is never enough to apply a draft.
+    static func canPlanWithoutModel(_ prompt: String) -> Bool {
+        let n = directCommandText(prompt)
+        if let percentage = requestedPercentage(n), !(0...1).contains(percentage) { return false }
+        if n.range(of: #"\d+(?:\.\d+)?\s*x"#, options: .regularExpression) != nil,
+           let speed = parsedSpeed(from: n), !(0.25...3).contains(speed) { return false }
+        let location = #"(?:\s+(?:here|now|at (?:this |the )?playhead|at this moment))?"#
+        let prefix = #"(?:please\s+)?(?:add |apply |put )?(?:a |the )?"#
+        let patterns = [
+            #"(?:split|cut|blade|razor)(?: the clip)?"# + location,
+            #"split at this playhead and add fade in transition"#,
+            prefix + #"(?:slow )?(?:fade(?: in| out)?|dissolve|crossfade|cross fade)(?: transition(?: at the is playhead)?)?"# + location,
+            #"(?:blend these clips|make the cut smoother here|soften this cut)"#,
+            #"fade (?:in|out) (?:the )?(?:audio|opacity|vignette|blur|bloom)"# + location,
+            #"(?:slow motion|slow mo|slowmo|slow it down|slow this down|make it slower|half speed|speed up|speed it up|make it faster|double speed|speed (?:to )?\d+(?:\.\d+)?x|\d+(?:\.\d+)?x)"# + location,
+            #"(?:mute(?: the clip)?|silence(?: the clip)?|make it quieter|make it louder|quieter|louder|(?:set |lower |raise )?(?:the )?volume(?: to)? \d+(?:\.\d+)?%)"# + location,
+            #"(?:flip|mirror)(?: the clip)?(?: vertically| horizontally)?"# + location,
+            #"rotate(?: the clip)?(?: (?:90|180|270)(?: degrees)?)?(?: clockwise| counterclockwise)?"# + location,
+            #"(?:crop(?: to)?|make it|format for) (?:vertical|landscape|square|9:16|16:9|1:1|tiktok|reels)"# + location,
+            prefix + #"(?:captions|subtitles)(?: to the current timeline)?"#,
+            #"(?:caption this|subtitle this)"#,
+            prefix + #"(?:title|text|marker)(?: saying| named)? __label__"# + location,
+            #"(?:set )?opacity(?: to)? \d+(?:\.\d+)?%"# + location
+        ]
+        if patterns.contains(where: { n.range(of: "^(?:" + $0 + ")$", options: .regularExpression) != nil }) {
+            return true
+        }
+        // Catalog names may be used naturally, but the whole brief must match.
+        return [(effectIDs, "effect"), (filterIDs, "filter"), (transitionIDs, "transition")].contains { names, suffix in
+            names.contains { name in
+                let token = NSRegularExpression.escapedPattern(for: spacedName(name))
+                return n.range(of: "^" + prefix + token + "(?: " + suffix + ")?" + location + "$",
+                               options: .regularExpression) != nil
+            }
+        }
+    }
+
+    static func explicitlyTargetsPlayhead(_ prompt: String) -> Bool {
+        directCommandText(prompt).range(of: #"\b(here|now|playhead|this moment)\b"#,
+                                        options: .regularExpression) != nil
+    }
+
+    private static func directCommandText(_ prompt: String) -> String {
+        var text = normalizedEditPrompt(prompt)
+        // Quoted display text is data, even if it says “mute”, “slow”, or “fade”.
+        text = text.replacingOccurrences(of: #"["“][^"”]+["”]"#, with: "__label__", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".!?")))
+    }
+
+    private static func requestedPercentage(_ prompt: String) -> Double? {
+        guard let range = prompt.range(of: #"\d+(?:\.\d+)?\s*%"#, options: .regularExpression) else { return nil }
+        return Double(prompt[range].replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces)).map { $0 / 100 }
+    }
+
     static func draftsFromPrompt(
-        _ prompt: String, playhead: Double, duration: Double
+        _ prompt: String, playhead: Double, duration: Double, selectedPrimaryStart: Double? = nil
     ) -> [EditorCopilotEditDraft]? {
-        let n = prompt.lowercased()
+        guard canPlanWithoutModel(prompt) else { return nil }
+        let n = directCommandText(prompt)
+        let fadeIn = n.contains("fade in") || n.contains("fading in")
+        let fadeOut = n.contains("fade out") || n.contains("fading out")
+        let hasFade = fadeIn || fadeOut
+        let audioFade = hasFade && ["audio", "music", "sound", "volume"].contains { n.contains($0) }
+        let effect = namedEffect(fromPrompt: n)
+        let textTarget = ["title", "text", "caption", "subtitle"].contains { n.contains($0) }
+        // Let semantic planning handle fades on existing text instead of changing
+        // the primary video's opacity or inventing a replacement title.
+        if hasFade && (textTarget || n.contains("music") || n.contains("soundtrack")
+            || (n.contains("effect") && effect == nil && !n.contains("transition"))) { return nil }
         var drafts: [EditorCopilotEditDraft] = []
         func add(_ kind: EditorCopilotEditOperation.Kind, amount: Double = 0,
                  effect: String = "none", property: String = "none",
                  text: String = "", fadeIn: Bool = false, fadeOut: Bool = false) {
+            let clipWide = [.setSpeed, .setVolume, .crop, .rotate, .flip, .setFilter].contains(kind)
+                || (kind == .addKeyframe && !fadeIn && !fadeOut)
+            let time = clipWide && !explicitlyTargetsPlayhead(prompt)
+                ? (selectedPrimaryStart ?? playhead) : playhead
             drafts.append(.init(
-                kind: kind, start: playhead, end: playhead, amount: amount,
+                kind: kind, start: time, end: time, amount: amount,
                 effect: effect, property: property, text: text, fadeIn: fadeIn, fadeOut: fadeOut
             ))
         }
         if n.contains("caption") || n.contains("subtitle") { add(.addCaptions) }
-        let wantsSplit = n.contains("split") || n.contains("cut here")
+        let wantsSplit = n.contains("split") || n == "cut" || n.hasPrefix("cut ")
             || n.contains("blade") || n.contains("razor")
-        let wantsTransition = n.contains("transition")
-            || n.contains("crossfade") || n.contains("cross fade") || n.contains("dissolve")
-            || ((n.contains("fade") && !n.contains("fade in") && !n.contains("fade out"))
-                && (n.contains("playhead") || n.contains("cut") || n.contains("here")))
+        let wantsTransition = wantsVisualTransition(n)
         if wantsTransition {
             add(.addTransition, amount: 0.5, effect: transitionKind(fromPrompt: n))
+            // Descriptions like “slow fade” or “zoom transition” belong to this
+            // operation, not additional speed, crop, or effect edits.
+            if !n.contains(" and ") && !n.contains(",") { return drafts }
+        }
+        // Resolve catalog edits as one operation before looking for action words
+        // inside names such as “RGB split” or “color invert”.
+        if !wantsTransition && !hasFade && !n.contains("effect"), let filter = filterKind(fromPrompt: n) {
+            add(.setFilter, amount: 1, effect: filter)
+            return drafts
+        }
+        if !wantsTransition, let effect {
+            add(.addEffect, amount: 0.65, effect: effect, fadeIn: fadeIn, fadeOut: fadeOut)
+            return drafts
         }
         // A fade at the playhead already cuts there. A second split then fails
         // because the playhead is sitting on the new clip edge.
         if wantsSplit && !wantsTransition {
             add(.split)
         }
-        if n.contains("mute") || n.contains("silence") {
+        if audioFade {
+            add(.addKeyframe, amount: 1, property: "volume", fadeIn: fadeIn, fadeOut: fadeOut)
+        } else if n.contains("mute") || n.contains("silence") {
             add(.setVolume, amount: 0)
         } else if n.contains("volume") || n.contains("quieter") || n.contains("louder") {
             let volume: Double
-            if n.contains("quieter") || n.contains("lower") { volume = 0.4 }
+            if let requested = requestedPercentage(n) { volume = requested }
+            else if n.contains("quieter") || n.contains("lower") { volume = 0.4 }
             else if n.contains("louder") || n.contains("boost") { volume = 1 }
-            else { volume = parsedSpeed(from: n) ?? 0.8 }
+            else { volume = requestedPercentage(n) ?? 0.8 }
             add(.setVolume, amount: min(max(volume, 0), 1))
         }
         if n.contains("slow") || n.contains("slow-mo") || n.contains("slowmo")
             || n.contains("half speed") || n.contains("speed up") || n.contains("faster")
-            || n.contains("2x") || n.contains("3x") || n.contains("0.5x") || n.contains("speed") {
+            || n.contains("speed") || n.range(of: #"\d+(?:\.\d+)?\s*x"#, options: .regularExpression) != nil {
             add(.setSpeed, amount: parsedSpeed(from: n) ?? (n.contains("slow") ? 0.5 : 2))
         }
-        if let crop = cropKind(fromPrompt: n) { add(.crop, effect: crop) }
-        if n.contains("rotate") || n.contains("90") || n.contains("180") || n.contains("270") {
-            let turns = n.contains("180") ? 2 : n.contains("270") ? 3 : 1
+        if !n.contains("flip") && !n.contains("mirror"), let crop = cropKind(fromPrompt: n) { add(.crop, effect: crop) }
+        if n.contains("rotate") {
+            let clockwiseTurns = n.contains("180") ? 2 : n.contains("270") ? 3 : 1
+            let turns = n.contains("counterclockwise") ? 4 - clockwiseTurns : clockwiseTurns
             add(.rotate, amount: Double(turns))
         }
         if n.contains("flip") || n.contains("mirror") {
             add(.flip, text: n.contains("vert") ? "vertical" : "horizontal")
         }
-        if let filter = filterKind(fromPrompt: n) { add(.setFilter, amount: 1, effect: filter) }
-        if n.contains("fade in") && !wantsTransition {
-            add(.addKeyframe, amount: 1, property: "opacity", fadeIn: true)
-        } else if n.contains("fade out") && !wantsTransition {
-            add(.addKeyframe, amount: 1, property: "opacity", fadeOut: true)
+        if hasFade && !wantsTransition && !audioFade && effect == nil {
+            add(.addKeyframe, amount: 1, property: "opacity", fadeIn: fadeIn, fadeOut: fadeOut)
         }
-        if let effect = namedEffect(fromPrompt: n) { add(.addEffect, amount: 0.65, effect: effect) }
-        if n.contains("title") || n.contains("add text") || n.contains("on-screen text") {
+        if n.contains("title") || n.contains("text") && n.contains("__label__") {
             let quoted = quotedText(from: prompt) ?? "Title"
             add(.addText, amount: 1, text: quoted)
         }
         if n.contains("marker") { add(.addMarker, text: quotedText(from: prompt) ?? "Marker") }
-        if n.contains("opacity") || n.contains("transparent") {
-            add(.addKeyframe, amount: n.contains("transparent") ? 0.4 : 0.7, property: "opacity")
+        if !hasFade && (n.contains("opacity") || n.contains("transparent")) {
+            add(.addKeyframe, amount: requestedPercentage(n) ?? (n.contains("transparent") ? 0.4 : 0.7), property: "opacity")
         }
         return drafts.isEmpty ? nil : Array(drafts.prefix(8))
     }
 
     private static func parsedSpeed(from prompt: String) -> Double? {
-        if prompt.contains("0.5x") || prompt.contains("half") { return 0.5 }
-        if prompt.contains("3x") { return 3 }
-        if prompt.contains("2x") || prompt.contains("double") || prompt.contains("twice") { return 2 }
+        if let match = prompt.range(of: #"(\d+(?:\.\d+)?)\s*x"#, options: .regularExpression),
+           let value = Double(prompt[match].replacingOccurrences(of: "x", with: "").trimmingCharacters(in: .whitespaces)) {
+            return value
+        }
+        if prompt.contains("half") { return 0.5 }
+        if prompt.contains("double") || prompt.contains("twice") { return 2 }
         if prompt.contains("slow") { return 0.5 }
         if prompt.contains("speed up") || prompt.contains("faster") { return 2 }
-        if let match = prompt.range(of: #"(\d+(?:\.\d+)?)\s*x"#, options: .regularExpression) {
-            return Double(prompt[match].replacingOccurrences(of: "x", with: "").trimmingCharacters(in: .whitespaces))
-        }
         return nil
     }
 
@@ -974,7 +1080,7 @@ struct EditorCopilotEditPlan: Equatable, Sendable {
             if ["scale", "cropScale", "textScale"].contains(resolved), amount <= 0.01 || abs(amount - 1) < 0.001 {
                 amount = 1.2
             }
-            if resolved == "opacity", amount <= 0.01 {
+            if resolved == "opacity", amount <= 0.01, fadeIn || fadeOut {
                 amount = 1
             }
             amount = clamp(amount, property: resolved)

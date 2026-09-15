@@ -4,6 +4,29 @@ This document explains **what the Mixtape editing flow does today** — from **N
 
 ---
 
+## Source organization
+
+- `ViewModel/EditorViewModel.swift` owns the observable state and initialization.
+  Its `EditorViewModel+…` extensions group operations by editing feature, including
+  clips, audio, overlays, keyframes, color, motion tracking, sequences, and Copilot.
+  Playback, persistence, and cache coordination have dedicated extensions too.
+  Keep stored state in the main declaration so observation and initialization stay
+  centralized. Helpers used by another extension have internal visibility because
+  Swift does not allow cross-file access to private members; keep other helpers private.
+- `ViewModel/EditorPreviewBuildCoordinator.swift` owns in-flight preview coordination.
+- `Services/EditorCompositionBuilder.swift` assembles the composition. Its extensions
+  contain speed insertion, audio/overlay animation, video composition, transitions,
+  backgrounds, and asset loading. Reverse media and disposable media caches live in
+  `EditorReverseMediaService.swift` and `EditorMediaCache.swift`.
+- `View/Components/EditorBottomToolbar.swift` owns the toolbar itself. Tool panels
+  such as `VisualEffectsStackPanel.swift`, `EditorTemplatesPanel.swift`, and
+  `PrecisionEditToolPanel.swift` live in their own files with their local helpers.
+- `View/Components/EditorTimeline.swift` arranges the timeline lanes. Thumbnail views,
+  boundary controls, layout calculations, and playback controls have separate files.
+
+Add each new Swift file to the corresponding group **and** the Mixtape Sources build
+phase in `Mixtape.xcodeproj`; this project uses explicit source membership.
+
 ## 1. From the home screen to the editor (project + media pick)
 
 The flow before **`EditorScreen`** is: **home list → New Project → pick photos/videos → Next (preload) → editor**. Projects are **saved automatically** as JSON (`EditorProject`) — clip order, trim, speed, volume, text overlays, **background audio clips and fades**, opening/cut/closing transitions, playhead, selection, and **project title** — not raw video files.
