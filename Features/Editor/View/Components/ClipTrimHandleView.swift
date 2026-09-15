@@ -147,7 +147,8 @@ final class ClipTrimHandleContainerView: UIView {
             scrollViewWhilePanning = enclosingScrollView()
             scrollViewWhilePanning?.isScrollEnabled = false
         case .changed:
-            let deltaX = gesture.translation(in: self).x
+            // The left edge moves this view during trimming; measure in stable screen space.
+            let deltaX = gesture.translation(in: window).x
             let deltaTimeline = TimeInterval(deltaX / pixelsPerSecond)
             let deltaSource = deltaTimeline * TimeInterval(max(speed, 0.001))
             let minSpan = EditorClip.minimumSourceSpan(speed: speed)

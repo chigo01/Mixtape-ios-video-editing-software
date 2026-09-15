@@ -1697,7 +1697,14 @@ private struct TextOverlayThumb: View {
     }
 
     var body: some View {
-        let content = barContent
+        barContent
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isTrimming, !isMoving else { return }
+                onSelect()
+            }
+            // Keep body movement below the UIKit handles so it cannot steal a trim.
+            .gesture(moveGesture, including: isSelected && allowsEditing ? .all : .none)
             .overlay {
                 if isSelected && allowsEditing {
                     ClipTrimHandleRepresentable(
@@ -1705,7 +1712,7 @@ private struct TextOverlayThumb: View {
                         trimStart: overlay.startTime,
                         trimEnd: overlay.endTime,
                         originalDuration: max(layout.timelineExtent, 1),
-                        allowsDurationExtension: false,
+                        allowsDurationExtension: true,
                         speed: 1.0,
                         pixelsPerSecond: layout.pixelsPerSecond,
                         onTrimChanged: { _, start, end in
@@ -1726,38 +1733,30 @@ private struct TextOverlayThumb: View {
                     .allowsHitTesting(true)
                 }
             }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isTrimming, !isMoving else { return }
-                onSelect()
-            }
             .scaleEffect(isHoldActive ? 1.04 : 1)
             .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
             .offset(x: displayStartX, y: 0)
 
-        Group {
-            if isSelected && allowsEditing {
-                content.gesture(moveGesture)
-            } else {
-                content
-            }
-        }
         .onChange(of: isSelected) { _, selected in
             if !selected { finishInteraction() }
         }
         .onChange(of: isMoveGestureActive) { _, active in
-            if !active { finishInteraction() }
+            if !active { finishMoveInteraction() }
         }
         .onDisappear { finishInteraction() }
     }
 
-    private func finishInteraction() {
+    private func finishMoveInteraction() {
         if isHoldActive || moveBaselineStart != nil {
             isMoving = false
             isHoldActive = false
             moveBaselineStart = nil
             onMoveEnded()
         }
+    }
+
+    private func finishInteraction() {
+        finishMoveInteraction()
         if trimBaseline != nil {
             isTrimming = false
             trimBaseline = nil

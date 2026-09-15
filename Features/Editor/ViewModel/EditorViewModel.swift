@@ -4703,9 +4703,21 @@ final class EditorViewModel {
             textTimeRangeUndoSnapshot = currentSnapshot()
         }
 
-        guard let idx = textOverlays.firstIndex(where: { $0.id == id }) else { return }
-        textOverlays[idx].startTime = snappedTime(start, excluding: id)
-        textOverlays[idx].endTime = snappedTime(end, excluding: id)
+        guard let idx = textOverlays.firstIndex(where: { $0.id == id }),
+              let baseline = textTimeRangeUndoSnapshot?.textOverlays.first(where: { $0.id == id }) else { return }
+        let minimumSpan = min(EditorClip.minimumSourceSpan(speed: 1), baseline.duration)
+        var newStart = baseline.startTime
+        var newEnd = baseline.endTime
+        // Snap only the dragged edge; never move the opposite edge or collapse the range.
+        if start != baseline.startTime {
+            newStart = min(max(0, snappedTime(start, excluding: id)), newEnd - minimumSpan)
+        } else if end != baseline.endTime {
+            // Text has no source-media limit and may extend the timeline.
+            let snappedEnd = end > totalDuration ? end : snappedTime(end, excluding: id)
+            newEnd = max(newStart + minimumSpan, snappedEnd)
+        }
+        textOverlays[idx].startTime = newStart
+        textOverlays[idx].endTime = newEnd
     }
 
     func commitTextOverlayTimeRange() {
