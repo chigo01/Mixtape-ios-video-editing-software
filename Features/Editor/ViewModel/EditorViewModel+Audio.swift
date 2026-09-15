@@ -37,8 +37,13 @@ extension EditorViewModel {
     }
 
     func loadAudioClip(from sourceURL: URL, insertion: AudioInsertion = .newTrackAtPlayhead) {
-        guard sourceURL.startAccessingSecurityScopedResource() else { return }
-        defer { sourceURL.stopAccessingSecurityScopedResource() }
+        // Some document providers return an already-readable local URL and correctly
+        // report `false` here because no new security scope was needed. Treating that
+        // result as a failure made otherwise valid imports disappear silently.
+        let didStartSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
+        }
 
         let fm = FileManager.default
         let audioDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -54,11 +59,17 @@ extension EditorViewModel {
 
         let avAsset = AVURLAsset(url: dest)
         Task {
-            let originalDuration: TimeInterval
-            if let cmDuration = try? await avAsset.load(.duration) {
-                originalDuration = cmDuration.seconds
-            } else {
-                originalDuration = totalDuration
+            let assetDuration = (try? await avAsset.load(.duration))?.seconds
+            let audioFileDuration: TimeInterval? = {
+                guard let file = try? AVAudioFile(forReading: dest),
+                      file.processingFormat.sampleRate > 0 else { return nil }
+                return Double(file.length) / file.processingFormat.sampleRate
+            }()
+            guard let originalDuration = [assetDuration, audioFileDuration]
+                .compactMap({ $0 })
+                .first(where: { $0.isFinite && $0 >= EditorAudioClip.minimumSpan }) else {
+                try? fm.removeItem(at: dest)
+                return
             }
 
             await MainActor.run {
@@ -351,6 +362,19 @@ extension EditorViewModel {
         guard let idx = audioClips.firstIndex(where: { $0.id == clipID }) else { return }
         audioClips[idx].timelineStart = snappedTime(timelineStart, excluding: clipID)
         invalidateComposition()
+    }
+
+    /// The decoded waveform knows the real file duration. Use it to repair stale
+    /// saved metadata so the visible bar and composition cover the same audio.
+    func reconcileAudioSourceDuration(clipID: UUID, duration: TimeInterval) {
+        guard let index = audioClips.firstIndex(where: { $0.id == clipID }),
+              audioClips[index].reconcileSourceDuration(duration) else { return }
+        invalidateComposition()
+        scheduleSave()
+        // The bar has just changed length, so rebuild the player from the same
+        // corrected duration immediately. This keeps the sound and its visible
+        // timeline extent in sync without waiting for another edit or replay.
+        Task { await alignPlaybackToTimeline() }
     }
 
     func setAudioLaneIndex(clipID: UUID, laneIndex: Int) {

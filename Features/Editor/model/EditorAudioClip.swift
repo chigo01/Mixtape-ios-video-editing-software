@@ -9,7 +9,7 @@ struct EditorAudioClip: Identifiable, Hashable {
     let id: UUID
     var title: String
     var fileURL: URL
-    let originalDuration: TimeInterval
+    private(set) var originalDuration: TimeInterval
     var trimStart: TimeInterval
     var trimEnd: TimeInterval
     var timelineStart: TimeInterval
@@ -80,6 +80,26 @@ struct EditorAudioClip: Identifiable, Hashable {
 
     var timelineEnd: TimeInterval {
         timelineStart + duration
+    }
+
+    /// Correct persisted or provider-supplied duration metadata from the decoded
+    /// audio file. An untrimmed clip follows the file's full duration; a clip the
+    /// user deliberately trimmed keeps that edit and only clamps invalid bounds.
+    mutating func reconcileSourceDuration(_ decodedDuration: TimeInterval) -> Bool {
+        guard decodedDuration.isFinite, decodedDuration >= Self.minimumSpan else { return false }
+        let tolerance = max(0.05, originalDuration * 0.002)
+        let wasFullLength = abs(trimEnd - originalDuration) <= tolerance
+        guard abs(originalDuration - decodedDuration) > tolerance
+                || trimStart > decodedDuration || trimEnd > decodedDuration else { return false }
+
+        originalDuration = decodedDuration
+        trimStart = min(max(0, trimStart), max(0, decodedDuration - Self.minimumSpan))
+        trimEnd = wasFullLength
+            ? decodedDuration
+            : min(max(trimEnd, trimStart + Self.minimumSpan), decodedDuration)
+        fadeInDuration = min(fadeInDuration, duration)
+        fadeOutDuration = min(fadeOutDuration, duration)
+        return true
     }
 
     func split(atSourceTime sourceTime: TimeInterval) -> (left: EditorAudioClip, right: EditorAudioClip)? {

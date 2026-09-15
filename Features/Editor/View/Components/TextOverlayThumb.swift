@@ -25,6 +25,7 @@ struct TextOverlayThumb: View {
 
     @State private var trimBaseline: (startTime: TimeInterval, startX: CGFloat)?
     @State private var moveBaselineStart: TimeInterval?
+    @State private var moveTranslationX: CGFloat = 0
     @State private var isHoldActive = false
     @GestureState private var isMoveGestureActive = false
 
@@ -85,13 +86,21 @@ struct TextOverlayThumb: View {
             }
             .scaleEffect(isHoldActive ? 1.04 : 1)
             .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
-            .offset(x: displayStartX, y: 0)
+            // Keep the model stable while the finger moves. Updating startTime on
+            // every frame rebuilds the lane layout and makes the bar stutter.
+            .offset(x: displayStartX + moveTranslationX, y: 0)
 
         .onChange(of: isSelected) { _, selected in
             if !selected { finishInteraction() }
         }
         .onChange(of: isMoveGestureActive) { _, active in
-            if !active { finishMoveInteraction() }
+            guard !active else { return }
+            // GestureState resets beside onEnded. Defer cancellation cleanup so
+            // a normal release can commit its final position first.
+            Task { @MainActor in
+                await Task.yield()
+                if !isMoveGestureActive { finishMoveInteraction() }
+            }
         }
         .onDisappear { finishInteraction() }
     }
@@ -100,8 +109,8 @@ struct TextOverlayThumb: View {
         if isHoldActive || moveBaselineStart != nil {
             isMoving = false
             isHoldActive = false
+            moveTranslationX = 0
             moveBaselineStart = nil
-            onMoveEnded()
         }
     }
 
@@ -181,18 +190,23 @@ struct TextOverlayThumb: View {
                         moveBaselineStart = overlay.startTime
                     }
                     let baseX = layout.contentX(forTime: moveBaselineStart ?? overlay.startTime)
-                    let newX = max(0, baseX + drag.translation.width)
-                    onMove(layout.time(atContentX: newX))
+                    moveTranslationX = max(-baseX, drag.translation.width)
                 default:
                     break
                 }
             }
             .onEnded { _ in
-                let didMove = moveBaselineStart != nil
+                let baseline = moveBaselineStart
+                let finalTranslation = moveTranslationX
                 isMoving = false
                 isHoldActive = false
+                moveTranslationX = 0
                 moveBaselineStart = nil
-                if didMove { onMoveEnded() }
+                if let baseline {
+                    let baseX = layout.contentX(forTime: baseline)
+                    onMove(layout.time(atContentX: max(0, baseX + finalTranslation)))
+                    onMoveEnded()
+                }
             }
     }
 
@@ -207,4 +221,3 @@ struct TextOverlayThumb: View {
         s.count > 8 ? String(s.prefix(7)) + "…" : s
     }
 }
-

@@ -1364,8 +1364,9 @@ private struct AudioSourceSheets: ViewModifier {
             ) {
                 AudioPickerView(
                     onPick: { url in
+                        let insertion = pendingInsertion
                         isAudioPickerPresented = false
-                        vm.loadAudioClip(from: url, insertion: pendingInsertion)
+                        vm.loadAudioClip(from: url, insertion: insertion)
                         insertAfterAudioClipID = nil
                     },
                     onCancel: {
@@ -1429,6 +1430,9 @@ private struct AudioSourceSheets: ViewModifier {
     private func startVideoAudioExtraction(from item: MediaItem) {
         guard !isExtractingVideoAudio else { return }
         let insertion = pendingInsertion
+        // Capture the destination once. A slow iCloud/export operation must not
+        // inherit a later audio-add action's destination while it is finishing.
+        insertAfterAudioClipID = nil
         isExtractingVideoAudio = true
         extractionErrorMessage = nil
         extractionTask = Task {
@@ -1442,7 +1446,6 @@ private struct AudioSourceSheets: ViewModifier {
                 )
                 isExtractingVideoAudio = false
                 isVideoAudioPickerPresented = false
-                insertAfterAudioClipID = nil
             } catch is CancellationError {
                 isExtractingVideoAudio = false
             } catch {
@@ -1455,6 +1458,13 @@ private struct AudioSourceSheets: ViewModifier {
     }
 
     private func cancelVideoAudioExtraction() {
+        if isExtractingVideoAudio {
+            // Closing the picker should not throw away a completed or nearly-completed
+            // export. The task belongs to this editor modifier and can safely finish in
+            // the background; its captured insertion point remains stable.
+            isVideoAudioPickerPresented = false
+            return
+        }
         extractionTask?.cancel()
         extractionTask = nil
         isExtractingVideoAudio = false

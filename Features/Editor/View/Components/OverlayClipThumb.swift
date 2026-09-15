@@ -34,6 +34,7 @@ struct OverlayClipThumb: View {
     @State private var moveBaselineTimelineStart: TimeInterval?
     @State private var moveTranslation: CGSize = .zero
     @State private var isHoldActive = false
+    @GestureState private var isMoveGestureActive = false
 
     private var displayTimelineStart: TimeInterval {
         if let baseline = trimBaseline {
@@ -74,11 +75,25 @@ struct OverlayClipThumb: View {
             }
             .scaleEffect(isHoldActive ? 1.04 : 1)
             .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
-            .offset(x: startX, y: moveTranslation.height)
+            .offset(x: startX + moveTranslation.width, y: moveTranslation.height)
             .simultaneousGesture(
                 moveGesture,
                 including: isSelected && allowsEditing ? .all : .none
             )
+            .onChange(of: isSelected) { _, selected in
+                if !selected { cancelInteraction() }
+            }
+            .onChange(of: isMoveGestureActive) { _, active in
+                guard !active else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    if !isMoveGestureActive,
+                       isHoldActive || isMoving || moveBaselineTimelineStart != nil {
+                        cancelMove()
+                    }
+                }
+            }
+            .onDisappear { cancelInteraction() }
     }
 
     private var thumbnailContent: some View {
@@ -157,6 +172,7 @@ struct OverlayClipThumb: View {
     private var moveGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .updating($isMoveGestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard !isTrimming else { return }
                 switch value {
@@ -169,8 +185,6 @@ struct OverlayClipThumb: View {
                     if moveBaselineTimelineStart == nil {
                         moveBaselineTimelineStart = clip.timelineStart
                     }
-                    let baseX = layout.contentX(forTime: moveBaselineTimelineStart ?? clip.timelineStart)
-                    onMove(layout.time(atContentX: max(0, baseX + drag.translation.width)))
                 default:
                     break
                 }
@@ -180,12 +194,17 @@ struct OverlayClipThumb: View {
                     let laneStep = laneHeight + 6
                     onMoveToLane(Int((drag.translation.height / laneStep).rounded()))
                 }
-                let didMove = moveBaselineTimelineStart != nil
+                let baseline = moveBaselineTimelineStart
+                let finalTranslation = moveTranslation
                 isMoving = false
                 isHoldActive = false
                 moveTranslation = .zero
                 moveBaselineTimelineStart = nil
-                if didMove { onMoveEnded() }
+                if let baseline {
+                    let baselineX = layout.contentX(forTime: baseline)
+                    onMove(layout.time(atContentX: max(0, baselineX + finalTranslation.width)))
+                    onMoveEnded()
+                }
             }
     }
 
@@ -196,5 +215,20 @@ struct OverlayClipThumb: View {
         onSelect()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
-}
 
+    private func cancelMove() {
+        isMoving = false
+        isHoldActive = false
+        moveTranslation = .zero
+        moveBaselineTimelineStart = nil
+    }
+
+    private func cancelInteraction() {
+        cancelMove()
+        if trimBaseline != nil {
+            isTrimming = false
+            trimBaseline = nil
+            onTrimEnded()
+        }
+    }
+}

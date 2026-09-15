@@ -412,6 +412,7 @@ struct VoiceoverRecorderView: View {
             .buttonStyle(.plain)
 
             Button {
+                guard insertedTakeURL == nil else { return }
                 stopPreview()
                 insertedTakeURL = take.fileURL
                 switch mode {
@@ -433,6 +434,7 @@ struct VoiceoverRecorderView: View {
                     .background(Capsule().fill(Color.appColors.primaryColor))
             }
             .buttonStyle(.plain)
+            .disabled(insertedTakeURL != nil)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))

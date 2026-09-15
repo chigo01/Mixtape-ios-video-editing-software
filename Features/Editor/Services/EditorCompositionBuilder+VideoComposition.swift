@@ -182,8 +182,18 @@ extension EditorCompositionBuilder {
                         assetTrack: overlay.track
                     )
                     let activeStart = max(overlay.timeRange.start, segment.timeRange.start)
+                    let activeEnd = min(overlay.timeRange.end, segment.timeRange.end)
+                    if activeStart > segment.timeRange.start {
+                        overlayLayer.setOpacity(0, at: segment.timeRange.start)
+                    }
                     overlayLayer.setTransform(overlay.transform, at: activeStart)
                     overlayLayer.setOpacity(overlay.opacity, at: activeStart)
+                    if activeEnd < segment.timeRange.end {
+                        // AVFoundation may keep returning the final frame of a short
+                        // composition track for the rest of this primary instruction.
+                        // Explicitly hide it at its timeline end so that frame cannot freeze.
+                        overlayLayer.setOpacity(0, at: activeEnd)
+                    }
                     return overlayLayer
                 }
             layerInstructions.append(layer)

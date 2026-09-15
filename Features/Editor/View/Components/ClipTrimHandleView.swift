@@ -48,6 +48,10 @@ struct ClipTrimHandleRepresentable: UIViewRepresentable {
             pixelsPerSecond: pixelsPerSecond
         )
     }
+
+    static func dismantleUIView(_ uiView: ClipTrimHandleContainerView, coordinator: ()) {
+        uiView.cancelActiveInteraction()
+    }
 }
 
 // MARK: - Container
@@ -91,12 +95,14 @@ final class ClipTrimHandleContainerView: UIView {
     /// Only the handle bars receive touches; the clip body passes taps through to SwiftUI.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, bounds.contains(point) else { return nil }
-        for handle in [leftHandle, rightHandle] {
-            let local = convert(point, to: handle)
-            if handle.point(inside: local, with: event) {
-                return handle
-            }
-        }
+        // Keep a real center grab area on short clips. Expanding both 12pt handles
+        // by 10pt used to make their hit regions overlap across the entire clip,
+        // so attempts to move a short audio item started a trim and locked scrolling.
+        let minimumCenterWidth: CGFloat = 12
+        let maximumEdgeHitWidth = max(8, (bounds.width - minimumCenterWidth) / 2)
+        let edgeHitWidth = min(handleWidth + 10, maximumEdgeHitWidth)
+        if point.x <= edgeHitWidth { return leftHandle }
+        if point.x >= bounds.width - edgeHitWidth { return rightHandle }
         return nil
     }
 
@@ -189,6 +195,16 @@ final class ClipTrimHandleContainerView: UIView {
             view = current.superview
         }
         return nil
+    }
+
+    /// UIKit can dismantle a representable while its pan recognizer is active
+    /// (selection changes and lazy timeline rows can both do this). Always return
+    /// direct scroll control to SwiftUI before the handle view goes away.
+    func cancelActiveInteraction() {
+        guard let scrollViewWhilePanning else { return }
+        scrollViewWhilePanning.isScrollEnabled = true
+        self.scrollViewWhilePanning = nil
+        onTrimEnded?()
     }
 }
 

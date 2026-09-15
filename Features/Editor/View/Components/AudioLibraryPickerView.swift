@@ -19,6 +19,7 @@ struct AudioLibraryPickerView: View {
     @State private var library = AudioLibraryViewModel()
     @State private var pendingAttributionItem: EditorAudioLibraryItem?
     @State private var insertErrorMessage: String?
+    @State private var insertingItemID: String?
 
     private var searchTaskID: String {
         "\(library.searchText)|\(library.selectedCategory?.rawValue ?? "")"
@@ -229,7 +230,8 @@ struct AudioLibraryPickerView: View {
             item: item,
             isPlaying: library.previewingItemID == item.id,
             isFavorite: library.isFavorite(item),
-            isResolving: library.resolvingItemID == item.id,
+            isResolving: insertingItemID == item.id,
+            isInsertDisabled: insertingItemID != nil,
             isCached: library.isCached(item),
             onTogglePreview: { library.togglePreview(item) },
             onToggleFavorite: { library.toggleFavorite(item) },
@@ -238,14 +240,17 @@ struct AudioLibraryPickerView: View {
     }
 
     private func insert(_ item: EditorAudioLibraryItem, skipAttributionCheck: Bool) {
+        guard insertingItemID == nil else { return }
         if !skipAttributionCheck, let license = item.license, license.requiresAttribution {
             pendingAttributionItem = item
             return
         }
         pendingAttributionItem = nil
+        insertingItemID = item.id
 
         Task {
             library.stopPreview()
+            defer { insertingItemID = nil }
             do {
                 let url = try await library.resolvedLocalURL(for: item)
                 try vm.insertAudioLibraryItem(
@@ -269,6 +274,7 @@ private struct AudioLibraryItemRow: View {
     let isPlaying: Bool
     let isFavorite: Bool
     let isResolving: Bool
+    let isInsertDisabled: Bool
     let isCached: Bool
     let onTogglePreview: () -> Void
     let onToggleFavorite: () -> Void
@@ -343,6 +349,8 @@ private struct AudioLibraryItemRow: View {
                             .background(Circle().fill(Color.appColors.primaryColor))
                     }
                     .buttonStyle(.plain)
+                    .disabled(isInsertDisabled)
+                    .opacity(isInsertDisabled ? 0.45 : 1)
                     .accessibilityLabel("Insert \(item.title)")
                 }
             }

@@ -358,6 +358,19 @@ struct EditorTimeline: View {
             .onChange(of: vm.timelineRevealNonce) { _, _ in
                 revealPlayhead(using: proxy)
             }
+            .onDisappear {
+                // A disappearing timeline must never carry a gesture lock into
+                // the next presentation of the editor.
+                isScrubbing = false
+                isAudioTrimming = false
+                isAudioMoving = false
+                isTextTrimming = false
+                isTextMoving = false
+                isGraphicTrimming = false
+                isGraphicMoving = false
+                isOverlayTrimming = false
+                isOverlayMoving = false
+            }
                 }
             }
         }
@@ -1199,10 +1212,14 @@ struct EditorTimeline: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Color.white.opacity(0.04))
 
-                    ForEach(laneClips) { clip in
-                        let slotX = CGFloat(clip.timelineEnd) * pixelsPerSecond + insertSlotWidth / 2
+                    // One append control per lane is enough. Keeping controls after clips that
+                    // already have a successor puts buttons on top of the next waveform and its
+                    // trim handles, making a continuous audio track look broken and cluttered.
+                    if let lastClip = laneClips.last {
+                        // Leave room for the selected clip's trailing trim handle.
+                        let slotX = layout.contentX(forTime: lastClip.timelineEnd) + 26
                         if slotX < totalWidth - 20 {
-                            audioInsertButton(afterClipID: clip.id)
+                            audioInsertButton(afterClipID: lastClip.id)
                                 .offset(x: slotX, y: (audioLaneHeight - 24) / 2)
                                 .zIndex(0)
                         }
@@ -1211,7 +1228,7 @@ struct EditorTimeline: View {
                     ForEach(laneClips) { clip in
                         AudioClipThumb(
                             clip: clip,
-                            pixelsPerSecond: pixelsPerSecond,
+                            layout: layout,
                             scrubMinimumDistance: audioScrubMinimumDistance,
                             laneHeight: audioLaneHeight,
                             isSelected: vm.selectedAudioClipID == clip.id
@@ -1235,26 +1252,16 @@ struct EditorTimeline: View {
                                     laneIndex: max(0, clip.laneIndex + laneDelta)
                                 )
                             },
-                            onMoveEnded: { vm.commitAudioMove() }
+                            onMoveEnded: { vm.commitAudioMove() },
+                            onResolvedSourceDuration: { duration in
+                                vm.reconcileAudioSourceDuration(clipID: clip.id, duration: duration)
+                            }
                         )
                         .opacity(vm.isItemInActiveSequence(.audio(clip.id)) ? 1 : 0.18)
                         .allowsHitTesting(vm.isItemInActiveSequence(.audio(clip.id)))
                         .zIndex(vm.selectedAudioClipID == clip.id ? 10 : 1)
                     }
 
-                    if lane == 0 {
-                        Button(action: onAddAudioTrack) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(.black)
-                                .frame(width: 22, height: 22)
-                                .background(Circle().fill(Color.appColors.primaryColor))
-                        }
-                        .buttonStyle(.plain)
-                        .offset(x: max(0, totalWidth - 26), y: (audioLaneHeight - 22) / 2)
-                        .zIndex(20)
-                        .accessibilityLabel("Add audio track")
-                    }
                 }
                 .frame(width: totalWidth, height: audioLaneHeight)
                 .id(lane)

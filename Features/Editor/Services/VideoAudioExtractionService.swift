@@ -54,7 +54,11 @@ enum VideoAudioExtractionService {
                 cancellationBox.cancel()
             }
             try Task.checkCancellation()
-            return ExtractedVideoAudio(fileURL: destination, duration: duration)
+            let exportedDuration = (try? await AVURLAsset(url: destination).load(.duration))?.seconds
+            return ExtractedVideoAudio(
+                fileURL: destination,
+                duration: exportedDuration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? duration
+            )
         } catch is CancellationError {
             try? FileManager.default.removeItem(at: destination)
             throw CancellationError()

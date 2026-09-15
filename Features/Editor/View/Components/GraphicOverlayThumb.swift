@@ -21,7 +21,9 @@ struct GraphicOverlayThumb: View {
 
     @State private var trimBaseline: (time: TimeInterval, x: CGFloat)?
     @State private var moveBaseline: TimeInterval?
+    @State private var moveTranslationX: CGFloat = 0
     @State private var isHoldActive = false
+    @GestureState private var isMoveGestureActive = false
 
     private var startX: CGFloat {
         if let trimBaseline {
@@ -80,13 +82,28 @@ struct GraphicOverlayThumb: View {
         .onTapGesture { if !isTrimming && !isMoving { onSelect() } }
         .scaleEffect(isHoldActive ? 1.04 : 1)
         .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
-        .gesture(moveGesture)
-        .offset(x: startX)
+        .simultaneousGesture(moveGesture)
+        .offset(x: startX + moveTranslationX)
+        .onChange(of: isSelected) { _, selected in
+            if !selected { cancelInteraction() }
+        }
+        .onChange(of: isMoveGestureActive) { _, active in
+            guard !active else { return }
+            Task { @MainActor in
+                await Task.yield()
+                if !isMoveGestureActive,
+                   isHoldActive || isMoving || moveBaseline != nil {
+                    cancelMove()
+                }
+            }
+        }
+        .onDisappear { cancelInteraction() }
     }
 
     private var moveGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
             .sequenced(before: DragGesture(minimumDistance: 0))
+            .updating($isMoveGestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard !isTrimming else { return }
                 switch value {
@@ -97,17 +114,23 @@ struct GraphicOverlayThumb: View {
                     activateHoldMove()
                     if moveBaseline == nil { moveBaseline = graphic.startTime }
                     let baseX = layout.contentX(forTime: moveBaseline ?? graphic.startTime)
-                    onMove(layout.time(atContentX: max(0, baseX + drag.translation.width)))
+                    moveTranslationX = max(-baseX, drag.translation.width)
                 default:
                     break
                 }
             }
             .onEnded { _ in
-                let didMove = moveBaseline != nil
+                let baseline = moveBaseline
+                let finalTranslation = moveTranslationX
                 isMoving = false
                 isHoldActive = false
+                moveTranslationX = 0
                 moveBaseline = nil
-                if didMove { onEditEnded() }
+                if let baseline {
+                    let baseX = layout.contentX(forTime: baseline)
+                    onMove(layout.time(atContentX: max(0, baseX + finalTranslation)))
+                    onEditEnded()
+                }
             }
     }
 
@@ -118,5 +141,20 @@ struct GraphicOverlayThumb: View {
         onSelect()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
-}
 
+    private func cancelMove() {
+        isMoving = false
+        isHoldActive = false
+        moveTranslationX = 0
+        moveBaseline = nil
+    }
+
+    private func cancelInteraction() {
+        cancelMove()
+        if trimBaseline != nil {
+            isTrimming = false
+            trimBaseline = nil
+            onEditEnded()
+        }
+    }
+}

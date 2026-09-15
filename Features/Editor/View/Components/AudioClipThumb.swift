@@ -12,7 +12,7 @@ import AVFoundation
 
 struct AudioClipThumb: View {
     let clip: EditorAudioClip
-    let pixelsPerSecond: CGFloat
+    let layout: TimelineLayout
     let scrubMinimumDistance: CGFloat
     let laneHeight: CGFloat
     let isSelected: Bool
@@ -27,20 +27,27 @@ struct AudioClipThumb: View {
     let onMove: (TimeInterval) -> Void
     let onMoveToLane: (Int) -> Void
     let onMoveEnded: () -> Void
+    let onResolvedSourceDuration: (TimeInterval) -> Void
 
     @State private var trimBaseline: (timelineStart: TimeInterval, trimStart: TimeInterval)?
     @State private var moveBaselineTimelineStart: TimeInterval?
     @State private var moveTranslation: CGSize = .zero
     @State private var isHoldActive = false
+    @GestureState private var isMoveGestureActive = false
     /// Full-file peak envelope from `AudioWaveformGenerator`. The visible bars are sliced to
     /// this clip's trim window so the waveform matches the audio you actually hear.
     @State private var waveform: AudioWaveform?
 
     private var width: CGFloat {
         max(
-            TimelineLayout.minimumItemWidth(for: pixelsPerSecond),
-            CGFloat(clip.duration) * pixelsPerSecond
+            layout.minimumItemWidth,
+            layout.contentX(forTime: displayTimelineStart + clip.duration)
+                - layout.contentX(forTime: displayTimelineStart)
         )
+    }
+
+    private var startX: CGFloat {
+        layout.contentX(forTime: displayTimelineStart)
     }
 
     /// During a leading-edge trim the clip must shift on the timeline without
@@ -63,7 +70,7 @@ struct AudioClipThumb: View {
                         originalDuration: clip.originalDuration,
                         allowsDurationExtension: false,
                         speed: 1.0,
-                        pixelsPerSecond: pixelsPerSecond,
+                        pixelsPerSecond: layout.pixelsPerSecond,
                         onTrimChanged: { _, start, end in
                             if trimBaseline == nil {
                                 trimBaseline = (clip.timelineStart, clip.trimStart)
@@ -89,12 +96,31 @@ struct AudioClipThumb: View {
             .scaleEffect(isHoldActive ? 1.04 : 1)
             .shadow(color: .black.opacity(isHoldActive ? 0.5 : 0), radius: 7, y: 3)
             .offset(
-                x: CGFloat(displayTimelineStart) * pixelsPerSecond,
+                x: startX + moveTranslation.width,
                 y: moveTranslation.height
             )
+            .onChange(of: isSelected) { _, selected in
+                if !selected { cancelInteraction() }
+            }
+            .onChange(of: isMoveGestureActive) { _, active in
+                guard !active else { return }
+                // Allow a normal onEnded callback to commit before treating the
+                // state reset as an interrupted gesture.
+                Task { @MainActor in
+                    await Task.yield()
+                    if !isMoveGestureActive,
+                       isHoldActive || isMoving || moveBaselineTimelineStart != nil {
+                        cancelMove()
+                    }
+                }
+            }
+            .onDisappear { cancelInteraction() }
 
         if isSelected && allowsEditing {
-            content.gesture(moveGesture)
+            // Match OverlayClipThumb: the body move recognizer must coexist with
+            // the UIKit edge handles. Attaching it with `.gesture` lets SwiftUI
+            // claim the drag first, which makes audio length trimming appear dead.
+            content.simultaneousGesture(moveGesture, including: .all)
         } else {
             content.gesture(scrubGesture)
         }
@@ -116,14 +142,21 @@ struct AudioClipThumb: View {
                 .padding(.vertical, 3)
                 .task(id: clip.playbackFileURL) {
                     waveform = await AudioWaveformGenerator.shared.waveform(for: clip.playbackFileURL)
+                    if let waveform {
+                        onResolvedSourceDuration(waveform.duration)
+                    }
                 }
 
             HStack(spacing: 5) {
-                Image(systemName: "music.note")
-                    .font(.system(size: 9, weight: .bold))
-                Text(clip.title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
+                if width >= 24 {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                if width >= 68 {
+                    Text(clip.title)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
             }
             .foregroundColor(Color.white.opacity(0.85))
             .padding(.horizontal, 8)
@@ -141,8 +174,11 @@ struct AudioClipThumb: View {
         DragGesture(minimumDistance: scrubMinimumDistance, coordinateSpace: .local)
             .onChanged { value in
                 guard !isTrimming else { return }
-                let frac = width > 0 ? max(0, min(1, value.location.x / width)) : 0
-                let t = clip.timelineStart + frac * clip.duration
+                let contentX = layout.contentX(forTime: clip.timelineStart) + value.location.x
+                let t = min(
+                    clip.timelineEnd,
+                    max(clip.timelineStart, layout.time(atContentX: contentX))
+                )
                 onScrub(t)
             }
             .onEnded { _ in
@@ -154,6 +190,7 @@ struct AudioClipThumb: View {
     private var moveGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.28, maximumDistance: 16)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .updating($isMoveGestureActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard !isTrimming else { return }
                 switch value {
@@ -166,9 +203,6 @@ struct AudioClipThumb: View {
                     if moveBaselineTimelineStart == nil {
                         moveBaselineTimelineStart = clip.timelineStart
                     }
-                    let delta = TimeInterval(drag.translation.width / pixelsPerSecond)
-                    let base = moveBaselineTimelineStart ?? clip.timelineStart
-                    onMove(max(0, base + delta))
                 default:
                     break
                 }
@@ -178,12 +212,17 @@ struct AudioClipThumb: View {
                     let laneStep = laneHeight + 5
                     onMoveToLane(Int((drag.translation.height / laneStep).rounded()))
                 }
-                let didMove = moveBaselineTimelineStart != nil
+                let baseline = moveBaselineTimelineStart
+                let finalTranslation = moveTranslation
                 isMoving = false
                 isHoldActive = false
                 moveTranslation = .zero
                 moveBaselineTimelineStart = nil
-                if didMove { onMoveEnded() }
+                if let baseline {
+                    let baselineX = layout.contentX(forTime: baseline)
+                    onMove(layout.time(atContentX: max(0, baselineX + finalTranslation.width)))
+                    onMoveEnded()
+                }
             }
     }
 
@@ -194,5 +233,20 @@ struct AudioClipThumb: View {
         onSelect()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
-}
 
+    private func cancelMove() {
+        isMoving = false
+        isHoldActive = false
+        moveTranslation = .zero
+        moveBaselineTimelineStart = nil
+    }
+
+    private func cancelInteraction() {
+        cancelMove()
+        if trimBaseline != nil {
+            isTrimming = false
+            trimBaseline = nil
+            onTrimEnded()
+        }
+    }
+}
