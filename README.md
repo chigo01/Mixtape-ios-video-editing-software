@@ -51,6 +51,27 @@ online sound-effects search is unavailable.
   where space allows. Following pauses during manual scrolling, scrubbing, trimming,
   moving, reordering, or zooming, then resumes while playback continues.
 
+### Preview responsiveness and autosaving
+
+The September 15, 2026 responsiveness pass adds:
+
+- Shared preview builds: repeated requests for the same edit reuse pending work;
+  rapid edits skip intermediate waiting builds and reject outdated results.
+- Preview refreshes preserve the latest playhead position and respect the current
+  play/pause state. Leaving the editor invalidates pending preview requests.
+- One seek per playback alignment, removing the previous duplicate seek.
+- Background autosave encoding and atomic file writes after the existing 700 ms
+  debounce. Autosaves, final saves, reads, and deletions use one ordered file queue;
+  saving on exit still waits for completion.
+
+**Verification:** the unsigned Debug compilation succeeded. The developer reports
+that the changes are working well on their physical iPhone. Older-device performance,
+measured latency, and the full regression checklist remain unverified.
+
+**Follow-up work:** live timeline scrubbing, audio-only refreshes, adaptive preview
+resolution, and moving composition preparation off the main actor remain pending.
+This pass preserves the existing edit, undo, and export calculations.
+
 ### Keyframes and effect controls
 
 - Clip, media-overlay, audio, and text keyframes share a graph editor: tap a diamond

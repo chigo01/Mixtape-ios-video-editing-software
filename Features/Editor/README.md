@@ -595,6 +595,37 @@ Paths are under **`Features/Editor/`** unless noted. The **picker / new-project*
 
 ## 11. Changelog (recent editor work)
 
+### September 15, 2026 — preview responsiveness and autosave
+
+- **Build coordination:** `EditorPreviewBuildCoordinator` shares an in-flight build
+  for matching edits. Different edits wait for that build to finish, and only the
+  latest waiting request starts the next build. Outdated or cancelled requests
+  cannot install their results; teardown invalidates pending requests.
+- **Playback state:** `ensureCompositionPlayer()` checks the latest request and
+  build identity before replacing the player item. It uses the current playhead
+  position rather than restoring a position captured before the build, and resumes
+  playback only when the current state is playing.
+- **Seeking:** `alignPlaybackToTimeline()` delegates its seek to
+  `ensureCompositionPlayer()` instead of seeking a second time afterward.
+- **Autosave:** the existing 700 ms debounce remains. `ProjectStore.saveInBackground()`
+  captures the project value on the main actor, then `ProjectFileWriter` encodes JSON
+  and performs the atomic write on a serial queue. Final synchronous saves, reads,
+  and deletions share that queue so queued older writes cannot overtake them.
+  `saveNow()` still waits for the final save on exit. JSON date encoding and file
+  locations remain unchanged.
+- **Scope:** existing effect rendering, edit values, undo grouping, and export
+  calculations are preserved. Live timeline scrubbing, audio-only refreshes,
+  adaptive preview resolution, and moving the composition builder off the main
+  actor are follow-up work, not part of this pass.
+- **Verification:** unsigned Debug compilation succeeded. The developer reports
+  that the changes work well on their physical iPhone. This is not a measured
+  performance benchmark or confirmation of every regression scenario. The new
+  helper tests under `Tests/Performance/` have not been confirmed passing; older
+  supported devices and full preview/export regression checks remain pending.
+
+For device verification, exercise rapid edits, edit-then-scrub, Play followed quickly
+by Pause, leaving during a preview update, undo/redo, and save/close/reopen.
+
 Use this as a map of **what we built** and **why**, in learning order:
 
 | Feature | What it does | Key files | Concept to study |
@@ -706,7 +737,7 @@ Use this as a map of **what we built** and **why**, in learning order:
 - **Resume:** `ProjectListScreen` lists saved projects via **`ProjectListViewModel`**; tap anywhere on a **`ProjectCardView`** to reopen. The list re-sorts by `modifiedAt` and reloads each time the navigation path empties.
 - **Delete:** long-press a card → **Delete Project** → confirmation dialog → `ProjectStore.delete(id:)` removes the JSON file.
 - **Home card UI:** cover thumbnail from first clip; title and clip count use **text shadows** for readability (the old gradient scrim overlay was removed).
-- **Auto-save:** `EditorViewModel.scheduleSave()` debounces (~700ms) after edits; `saveNow()` on leave.
+- **Auto-save:** `EditorViewModel.scheduleSave()` debounces (~700ms) after edits, then encodes and writes through `ProjectStore.saveInBackground()`. `ProjectFileWriter` orders background saves, synchronous final saves, reads, and deletions on one serial queue. `saveNow()` on leave waits for completion; writes remain atomic.
 - **App-owned asset paths:** imported background images are saved immediately and their Application Support paths are rebased when iOS changes the app-container UUID during a rebuild. Existing audio call sites use the same `SavedProjectFileResolver` through its compatibility alias.
 
 ### 12.6 PhotoKit thumbnail loading (home + export)

@@ -26,12 +26,7 @@ final class ProjectStore {
 
     private let directoryName = "MixtapeProjects"
     private let fileExtension = "json"
-    private let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }()
+    private let writer = ProjectFileWriter()
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -49,7 +44,7 @@ final class ProjectStore {
         ).filter { $0.pathExtension == fileExtension }
 
         let projects: [EditorProject] = try urls.compactMap { url in
-            let data = try Data(contentsOf: url)
+            let data = try writer.read(from: url)
             return try decoder.decode(EditorProject.self, from: data)
         }
 
@@ -59,18 +54,20 @@ final class ProjectStore {
     func save(_ project: EditorProject) throws {
         var project = project
         project.modifiedAt = Date()
-        let data = try encoder.encode(project)
-        guard !data.isEmpty else { throw ProjectStoreError.encodeFailed }
-
         let url = try fileURL(for: project.id)
-        try data.write(to: url, options: .atomic)
+        try writer.save(project, to: url)
+    }
+
+    func saveInBackground(_ project: EditorProject) async throws {
+        var project = project
+        project.modifiedAt = Date()
+        let url = try fileURL(for: project.id)
+        try await writer.saveInBackground(project, to: url)
     }
 
     func delete(id: UUID) throws {
         let url = try fileURL(for: id)
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
-        }
+        try writer.delete(at: url)
     }
 
     private func projectsDirectory() throws -> URL {
@@ -89,6 +86,52 @@ final class ProjectStore {
 
     private func fileURL(for id: UUID) throws -> URL {
         try projectsDirectory().appendingPathComponent("\(id.uuidString).\(fileExtension)")
+    }
+}
+
+// MARK: Ordered project file I/O
+
+/// All writes, including synchronous saves on exit, share one FIFO queue.
+/// Encoding happens here too; the main actor only captures the project value.
+final class ProjectFileWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "Mixtape.project-files", qos: .utility)
+
+    func save<Value: Encodable>(_ value: Value, to url: URL) throws {
+        try queue.sync { try Self.write(value, to: url) }
+    }
+
+    @MainActor
+    func saveInBackground<Value: Encodable>(_ value: Value, to url: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    try Self.write(value, to: url)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func read(from url: URL) throws -> Data {
+        try queue.sync { try Data(contentsOf: url) }
+    }
+
+    func delete(at url: URL) throws {
+        try queue.sync {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    private static func write<Value: Encodable>(_ value: Value, to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        try data.write(to: url, options: .atomic)
     }
 }
 

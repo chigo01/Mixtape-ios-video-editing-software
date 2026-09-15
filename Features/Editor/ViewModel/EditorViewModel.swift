@@ -10,6 +10,39 @@ import UIKit
 import AVFoundation
 import Photos
 
+// MARK: Preview build coordination
+
+/// Shares an in-flight build and lets only the newest request consume its result.
+/// A different edit waits for that build to drain before starting another one.
+@MainActor
+final class EditorPreviewBuildCoordinator<Value> {
+    private var latestRequest = UUID()
+    private var pending: (id: UUID, key: String, task: Task<Value?, Never>)?
+
+    func value(for key: String, build: @escaping @MainActor () async -> Value?) async -> Value? {
+        guard !Task.isCancelled else { return nil }
+        let request = UUID()
+        latestRequest = request
+        while !Task.isCancelled, latestRequest == request {
+            if pending == nil {
+                pending = (UUID(), key, Task { await build() })
+            }
+            guard let current = pending else { return nil }
+            let result = await current.task.value
+            if pending?.id == current.id { pending = nil }
+            guard latestRequest == request, !Task.isCancelled else { return nil }
+            if current.key == key, !current.task.isCancelled { return result }
+        }
+        return nil
+    }
+
+    func cancel() {
+        latestRequest = UUID()
+        pending?.task.cancel()
+        // Keep the task until it drains so a new session cannot overlap its work.
+    }
+}
+
 @MainActor
 @Observable
 final class EditorViewModel {
@@ -175,6 +208,10 @@ final class EditorViewModel {
     private var tickTimer: Timer?
     @ObservationIgnored
     private var compositionFingerprint: String?
+    @ObservationIgnored
+    private let previewBuilds = EditorPreviewBuildCoordinator<AVPlayerItem>()
+    @ObservationIgnored
+    private var previewRequestID = UUID()
     @ObservationIgnored
     private let undoManager = EditorUndoManager()
     @ObservationIgnored
@@ -3967,11 +4004,8 @@ final class EditorViewModel {
             let duration = max(0.35, clips[index].transitionDuration)
             timelinePosition = max(0, cutTime - duration)
         }
-        Task {
-            await ensureCompositionPlayer(resumePlaying: true)
-            isPlaying = true
-            startPlaybackTicking()
-        }
+        isPlaying = true
+        Task { await ensureCompositionPlayer() }
     }
 
     // MARK: Text Overlays
@@ -6777,11 +6811,7 @@ final class EditorViewModel {
                 timelinePosition = 0
             }
             isPlaying = true
-            Task {
-                await ensureCompositionPlayer(resumePlaying: true)
-                guard !isCopilotPreviewDiscarded else { return }
-                startPlaybackTicking()
-            }
+            Task { await ensureCompositionPlayer() }
         }
     }
 
@@ -7832,6 +7862,8 @@ final class EditorViewModel {
     }
 
     func teardownPlayer() {
+        previewRequestID = UUID()
+        previewBuilds.cancel()
         cancelCopilot()
         stopPlaybackTicking()
         removeEndObserver()
@@ -7984,7 +8016,7 @@ final class EditorViewModel {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled else { return }
-            try? ProjectStore.shared.save(makeProject())
+            try? await ProjectStore.shared.saveInBackground(makeProject())
         }
     }
 
@@ -8087,20 +8119,26 @@ final class EditorViewModel {
         }
     }
 
-    private func ensureCompositionPlayer(resumePlaying: Bool = false) async {
-        guard !isCopilotPreviewDiscarded else { return }
+    @discardableResult
+    private func ensureCompositionPlayer() async -> Bool {
+        guard !isCopilotPreviewDiscarded, !Task.isCancelled else { return false }
+        let requestID = UUID()
+        previewRequestID = requestID
         let fingerprint = clipsFingerprint()
+        let buildKey = previewBuildKey()
         let needsRebuild = fingerprint != compositionFingerprint || player?.currentItem == nil
 
         if !needsRebuild {
             await seekPlayerToTimeline(exact: !isPlaying)
-            guard !isCopilotPreviewDiscarded else { return }
-            if resumePlaying || isPlaying { player?.play() }
-            return
+            guard previewRequestID == requestID, !Task.isCancelled,
+                  !isCopilotPreviewDiscarded else { return false }
+            if isPlaying {
+                player?.play()
+                startPlaybackTicking()
+            }
+            return true
         }
 
-        let savedTime = timelinePosition
-        let wasPlaying = isPlaying
         let clipsSnapshot = clips
         let graphicOverlaysSnapshot = graphicOverlays
         let audioClipsSnapshot = audioClips
@@ -8116,41 +8154,40 @@ final class EditorViewModel {
         let proxySettingsSnapshot = proxySettings
         let renderCacheFingerprintSnapshot = renderCacheFingerprint()
 
-        let item: AVPlayerItem?
-        if !proxySettingsSnapshot.isEnabled,
-           !proxySettingsSnapshot.backgroundRenderCache,
-           graphicOverlaysSnapshot.isEmpty,
-           audioClipsSnapshot.isEmpty,
-           overlayClipsSnapshot.isEmpty,
-           adjustmentLayersSnapshot.isEmpty,
-           openingKindSnapshot == .none,
-           closingKindSnapshot == .none,
-           canvasSnapshot == .default,
-           abs(masterVolumeSnapshot - 1.0) < 0.001,
-           let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
-            item = warmed
-        } else {
-            item = await Task.detached(priority: .userInitiated) {
-                await EditorCompositionBuilder.makePlayerItem(
-                    from: clipsSnapshot,
-                    graphicOverlays: graphicOverlaysSnapshot,
-                    audioClips: audioClipsSnapshot,
-                    overlayClips: overlayClipsSnapshot,
-                    adjustmentLayers: adjustmentLayersSnapshot,
-                    openingTransitionKind: openingKindSnapshot,
-                    openingTransitionDuration: openingDurationSnapshot,
-                    closingTransitionKind: closingKindSnapshot,
-                    closingTransitionDuration: closingDurationSnapshot,
-                    canvasSettings: canvasSnapshot,
-                    audioTrackSettings: audioTrackSettingsSnapshot,
-                    masterVolume: masterVolumeSnapshot,
-                    proxySettings: proxySettingsSnapshot,
-                    renderCacheFingerprint: renderCacheFingerprintSnapshot
-                )
-            }.value
+        let item = await previewBuilds.value(for: buildKey) {
+            if !proxySettingsSnapshot.isEnabled,
+               !proxySettingsSnapshot.backgroundRenderCache,
+               graphicOverlaysSnapshot.isEmpty,
+               audioClipsSnapshot.isEmpty,
+               overlayClipsSnapshot.isEmpty,
+               adjustmentLayersSnapshot.isEmpty,
+               openingKindSnapshot == .none,
+               closingKindSnapshot == .none,
+               canvasSnapshot == .default,
+               abs(masterVolumeSnapshot - 1.0) < 0.001,
+               let warmed = EditorCompositionBuilder.consumeWarmedPlayerItem(matching: clipsSnapshot) {
+                return warmed
+            }
+            return await EditorCompositionBuilder.makePlayerItem(
+                from: clipsSnapshot,
+                graphicOverlays: graphicOverlaysSnapshot,
+                audioClips: audioClipsSnapshot,
+                overlayClips: overlayClipsSnapshot,
+                adjustmentLayers: adjustmentLayersSnapshot,
+                openingTransitionKind: openingKindSnapshot,
+                openingTransitionDuration: openingDurationSnapshot,
+                closingTransitionKind: closingKindSnapshot,
+                closingTransitionDuration: closingDurationSnapshot,
+                canvasSettings: canvasSnapshot,
+                audioTrackSettings: audioTrackSettingsSnapshot,
+                masterVolume: masterVolumeSnapshot,
+                proxySettings: proxySettingsSnapshot,
+                renderCacheFingerprint: renderCacheFingerprintSnapshot
+            )
         }
 
-        guard let item, !isCopilotPreviewDiscarded else { return }
+        guard let item, !isCopilotPreviewDiscarded, !Task.isCancelled,
+              previewRequestID == requestID, buildKey == previewBuildKey() else { return false }
 
         if player == nil {
             AudioSessionConfigurator.configureForVideoPlayback()
@@ -8164,13 +8201,21 @@ final class EditorViewModel {
 
         attachCompositionEndObserver(for: item)
         compositionFingerprint = fingerprint
-        timelinePosition = min(savedTime, totalDuration)
+        // The user may have scrubbed while the composition was being prepared.
+        timelinePosition = min(timelinePosition, totalDuration)
         await seekPlayerToTimeline(exact: true)
 
-        guard !isCopilotPreviewDiscarded else { return }
-        if wasPlaying || resumePlaying {
+        guard !isCopilotPreviewDiscarded, !Task.isCancelled,
+              previewRequestID == requestID else { return false }
+        if isPlaying {
             player?.play()
+            startPlaybackTicking()
         }
+        return true
+    }
+
+    private func previewBuildKey() -> String {
+        renderCacheFingerprint() + "|||\(proxySettings)"
     }
 
     private func seekPlayerToTimeline(exact: Bool) async {
@@ -8224,7 +8269,6 @@ final class EditorViewModel {
     private func alignPlaybackToTimeline() async {
         guard !clips.isEmpty else { return }
         await ensureCompositionPlayer()
-        await seekPlayerToTimeline(exact: !isPlaying)
     }
 
     private func attachCompositionEndObserver(for item: AVPlayerItem) {

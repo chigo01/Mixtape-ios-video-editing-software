@@ -7,11 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		DA5900000000000000000005 /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000006 /* SplashScreen.swift */; };
-		AD1200000000000000000001 /* EditorTextLaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1200000000000000000002 /* EditorTextLaneLayout.swift */; };
-		CEF644E2B8DD9C620CF60C35 /* EditorTextOverlayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */; };
-		1FAFCD6593F00D7A42C9DDA7 /* EditorTextOverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */; };
 		07894D43A3CE2D26E7D5A681 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494AF242A7E19C2ED189AC1D /* AppTheme.swift */; };
+		1FAFCD6593F00D7A42C9DDA7 /* EditorTextOverlayRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */; };
 		4FB9AB17CDC14E3939385014 /* TextOverlayEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63F8ECBE73E4FFD084A70D66 /* TextOverlayEditorSheet.swift */; };
 		794DF62E89AB0BCA798BCCAA /* VolumeToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87DAAFAE4F84C0C17BFE6B8 /* VolumeToolPanel.swift */; };
 		912359B39005B15F533413E3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FD381624E89BEA467A3F6BF0 /* Assets.xcassets */; };
@@ -23,14 +20,13 @@
 		A0B0F00DDEAFB001CAFE0106 /* FilterChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0006 /* FilterChip.swift */; };
 		A0B0F00DDEAFB001CAFE0107 /* SelectionBottomBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0007 /* SelectionBottomBar.swift */; };
 		A0B0F00DDEAFB001CAFE0108 /* MediaPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B0F00DDEAFB001CAFE0008 /* MediaPreviewView.swift */; };
+		AB102030405060708090A001 /* SavedAudioFileResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB102030405060708090A002 /* SavedAudioFileResolver.swift */; };
 		AD10000000000000000000B1 /* EditorAudioLibraryItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F1 /* EditorAudioLibraryItem.swift */; };
 		AD10000000000000000000B2 /* AudioLibraryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F2 /* AudioLibraryViewModel.swift */; };
 		AD10000000000000000000B3 /* AudioLibraryPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F3 /* AudioLibraryPickerView.swift */; };
 		AD10000000000000000000B4 /* AudioLibrary in Resources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F4 /* AudioLibrary */; };
 		AD10000000000000000000B5 /* AudioLibraryCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F5 /* AudioLibraryCache.swift */; };
 		AD10000000000000000000B6 /* FreesoundAudioLibraryProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */; };
-		E100000000000000000000B1 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E100000000000000000000F1 /* AppConfiguration.swift */; };
-		E200000000000000000000B1 /* VideoAudioExtractionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000F1 /* VideoAudioExtractionService.swift */; };
 		AD10000000000000000000B7 /* AudioWaveformGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F7 /* AudioWaveformGenerator.swift */; };
 		AD10000000000000000000B8 /* EditorAudioMixSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F8 /* EditorAudioMixSettings.swift */; };
 		AD10000000000000000000B9 /* MixToolPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000F9 /* MixToolPanel.swift */; };
@@ -39,6 +35,7 @@
 		AD10000000000000000000BC /* EditorAudioEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FC /* EditorAudioEffect.swift */; };
 		AD10000000000000000000BD /* EditorAudioEffectRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */; };
 		AD10000000000000000000BE /* EditorAudioEffectPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD10000000000000000000FE /* EditorAudioEffectPanel.swift */; };
+		AD1200000000000000000001 /* EditorTextLaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1200000000000000000002 /* EditorTextLaneLayout.swift */; };
 		B95033CA06554AA0D1EE9337 /* MixtapeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5180642B1AC3288A6921DE /* MixtapeApp.swift */; };
 		BA0EDF00DEAFB001CAFE0101 /* EditorTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */; };
 		BA0EDF00DEAFB001CAFE0102 /* EditorClip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */; };
@@ -100,10 +97,13 @@
 		CED677A62FADDF6E00531EBF /* CreateProjectScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A52FADDF6E00531EBF /* CreateProjectScreen.swift */; };
 		CED677A82FADDF6E00531EBF /* MediaLibraryPickerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */; };
 		CEEAAC5C2FB87D8900EF5186 /* AudioSessionConfigurator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */; };
-		AB102030405060708090A001 /* SavedAudioFileResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB102030405060708090A002 /* SavedAudioFileResolver.swift */; };
 		CEEAAC5E2FB87D8900EF5188 /* SwipeBackEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */; };
+		CEF644E2B8DD9C620CF60C35 /* EditorTextOverlayLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */; };
 		DA5900000000000000000001 /* DashboardScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000002 /* DashboardScreen.swift */; };
 		DA5900000000000000000003 /* OnboardingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000004 /* OnboardingScreen.swift */; };
+		DA5900000000000000000005 /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5900000000000000000006 /* SplashScreen.swift */; };
+		E100000000000000000000B1 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E100000000000000000000F1 /* AppConfiguration.swift */; };
+		E200000000000000000000B1 /* VideoAudioExtractionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000F1 /* VideoAudioExtractionService.swift */; };
 		E434F1A8643FE533BE3D202B /* EditorTextActionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E56D87ACFF2712C8890CA60 /* EditorTextActionBar.swift */; };
 		F03900000000000000000101 /* EditorCopilotPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03900000000000000000001 /* EditorCopilotPlan.swift */; };
 		F03900000000000000000102 /* EditorCopilotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03900000000000000000002 /* EditorCopilotService.swift */; };
@@ -111,12 +111,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		DA5900000000000000000006 /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
-		AD1200000000000000000002 /* EditorTextLaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextLaneLayout.swift; sourceTree = "<group>"; };
-		63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayLayerView.swift; sourceTree = "<group>"; };
-		6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayRenderer.swift; sourceTree = "<group>"; };
 		494AF242A7E19C2ED189AC1D /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		63818BB3864D795FD2D9606A /* EditorTextOverlayLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayLayerView.swift; sourceTree = "<group>"; };
 		63F8ECBE73E4FFD084A70D66 /* TextOverlayEditorSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TextOverlayEditorSheet.swift; sourceTree = "<group>"; };
+		6432709C5697BF3533DB9761 /* EditorTextOverlayRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextOverlayRenderer.swift; sourceTree = "<group>"; };
 		80BD65BF4472826A783449A0 /* AudioPickerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioPickerView.swift; sourceTree = "<group>"; };
 		8E56D87ACFF2712C8890CA60 /* EditorTextActionBar.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EditorTextActionBar.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0001 /* MediaItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaItem.swift; sourceTree = "<group>"; };
@@ -127,17 +125,13 @@
 		A0B0F00DDEAFB001CAFE0006 /* FilterChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChip.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0007 /* SelectionBottomBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionBottomBar.swift; sourceTree = "<group>"; };
 		A0B0F00DDEAFB001CAFE0008 /* MediaPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewView.swift; sourceTree = "<group>"; };
+		AB102030405060708090A002 /* SavedAudioFileResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedAudioFileResolver.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F1 /* EditorAudioLibraryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioLibraryItem.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F2 /* AudioLibraryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLibraryViewModel.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F3 /* AudioLibraryPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLibraryPickerView.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F4 /* AudioLibrary */ = {isa = PBXFileReference; lastKnownFileType = folder; path = AudioLibrary; sourceTree = "<group>"; };
 		AD10000000000000000000F5 /* AudioLibraryCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLibraryCache.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F6 /* FreesoundAudioLibraryProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesoundAudioLibraryProvider.swift; sourceTree = "<group>"; };
-		E100000000000000000000F1 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
-		E100000000000000000000C1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
-		E100000000000000000000C2 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
-		E100000000000000000000C4 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
-		E200000000000000000000F1 /* VideoAudioExtractionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAudioExtractionService.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F7 /* AudioWaveformGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformGenerator.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F8 /* EditorAudioMixSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioMixSettings.swift; sourceTree = "<group>"; };
 		AD10000000000000000000F9 /* MixToolPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixToolPanel.swift; sourceTree = "<group>"; };
@@ -146,6 +140,7 @@
 		AD10000000000000000000FC /* EditorAudioEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffect.swift; sourceTree = "<group>"; };
 		AD10000000000000000000FD /* EditorAudioEffectRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectRenderer.swift; sourceTree = "<group>"; };
 		AD10000000000000000000FE /* EditorAudioEffectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAudioEffectPanel.swift; sourceTree = "<group>"; };
+		AD1200000000000000000002 /* EditorTextLaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextLaneLayout.swift; sourceTree = "<group>"; };
 		B7FA166B3D2D812B47B67F76 /* Mixtape.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mixtape.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA0EDF00DEAFB001CAFE0001 /* EditorTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTool.swift; sourceTree = "<group>"; };
 		BA0EDF00DEAFB001CAFE0002 /* EditorClip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorClip.swift; sourceTree = "<group>"; };
@@ -208,10 +203,15 @@
 		CED677A72FADDF6E00531EBF /* MediaLibraryPickerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryPickerScreen.swift; sourceTree = "<group>"; };
 		CEEAAC5A2FB87D8900EF5185 /* Mixtape-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Mixtape-Info.plist"; sourceTree = "<group>"; };
 		CEEAAC5B2FB87D8900EF5186 /* AudioSessionConfigurator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionConfigurator.swift; sourceTree = "<group>"; };
-		AB102030405060708090A002 /* SavedAudioFileResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedAudioFileResolver.swift; sourceTree = "<group>"; };
 		CEEAAC5D2FB87D8900EF5187 /* SwipeBackEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeBackEnabler.swift; sourceTree = "<group>"; };
 		DA5900000000000000000002 /* DashboardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardScreen.swift; sourceTree = "<group>"; };
 		DA5900000000000000000004 /* OnboardingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingScreen.swift; sourceTree = "<group>"; };
+		DA5900000000000000000006 /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
+		E100000000000000000000C1 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		E100000000000000000000C2 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
+		E100000000000000000000C4 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
+		E100000000000000000000F1 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
+		E200000000000000000000F1 /* VideoAudioExtractionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAudioExtractionService.swift; sourceTree = "<group>"; };
 		E87DAAFAE4F84C0C17BFE6B8 /* VolumeToolPanel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VolumeToolPanel.swift; sourceTree = "<group>"; };
 		F03900000000000000000001 /* EditorCopilotPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCopilotPlan.swift; sourceTree = "<group>"; };
 		F03900000000000000000002 /* EditorCopilotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCopilotService.swift; sourceTree = "<group>"; };
@@ -263,16 +263,6 @@
 				D4BAA6CF3F4204D0B19A1276,
 				6D159F361021D92BC3E10E55 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		E100000000000000000000C3 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				E100000000000000000000C1 /* Base.xcconfig */,
-				E100000000000000000000C4 /* Secrets.xcconfig */,
-				E100000000000000000000C2 /* Secrets.example.xcconfig */,
-			);
-			path = Config;
 			sourceTree = "<group>";
 		};
 		6D159F361021D92BC3E10E55 /* Products */ = {
@@ -509,6 +499,16 @@
 			);
 			sourceTree = "<group>";
 		};
+		E100000000000000000000C3 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				E100000000000000000000C1 /* Base.xcconfig */,
+				E100000000000000000000C4 /* Secrets.xcconfig */,
+				E100000000000000000000C2 /* Secrets.example.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -688,22 +688,25 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TTJL7FNUXQ;
+				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Mixtape needs microphone access so you can record a voiceover for your project.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Mixtape uses speech recognition to create editable, timed captions from your project audio.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.dev.mixtape;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mixtape.editor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -742,22 +745,25 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TTJL7FNUXQ;
+				DEVELOPMENT_TEAM = D577Y99AN6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Mixtape-Info.plist";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Mixtape needs microphone access so you can record a voiceover for your project.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Mixtape needs permission to save exported videos to your photo library.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mixtape needs access to your photo library so you can pick photos and videos for your projects.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Mixtape uses speech recognition to create editable, timed captions from your project audio.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.dev.mixtape;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mixtape.editor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
